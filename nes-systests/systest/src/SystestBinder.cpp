@@ -48,11 +48,13 @@
 #include <Operators/Sources/SourceDescriptorLogicalOperator.hpp>
 #include <Phases/QueryOptimizer.hpp>
 #include <Phases/SemanticAnalyzer.hpp>
+#include <Operators/Sources/SourceNameLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
 #include <SQLQueryParser/StatementBinder.hpp>
 #include <Sinks/SinkCatalog.hpp>
 #include <Sinks/SinkDescriptor.hpp>
+#include <Sources/BinaryStoreSource.hpp>
 #include <Sources/SourceDataProvider.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Logger/Logger.hpp>
@@ -729,10 +731,66 @@ struct SystestBinder::Impl
         }
     }
 
+    [[nodiscard]] static LogicalOperator
+    replaceTimeTravelReadSource(const LogicalOperator& current, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    {
+        std::vector<LogicalOperator> newChildren;
+        for (const auto& child : current.getChildren())
+        {
+            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog));
+        }
+
+        if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
+        {
+            if (sourceOp.value()->getLogicalSourceName() == "TIME_TRAVEL_READ")
+            {
+                const std::string filePath = "/tmp/REPLAY-NebulaStream/store_read_out.bin";
+
+                Schema schema;
+                {
+                    std::ifstream probe(filePath, std::ios::binary);
+                    if (probe.good())
+                    {
+                        schema = BinaryStoreSource::readSchemaFromFile(filePath);
+                    }
+                    else
+                    {
+                        for (const auto& ls : sourceCatalog->getAllLogicalSources())
+                        {
+                            for (const auto& field : *ls.getSchema())
+                            {
+                                schema.addField(field.getUnqualifiedName(), field.dataType);
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                std::unordered_map<std::string, std::string> sourceConfig{{"file_path", filePath}};
+                std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
+                const InlineSourceLogicalOperator inlineOp{"BinaryStore", schema, std::move(sourceConfig), std::move(parserConfig)};
+                return inlineOp.withChildren(newChildren);
+            }
+        }
+
+        return current.withChildren(std::move(newChildren));
+    }
+
+    static void replaceTimeTravelReadSources(LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    {
+        std::vector<LogicalOperator> newRoots;
+        for (const auto& root : plan.getRootOperators())
+        {
+            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog));
+        }
+        plan = plan.withRootOperators(newRoots);
+    }
+
     void queryCallback(
         const std::string_view& testFileName,
         std::unordered_map<SystestQueryId, SystestQueryBuilder>& plans,
         SLTSinkFactory& sltSinkProvider,
+        const std::shared_ptr<SourceCatalog>& sourceCatalog,
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
         const std::vector<ConfigurationOverride>& configOverrides) const
@@ -743,6 +801,9 @@ struct SystestBinder::Impl
         try
         {
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
+
+            replaceTimeTravelReadSources(plan, sourceCatalog);
+
             setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
             setInlineSources(plan);
             currentBuilder.setBoundPlan(std::move(plan));
@@ -854,7 +915,8 @@ struct SystestBinder::Impl
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
                 lastMergedConfigOverrides = mergedConfigOverrides;
-                queryCallback(testFileName, plans, sltSinkProvider, std::move(query), currentQueryNumberInTest, mergedConfigOverrides);
+                queryCallback(
+                    testFileName, plans, sltSinkProvider, sourceCatalog, std::move(query), currentQueryNumberInTest, mergedConfigOverrides);
                 configOverrides = {ConfigurationOverride{}};
             });
 
