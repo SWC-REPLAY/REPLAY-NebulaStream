@@ -17,8 +17,10 @@
 #include <memory>
 #include <string>
 #include <utility>
+
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
+#include <Sources/BinaryStoreSource.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <BackpressureChannel.hpp>
