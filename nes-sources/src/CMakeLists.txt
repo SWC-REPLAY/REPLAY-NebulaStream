@@ -23,6 +23,7 @@ add_source_files(nes-sources
         SourceCatalog.cpp
         FileSource.cpp
         NetworkSource.cpp
+        BinaryStoreSource.cpp
 )
 
 # Runtime registry entries (source factory, config schema, typed config)
