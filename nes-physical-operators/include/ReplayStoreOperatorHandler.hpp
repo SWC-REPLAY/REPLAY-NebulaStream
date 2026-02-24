@@ -20,8 +20,8 @@
 #include <string>
 
 #include <Runtime/Execution/OperatorHandler.hpp>
-#include <ReplayStoreWriter.hpp>
 #include "Runtime/QueryTerminationType.hpp"
+#include <BinaryStoreWriter.hpp>
 
 namespace NES
 {
@@ -47,7 +47,7 @@ public:
     void append(const uint8_t* data, size_t len);
 
 private:
-    Replay::ReplayStoreWriter writer;
+    StoreManager::BinaryStoreWriter writer;
 };
 
 }

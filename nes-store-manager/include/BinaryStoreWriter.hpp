@@ -18,11 +18,10 @@
 #include <cstdint>
 #include <string>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
-
 /// POSIX-based binary file writer for the Replay store format.
-class ReplayStoreWriter
+class BinaryStoreWriter
 {
 public:
     struct Config
@@ -35,13 +34,13 @@ public:
         std::string schemaText;
     };
 
-    explicit ReplayStoreWriter(Config cfg);
-    ~ReplayStoreWriter();
+    explicit BinaryStoreWriter(Config cfg);
+    ~BinaryStoreWriter();
 
-    ReplayStoreWriter(const ReplayStoreWriter&) = delete;
-    ReplayStoreWriter& operator=(const ReplayStoreWriter&) = delete;
-    ReplayStoreWriter(ReplayStoreWriter&&) = delete;
-    ReplayStoreWriter& operator=(ReplayStoreWriter&&) = delete;
+    BinaryStoreWriter(const BinaryStoreWriter&) = delete;
+    BinaryStoreWriter& operator=(const BinaryStoreWriter&) = delete;
+    BinaryStoreWriter(BinaryStoreWriter&&) = delete;
+    BinaryStoreWriter& operator=(BinaryStoreWriter&&) = delete;
 
     /// Open the file for writing. Initializes the tail offset from current file size.
     void open();

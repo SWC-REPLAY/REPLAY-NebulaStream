@@ -12,10 +12,11 @@
     limitations under the License.
 */
 
-#include <ReplayStoreWriter.hpp>
+#include <BinaryStoreWriter.hpp>
 
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 
 #include <ErrorHandling.hpp>
 #include <ReplayStoreFormat.hpp>
@@ -25,12 +26,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
 
-ReplayStoreWriter::ReplayStoreWriter(Config cfg) : config(std::move(cfg)) { }
+BinaryStoreWriter::BinaryStoreWriter(Config cfg) : config(std::move(cfg)) { }
 
-ReplayStoreWriter::~ReplayStoreWriter()
+BinaryStoreWriter::~BinaryStoreWriter()
 {
     if (fd >= 0)
     {
@@ -39,7 +40,7 @@ ReplayStoreWriter::~ReplayStoreWriter()
     }
 }
 
-void ReplayStoreWriter::open()
+void BinaryStoreWriter::open()
 {
     int flags = O_CREAT | O_WRONLY;
     if (!config.append)
@@ -69,7 +70,7 @@ void ReplayStoreWriter::open()
     headerWritten.store(st.st_size > 0, std::memory_order_relaxed);
 }
 
-void ReplayStoreWriter::close()
+void BinaryStoreWriter::close()
 {
     if (fd >= 0)
     {
@@ -79,7 +80,7 @@ void ReplayStoreWriter::close()
     }
 }
 
-void ReplayStoreWriter::ensureHeader()
+void BinaryStoreWriter::ensureHeader()
 {
     if (!config.writeHeader)
     {
@@ -111,7 +112,7 @@ void ReplayStoreWriter::ensureHeader()
     }
 }
 
-void ReplayStoreWriter::append(const uint8_t* data, size_t len)
+void BinaryStoreWriter::append(const uint8_t* data, size_t len)
 {
     if (len == 0)
     {

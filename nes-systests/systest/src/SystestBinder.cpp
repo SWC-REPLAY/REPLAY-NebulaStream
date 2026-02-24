@@ -63,7 +63,7 @@
 #include <InputFormatterTupleBufferRefProvider.hpp>
 #include <LegacyOptimizer.hpp>
 #include <ReplayStoreReader.hpp>
-#include <ReplayStoreRegistry.hpp>
+#include <StoreRegistry.hpp>
 #include <SystestParser.hpp>
 #include <SystestState.hpp>
 
@@ -714,7 +714,7 @@ struct SystestBinder::Impl
         {
             if (sourceOp.value()->getLogicalSourceName() == "TIME_TRAVEL_READ")
             {
-                auto latestPath = Replay::ReplayStoreRegistry::instance().getLatestStorePath();
+                auto latestPath = StoreManager::ReplayStoreRegistry::instance().getLatestStorePath();
                 const std::string filePath = latestPath.value_or("/tmp/REPLAY-NebulaStream/store_read_out.bin");
 
                 Schema schema;
@@ -722,7 +722,7 @@ struct SystestBinder::Impl
                     std::ifstream probe(filePath, std::ios::binary);
                     if (probe.good())
                     {
-                        schema = Replay::ReplayStoreReader::readSchemaFromFile(filePath);
+                        schema = StoreManager::ReplayStoreReader::readSchemaFromFile(filePath);
                     }
                     else
                     {

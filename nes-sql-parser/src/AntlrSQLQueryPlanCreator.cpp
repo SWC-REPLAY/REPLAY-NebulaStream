@@ -25,7 +25,7 @@
 #include <utility>
 #include <variant>
 
-#include <ReplayStoreRegistry.hpp>
+#include <StoreRegistry.hpp>
 #include "Operators/ReplayStoreLogicalOperator.hpp"
 
 #include <AntlrSQLBaseListener.h>
@@ -984,7 +984,7 @@ void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelC
     // Generate a unique store ID and register it so each query gets its own file
     static std::atomic<uint64_t> storeCounter{0};
     const auto storeId = std::to_string(storeCounter.fetch_add(1));
-    const auto filePath = Replay::ReplayStoreRegistry::instance().registerStore(storeId);
+    const auto filePath = StoreManager::StoreRegistry::instance().registerStore(storeId);
 
     std::unordered_map<std::string, std::string> options;
     options.emplace("file_path", filePath);

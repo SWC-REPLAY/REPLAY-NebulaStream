@@ -19,19 +19,19 @@
 #include <string>
 #include <unordered_map>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
 
 /// Manages multiple replay store files, allowing concurrent TIME_TRAVEL queries
 /// to each write to their own file without overwriting each other.
-class ReplayStoreRegistry
+class StoreRegistry
 {
 public:
-    static ReplayStoreRegistry& instance();
+    static StoreRegistry& instance();
 
     /// Register a new store, generating a unique file path under the given base directory.
     /// Returns the generated file path.
-    std::string registerStore(const std::string& storeId, const std::string& baseDir = "/tmp/REPLAY-NebulaStream");
+    std::string registerStore(const std::string& storeId);
 
     /// Look up the file path for a given store ID.
     [[nodiscard]] std::optional<std::string> getFilePath(const std::string& storeId) const;
@@ -46,7 +46,7 @@ public:
     void clear();
 
 private:
-    ReplayStoreRegistry() = default;
+    StoreRegistry() = default;
 
     mutable std::shared_mutex mutex;
     std::unordered_map<std::string, std::string> stores;

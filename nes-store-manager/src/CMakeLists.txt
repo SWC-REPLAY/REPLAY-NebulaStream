@@ -12,7 +12,7 @@
 
 add_source_files(nes-store-manager
         ReplayStoreFormat.cpp
-        ReplayStoreWriter.cpp
+        BinaryStoreWriter.cpp
         ReplayStoreReader.cpp
-        ReplayStoreRegistry.cpp
+        StoreRegistry.cpp
 )

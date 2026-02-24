@@ -12,32 +12,32 @@
     limitations under the License.
 */
 
-#include <ReplayStoreRegistry.hpp>
+#include <StoreRegistry.hpp>
 
 #include <filesystem>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
 
-ReplayStoreRegistry& ReplayStoreRegistry::instance()
+StoreRegistry& StoreRegistry::instance()
 {
-    static ReplayStoreRegistry registry;
+    static StoreRegistry registry;
     return registry;
 }
 
-std::string ReplayStoreRegistry::registerStore(const std::string& storeId, const std::string& baseDir)
+std::string StoreRegistry::registerStore(const std::string& storeId)
 {
     std::unique_lock lock(mutex);
 
-    std::filesystem::create_directories(baseDir);
-    std::string filePath = baseDir + "/replay_" + storeId + ".bin";
+    std::filesystem::create_directories(STORE_MANAGER_WORKING_DIR);
+    std::string filePath = std::string(STORE_MANAGER_WORKING_DIR) + "/replay_" + storeId + ".bin";
 
     stores[storeId] = filePath;
     latestStoreId = storeId;
     return filePath;
 }
 
-std::optional<std::string> ReplayStoreRegistry::getFilePath(const std::string& storeId) const
+std::optional<std::string> StoreRegistry::getFilePath(const std::string& storeId) const
 {
     std::shared_lock lock(mutex);
     auto it = stores.find(storeId);
@@ -48,7 +48,7 @@ std::optional<std::string> ReplayStoreRegistry::getFilePath(const std::string& s
     return std::nullopt;
 }
 
-std::optional<std::string> ReplayStoreRegistry::getLatestStorePath() const
+std::optional<std::string> StoreRegistry::getLatestStorePath() const
 {
     std::shared_lock lock(mutex);
     if (latestStoreId.empty())
@@ -63,7 +63,7 @@ std::optional<std::string> ReplayStoreRegistry::getLatestStorePath() const
     return std::nullopt;
 }
 
-void ReplayStoreRegistry::unregisterStore(const std::string& storeId)
+void StoreRegistry::unregisterStore(const std::string& storeId)
 {
     std::unique_lock lock(mutex);
     stores.erase(storeId);
@@ -73,7 +73,7 @@ void ReplayStoreRegistry::unregisterStore(const std::string& storeId)
     }
 }
 
-void ReplayStoreRegistry::clear()
+void StoreRegistry::clear()
 {
     std::unique_lock lock(mutex);
     stores.clear();
