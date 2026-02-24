@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-#include <Operators/StoreLogicalOperator.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 
 #include <algorithm>
 #include <optional>
@@ -38,82 +38,82 @@
 namespace NES
 {
 
-std::string StoreLogicalOperator::explain(ExplainVerbosity verbosity, OperatorId id) const
+std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, OperatorId id) const
 {
     if (verbosity == ExplainVerbosity::Debug)
     {
         std::stringstream cfg;
         Descriptor tmp{DescriptorConfig::Config(config)};
         cfg << &tmp;
-        return fmt::format("STORE(opId: {}, config: {}, schema: {})", id, cfg.str(), getOutputSchema());
+        return fmt::format("REPLAY_STORE(opId: {}, config: {}, schema: {})", id, cfg.str(), getOutputSchema());
     }
-    return std::string("STORE");
+    return std::string("REPLAY_STORE");
 }
 
-std::string_view StoreLogicalOperator::getName() const noexcept
+std::string_view ReplayStoreLogicalOperator::getName() const noexcept
 {
     return NAME;
 }
 
-StoreLogicalOperator StoreLogicalOperator::withTraitSet(TraitSet ts) const
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withTraitSet(TraitSet ts) const
 {
     auto copy = *this;
     copy.traitSet = std::move(ts);
     return copy;
 }
 
-TraitSet StoreLogicalOperator::getTraitSet() const
+TraitSet ReplayStoreLogicalOperator::getTraitSet() const
 {
     return traitSet;
 }
 
-StoreLogicalOperator StoreLogicalOperator::withChildren(std::vector<LogicalOperator> newChildren) const
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withChildren(std::vector<LogicalOperator> newChildren) const
 {
     auto copy = *this;
     copy.children = std::move(newChildren);
     return copy;
 }
 
-std::vector<LogicalOperator> StoreLogicalOperator::getChildren() const
+std::vector<LogicalOperator> ReplayStoreLogicalOperator::getChildren() const
 {
     return children;
 }
 
-std::vector<Schema> StoreLogicalOperator::getInputSchemas() const
+std::vector<Schema> ReplayStoreLogicalOperator::getInputSchemas() const
 {
-    INVARIANT(!children.empty(), "Store operator requires exactly one child");
+    INVARIANT(!children.empty(), "ReplayStore operator requires exactly one child");
     return children | std::ranges::views::transform([](const LogicalOperator& child) { return child.getOutputSchema(); })
         | std::ranges::to<std::vector>();
 }
 
-Schema StoreLogicalOperator::getOutputSchema() const
+Schema ReplayStoreLogicalOperator::getOutputSchema() const
 {
-    INVARIANT(!children.empty(), "Store operator requires exactly one child");
+    INVARIANT(!children.empty(), "ReplayStore operator requires exactly one child");
     return children.front().getOutputSchema();
 }
 
-StoreLogicalOperator StoreLogicalOperator::withInferredSchema(std::vector<Schema> inputSchemas) const
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withInferredSchema(std::vector<Schema> inputSchemas) const
 {
     auto copy = *this;
-    INVARIANT(!inputSchemas.empty(), "Store should have at least one input");
+    INVARIANT(!inputSchemas.empty(), "ReplayStore should have at least one input");
     const auto& first = inputSchemas.front();
     for (const auto& s : inputSchemas)
     {
         if (s != first)
         {
-            throw CannotInferSchema("All input schemas must be equal for Store operator");
+            throw CannotInferSchema("All input schemas must be equal for ReplayStore operator");
         }
     }
     return copy;
 }
 
-bool StoreLogicalOperator::operator==(const StoreLogicalOperator& rhs) const
+bool ReplayStoreLogicalOperator::operator==(const ReplayStoreLogicalOperator& rhs) const
 {
     return getOutputSchema() == rhs.getOutputSchema() && getInputSchemas() == rhs.getInputSchemas() && getTraitSet() == rhs.getTraitSet()
         && config == rhs.config;
 }
 
-void StoreLogicalOperator::serialize(SerializableOperator& serializableOperator) const
+void ReplayStoreLogicalOperator::serialize(SerializableOperator& serializableOperator) const
 {
     SerializableLogicalOperator proto;
 
@@ -141,14 +141,14 @@ void StoreLogicalOperator::serialize(SerializableOperator& serializableOperator)
     serializableOperator.mutable_operator_()->CopyFrom(proto);
 }
 
-StoreLogicalOperator StoreLogicalOperator::withConfig(DescriptorConfig::Config validatedConfig) const
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withConfig(DescriptorConfig::Config validatedConfig) const
 {
     auto copy = *this;
     copy.config = std::move(validatedConfig);
     return copy;
 }
 
-DescriptorConfig::Config StoreLogicalOperator::validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs)
+DescriptorConfig::Config ReplayStoreLogicalOperator::validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs)
 {
     return DescriptorConfig::validateAndFormat<ConfigParameters>(std::move(configPairs), std::string(NAME));
 }
@@ -159,9 +159,9 @@ namespace NES
 {
 
 LogicalOperatorRegistryReturnType
-LogicalOperatorGeneratedRegistrar::RegisterStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
+LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
 {
-    auto logicalOp = StoreLogicalOperator(arguments.config);
+    auto logicalOp = ReplayStoreLogicalOperator(arguments.config);
     return logicalOp.withInferredSchema(arguments.inputSchemas);
 }
 

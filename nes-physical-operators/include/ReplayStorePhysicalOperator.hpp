@@ -33,7 +33,7 @@ namespace NES
 
 /// Physical operator that serializes each input record to a binary row and appends it to a file via an operator handler.
 /// The record is then forwarded to its child unchanged.
-class StorePhysicalOperator final : public PhysicalOperatorConcept
+class ReplayStorePhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
     StorePhysicalOperator(OperatorHandlerId handlerId, const Schema& inputSchema);

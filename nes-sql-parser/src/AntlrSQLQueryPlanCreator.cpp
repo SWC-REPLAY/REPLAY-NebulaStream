@@ -16,6 +16,7 @@
 
 #include <cctype>
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -23,6 +24,9 @@
 #include <string>
 #include <utility>
 #include <variant>
+
+#include "Operators/ReplayStoreLogicalOperator.hpp"
+#include <ReplayStoreRegistry.hpp>
 
 #include <AntlrSQLBaseListener.h>
 #include <AntlrSQLLexer.h>
@@ -500,8 +504,8 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     if (helpers.top().storeOptions.has_value())
     {
         auto opts = *helpers.top().storeOptions;
-        const auto cfg = StoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-        queryPlan = LogicalPlanBuilder::addStore(cfg, queryPlan);
+        const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
+        queryPlan = LogicalPlanBuilder::addReplayStore(cfg, queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -977,8 +981,13 @@ void AntlrSQLQueryPlanCreator::exitGroupByClause(AntlrSQLParser::GroupByClauseCo
 
 void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
 {
+    // Generate a unique store ID and register it so each query gets its own file
+    static std::atomic<uint64_t> storeCounter{0};
+    const auto storeId = std::to_string(storeCounter.fetch_add(1));
+    const auto filePath = Replay::ReplayStoreRegistry::instance().registerStore(storeId);
+
     std::unordered_map<std::string, std::string> options;
-    options.emplace("file_path", "/tmp/REPLAY-NebulaStream/store_read_out.bin");
+    options.emplace("file_path", filePath);
 
     helpers.top().storeOptions = std::move(options);
 }

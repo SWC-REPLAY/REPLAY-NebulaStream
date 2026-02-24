@@ -48,11 +48,12 @@
 #include <Operators/Sources/SourceDescriptorLogicalOperator.hpp>
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
+#include <ReplayStoreReader.hpp>
+#include <ReplayStoreRegistry.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
 #include <SQLQueryParser/StatementBinder.hpp>
 #include <Sinks/SinkCatalog.hpp>
 #include <Sinks/SinkDescriptor.hpp>
-#include <Sources/BinaryStoreSource.hpp>
 #include <Sources/SourceDataProvider.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Logger/Logger.hpp>
@@ -713,14 +714,15 @@ struct SystestBinder::Impl
         {
             if (sourceOp.value()->getLogicalSourceName() == "TIME_TRAVEL_READ")
             {
-                const std::string filePath = "/tmp/REPLAY-NebulaStream/store_read_out.bin";
+                auto latestPath = Replay::ReplayStoreRegistry::instance().getLatestStorePath();
+                const std::string filePath = latestPath.value_or("/tmp/REPLAY-NebulaStream/store_read_out.bin");
 
                 Schema schema;
                 {
                     std::ifstream probe(filePath, std::ios::binary);
                     if (probe.good())
                     {
-                        schema = BinaryStoreSource::readSchemaFromFile(filePath);
+                        schema = Replay::ReplayStoreReader::readSchemaFromFile(filePath);
                     }
                     else
                     {
@@ -737,7 +739,7 @@ struct SystestBinder::Impl
 
                 std::unordered_map<std::string, std::string> sourceConfig{{"file_path", filePath}};
                 std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
-                const InlineSourceLogicalOperator inlineOp{"BinaryStore", schema, std::move(sourceConfig), std::move(parserConfig)};
+                const InlineSourceLogicalOperator inlineOp{"Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
                 return inlineOp.withChildren(newChildren);
             }
         }
