@@ -16,6 +16,7 @@ get_source(nes-store-manager NES_STORE_MANAGER_SOURCE_FILES)
 add_library(nes-store-manager ${NES_STORE_MANAGER_SOURCE_FILES})
 
 target_link_libraries(nes-store-manager PUBLIC nes-common nes-data-types)
+target_compile_definitions(nes-store-manager PRIVATE STORE_MANAGER_WORKING_DIR="${CMAKE_CURRENT_BINARY_DIR}/working-dir/")
 target_include_directories(nes-store-manager PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include/nebulastream/>)
