@@ -20,7 +20,7 @@
 #include <DataTypes/DataTypeProvider.hpp>
 #include <ErrorHandling.hpp>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
 
 uint64_t fnv1a64(const char* data, size_t len)
@@ -119,4 +119,4 @@ Schema parseSchemaFromText(const std::string& schemaText)
     return schema;
 }
 
-} // namespace NES::Replay
+}

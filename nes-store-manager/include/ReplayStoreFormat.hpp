@@ -21,7 +21,7 @@
 
 #include <DataTypes/Schema.hpp>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
 
 constexpr char MAGIC[8] = {'N', 'E', 'S', 'S', 'T', 'O', 'R', 'E'};

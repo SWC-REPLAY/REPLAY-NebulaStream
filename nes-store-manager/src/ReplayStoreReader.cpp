@@ -20,7 +20,7 @@
 #include <ErrorHandling.hpp>
 #include <Util/Logger/Logger.hpp>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
 
 ReplayStoreReader::ReplayStoreReader(std::string filePath) : filePath(std::move(filePath)) { }

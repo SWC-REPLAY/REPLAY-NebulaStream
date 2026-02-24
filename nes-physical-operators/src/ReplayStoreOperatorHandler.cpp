@@ -21,7 +21,7 @@ namespace NES
 
 ReplayStoreOperatorHandler::ReplayStoreOperatorHandler(Config cfg)
     : OperatorHandler()
-    , writer(Replay::ReplayStoreWriter::Config{
+    , writer(StoreManager::BinaryStoreWriter::Config{
           .filePath = std::move(cfg.filePath),
           .append = cfg.append,
           .writeHeader = cfg.header,

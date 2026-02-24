@@ -22,7 +22,7 @@
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
 
-namespace NES::Replay
+namespace NES::StoreManager
 {
 class ReplayStoreReader;
 }
@@ -55,7 +55,7 @@ protected:
 
 private:
     std::string filePath;
-    std::unique_ptr<Replay::ReplayStoreReader> reader;
+    std::unique_ptr<StoreManager::ReplayStoreReader> reader;
     Schema schema;
 };
 

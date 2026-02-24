@@ -39,7 +39,7 @@ ReplaySource::~ReplaySource() = default;
 void ReplaySource::open(std::shared_ptr<AbstractBufferProvider>)
 {
     NES_DEBUG("ReplaySource: opening {}", filePath);
-    reader = std::make_unique<Replay::ReplayStoreReader>(filePath);
+    reader = std::make_unique<StoreManager::ReplayStoreReader>(filePath);
     reader->open();
     reader->verifySchema(schema);
     NES_DEBUG("ReplaySource: dataStartOffset={}", reader->getDataStartOffset());
@@ -139,7 +139,7 @@ uint32_t ReplaySource::getRowWidthBytes() const
 
 Schema ReplaySource::readSchemaFromFile(const std::string& filePath)
 {
-    return Replay::ReplayStoreReader::readSchemaFromFile(filePath);
+    return StoreManager::ReplayStoreReader::readSchemaFromFile(filePath);
 }
 
 DescriptorConfig::Config ReplaySource::validateAndFormat(std::unordered_map<std::string, std::string> config)
