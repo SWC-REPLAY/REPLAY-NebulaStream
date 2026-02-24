@@ -33,12 +33,12 @@
 #include <Operators/EventTimeWatermarkAssignerLogicalOperator.hpp>
 #include <Operators/IngestionTimeWatermarkAssignerLogicalOperator.hpp>
 #include <Operators/ProjectionLogicalOperator.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/SelectionLogicalOperator.hpp>
 #include <Operators/Sinks/InlineSinkLogicalOperator.hpp>
 #include <Operators/Sinks/SinkLogicalOperator.hpp>
 #include <Operators/Sources/InlineSourceLogicalOperator.hpp>
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
-#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/UnionLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/WindowAggregationLogicalFunction.hpp>
 #include <Operators/Windows/JoinLogicalOperator.hpp>

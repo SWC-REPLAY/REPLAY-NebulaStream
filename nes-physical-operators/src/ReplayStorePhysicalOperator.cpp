@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-#include <StorePhysicalOperator.hpp>
+#include <ReplayStorePhysicalOperator.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -22,16 +22,13 @@
 
 #include <Nautilus/Interface/Record.hpp>
 #include <Nautilus/Interface/RecordBuffer.hpp>
-#include <PhysicalOperator.hpp>
-#include <ReplayStorePhysicalOperator.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
-#include <ReplayStoreOperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <ErrorHandling.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
 #include <PipelineExecutionContext.hpp>
-#include <StoreOperatorHandler.hpp>
+#include <ReplayStoreOperatorHandler.hpp>
 #include <function.hpp>
 #include <val_ptr.hpp>
 #include "CompilationContext.hpp"

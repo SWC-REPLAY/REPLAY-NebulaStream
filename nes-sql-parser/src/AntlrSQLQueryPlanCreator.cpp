@@ -14,9 +14,9 @@
 
 #include <AntlrSQLParser/AntlrSQLQueryPlanCreator.hpp>
 
+#include <atomic>
 #include <cctype>
 #include <cstddef>
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -25,8 +25,8 @@
 #include <utility>
 #include <variant>
 
-#include "Operators/ReplayStoreLogicalOperator.hpp"
 #include <ReplayStoreRegistry.hpp>
+#include "Operators/ReplayStoreLogicalOperator.hpp"
 
 #include <AntlrSQLBaseListener.h>
 #include <AntlrSQLLexer.h>

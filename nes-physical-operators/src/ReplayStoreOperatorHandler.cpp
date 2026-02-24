@@ -20,8 +20,8 @@ namespace NES
 {
 
 ReplayStoreOperatorHandler::ReplayStoreOperatorHandler(Config cfg)
-    : OperatorHandler(),
-      writer(Replay::ReplayStoreWriter::Config{
+    : OperatorHandler()
+    , writer(Replay::ReplayStoreWriter::Config{
           .filePath = std::move(cfg.filePath),
           .append = cfg.append,
           .writeHeader = cfg.header,

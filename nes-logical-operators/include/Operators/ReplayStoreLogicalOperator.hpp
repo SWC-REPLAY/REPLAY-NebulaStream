@@ -54,6 +54,7 @@ public:
     void serialize(SerializableOperator& serializableOperator) const;
 
     [[nodiscard]] const DescriptorConfig::Config& getConfig() const { return config; }
+
     [[nodiscard]] ReplayStoreLogicalOperator withConfig(DescriptorConfig::Config validatedConfig) const;
 
     struct ConfigParameters

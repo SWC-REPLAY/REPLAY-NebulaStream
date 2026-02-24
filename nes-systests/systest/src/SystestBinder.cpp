@@ -48,8 +48,6 @@
 #include <Operators/Sources/SourceDescriptorLogicalOperator.hpp>
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
-#include <ReplayStoreReader.hpp>
-#include <ReplayStoreRegistry.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
 #include <SQLQueryParser/StatementBinder.hpp>
 #include <Sinks/SinkCatalog.hpp>
@@ -64,6 +62,8 @@
 #include <ErrorHandling.hpp>
 #include <InputFormatterTupleBufferRefProvider.hpp>
 #include <LegacyOptimizer.hpp>
+#include <ReplayStoreReader.hpp>
+#include <ReplayStoreRegistry.hpp>
 #include <SystestParser.hpp>
 #include <SystestState.hpp>
 

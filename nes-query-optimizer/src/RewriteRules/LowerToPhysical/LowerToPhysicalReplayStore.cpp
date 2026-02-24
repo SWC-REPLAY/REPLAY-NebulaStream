@@ -22,9 +22,9 @@
 #include <ErrorHandling.hpp>
 #include <Traits/MemoryLayoutTypeTrait.hpp>
 #include <PhysicalOperator.hpp>
-#include <RewriteRuleRegistry.hpp>
-#include <ReplayStorePhysicalOperator.hpp>
 #include <ReplayStoreOperatorHandler.hpp>
+#include <ReplayStorePhysicalOperator.hpp>
+#include <RewriteRuleRegistry.hpp>
 
 namespace NES
 {

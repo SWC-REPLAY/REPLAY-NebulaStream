@@ -22,7 +22,10 @@
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
 
-namespace NES::Replay { class ReplayStoreReader; }
+namespace NES::Replay
+{
+class ReplayStoreReader;
+}
 
 namespace NES
 {

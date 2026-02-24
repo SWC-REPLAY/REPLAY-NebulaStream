@@ -19,8 +19,13 @@
 #include <vector>
 
 #include <cstdint>
+#include <vector>
+#include <cstdint>
+#include <vector>
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/Schema.hpp>
+#include <Identifiers/Identifiers.hpp>
+#include <Nautilus/Interface/Formatting/BinaryRowEncoder.hpp>
 #include <Nautilus/Interface/Record.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>

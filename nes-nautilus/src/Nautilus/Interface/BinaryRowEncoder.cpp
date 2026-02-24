@@ -20,6 +20,7 @@
 #include <Nautilus/DataTypes/VarVal.hpp>
 #include <Nautilus/DataTypes/VariableSizedData.hpp>
 #include <Nautilus/Interface/Record.hpp>
+#include <Nautilus/Util.hpp>
 #include <function.hpp>
 #include <val_ptr.hpp>
 #include "DataTypes/Schema.hpp"

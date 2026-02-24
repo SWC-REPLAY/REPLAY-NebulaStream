@@ -22,9 +22,9 @@
 namespace NES
 {
 
-    struct LowerToPhysicalReplayStore : AbstractRewriteRule
-    {
-        explicit LowerToPhysicalReplayStore(QueryExecutionConfiguration conf) : conf(std::move(conf)) { }
+struct LowerToPhysicalReplayStore : AbstractRewriteRule
+{
+    explicit LowerToPhysicalReplayStore(QueryExecutionConfiguration conf) : conf(std::move(conf)) { }
 
     RewriteRuleResultSubgraph apply(LogicalOperator logicalOperator) override;
 
