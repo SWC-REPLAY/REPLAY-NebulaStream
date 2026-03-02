@@ -41,7 +41,7 @@ namespace NES
 class ReplayStorePhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    StorePhysicalOperator(OperatorHandlerId handlerId, const Schema& inputSchema);
+    ReplayStorePhysicalOperator(OperatorHandlerId handlerId, const Schema& inputSchema);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;

@@ -714,7 +714,7 @@ struct SystestBinder::Impl
         {
             if (sourceOp.value()->getLogicalSourceName() == "TIME_TRAVEL_READ")
             {
-                auto latestPath = StoreManager::ReplayStoreRegistry::instance().getLatestStorePath();
+                auto latestPath = StoreManager::StoreRegistry::instance().getLatestStorePath();
                 const std::string filePath = latestPath.value_or("/tmp/REPLAY-NebulaStream/store_read_out.bin");
 
                 Schema schema;
