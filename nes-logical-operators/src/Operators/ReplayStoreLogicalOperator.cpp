@@ -50,7 +50,7 @@ std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, Oper
     return {"REPLAY_STORE"};
 }
 
-std::string_view ReplayStoreLogicalOperator::getName() noexcept
+std::string_view ReplayStoreLogicalOperator::getName() const noexcept
 {
     return NAME;
 }
@@ -159,7 +159,7 @@ namespace NES
 {
 
 LogicalOperatorRegistryReturnType
-LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(const LogicalOperatorRegistryArguments& arguments)
+LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
 {
     auto logicalOp = ReplayStoreLogicalOperator(arguments.config);
     return logicalOp.withInferredSchema(arguments.inputSchemas);

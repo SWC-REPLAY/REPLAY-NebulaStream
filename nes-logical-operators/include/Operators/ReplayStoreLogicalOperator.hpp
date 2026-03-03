@@ -40,9 +40,9 @@ class ReplayStoreLogicalOperator
 public:
     ReplayStoreLogicalOperator() = default;
 
-    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig) : config(std::move(static validatedConfig)) { }
+    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig) : config(std::move(validatedConfig)) { }
 
-    scard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
+    [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
     [[nodiscard]] std::string_view getName() const noexcept;
 
     [[nodiscard]] std::vector<LogicalOperator> getChildren() const;

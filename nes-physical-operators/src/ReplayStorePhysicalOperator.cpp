@@ -30,7 +30,6 @@
 #include <PipelineExecutionContext.hpp>
 #include <ReplayStoreOperatorHandler.hpp>
 #include <function.hpp>
-#include <val_arith.hpp>
 #include <val_ptr.hpp>
 #include "CompilationContext.hpp"
 #include "DataTypes/Schema.hpp"

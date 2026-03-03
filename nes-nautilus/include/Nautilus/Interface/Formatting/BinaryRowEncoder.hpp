@@ -21,7 +21,6 @@
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Nautilus/Interface/Record.hpp>
-#include <val_arith.hpp>
 #include <val_ptr.hpp>
 
 namespace NES::Nautilus

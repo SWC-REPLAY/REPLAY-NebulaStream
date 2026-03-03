@@ -173,7 +173,7 @@ SourceValidationRegistryReturnType RegisterReplaySourceValidation(SourceValidati
     return ReplaySource::validateAndFormat(std::move(args.config));
 }
 
-SourceRegistryReturnType SourceGeneratedRegistrar::RegisterReplaySource(const SourceRegistryArguments& args)
+SourceRegistryReturnType SourceGeneratedRegistrar::RegisterReplaySource(SourceRegistryArguments args)
 {
     return std::make_unique<ReplaySource>(args.sourceDescriptor);
 }
