@@ -28,17 +28,6 @@
 namespace NES::StoreManager
 {
 
-uint64_t fnv1a64(const char* data, size_t len)
-{
-    uint64_t hash = 1469598103934665603ULL; // FNV offset basis
-    for (size_t i = 0; i < len; ++i)
-    {
-        hash ^= static_cast<uint8_t>(data[i]);
-        hash *= 1099511628211ULL; // FNV prime
-    }
-    return hash;
-}
-
 std::string serializeHeader(const std::string& schemaText)
 {
     const uint64_t fingerprint = fnv1a64(schemaText.c_str(), schemaText.size());

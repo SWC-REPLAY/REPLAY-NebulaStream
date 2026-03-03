@@ -21,6 +21,7 @@
 #include <utility>
 
 #include <DataTypes/Schema.hpp>
+#include <Util/FNV.hpp>
 
 namespace NES::StoreManager
 {
@@ -41,9 +42,6 @@ struct FileHeader
     uint64_t fingerprint{0};
     std::string schemaText;
 };
-
-/// Compute FNV-1a 64-bit hash.
-uint64_t fnv1a64(const char* data, size_t len);
 
 /// Serialize a complete file header (magic + fields + schema text) into a byte buffer.
 std::string serializeHeader(const std::string& schemaText);
