@@ -14,18 +14,22 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
-#include <Traits/Trait.hpp>
 #include <Util/PlanRenderer.hpp>
+#include "Traits/TraitSet.hpp"
+#include "SerializableOperator.pb.h"
+#include "Configurations/Enums/EnumWrapper.hpp"
 
 namespace NES
 {
@@ -36,9 +40,9 @@ class ReplayStoreLogicalOperator
 public:
     ReplayStoreLogicalOperator() = default;
 
-    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig) : config(std::move(validatedConfig)) {}
+    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig) : config(std::move(static validatedConfig)) { }
 
-    [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
+    scard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
     [[nodiscard]] std::string_view getName() const noexcept;
 
     [[nodiscard]] std::vector<LogicalOperator> getChildren() const;
@@ -75,6 +79,6 @@ private:
     std::vector<LogicalOperator> children;
     TraitSet traitSet;
 
-    DescriptorConfig::Config config{};
+    DescriptorConfig::Config config;
 };
 }

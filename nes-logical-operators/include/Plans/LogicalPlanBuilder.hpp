@@ -27,6 +27,7 @@
 #include <Operators/Windows/JoinLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
 #include <WindowTypes/Types/WindowType.hpp>
+#include "Configurations/Descriptor.hpp"
 
 namespace NES
 {

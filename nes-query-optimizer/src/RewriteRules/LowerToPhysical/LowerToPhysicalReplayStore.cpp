@@ -16,15 +16,18 @@
 
 #include <memory>
 #include <sstream>
+#include <utility>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <RewriteRules/AbstractRewriteRule.hpp>
-#include <ErrorHandling.hpp>
 #include <Traits/MemoryLayoutTypeTrait.hpp>
+#include <ErrorHandling.hpp>
 #include <PhysicalOperator.hpp>
 #include <ReplayStoreOperatorHandler.hpp>
 #include <ReplayStorePhysicalOperator.hpp>
 #include <RewriteRuleRegistry.hpp>
+#include "Configurations/Descriptor.hpp"
+#include "Runtime/Execution/OperatorHandler.hpp"
 
 namespace NES
 {
@@ -41,7 +44,7 @@ RewriteRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator logi
     std::stringstream schemaStream;
     schemaStream << logicalOperator.getOutputSchema();
 
-    ReplayStoreOperatorHandler::Config handlerCfg{
+    ReplayStoreOperatorHandler::Config const handlerCfg{
         .filePath = filePath,
         .schemaText = schemaStream.str(),
     };

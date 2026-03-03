@@ -14,22 +14,26 @@
 
 #include <BinaryStoreWriter.hpp>
 
+#include <atomic>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
-#include <filesystem>
+#include <utility>
 
 #include <ErrorHandling.hpp>
 #include <ReplayStoreFormat.hpp>
 
 #include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <stdio.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 namespace NES::StoreManager
 {
 
-BinaryStoreWriter::BinaryStoreWriter(Config cfg) : config(std::move(cfg)) { }
+BinaryStoreWriter::BinaryStoreWriter(Config cfg) : config(std::move(cfg))
+{
+}
 
 BinaryStoreWriter::~BinaryStoreWriter()
 {
@@ -105,7 +109,7 @@ void BinaryStoreWriter::ensureHeader()
     {
         return; // another writer raced
     }
-    ssize_t written = ::pwrite(fd, buf.data(), buf.size(), 0);
+    ssize_t const written = ::pwrite(fd, buf.data(), buf.size(), 0);
     if (written < 0 || static_cast<size_t>(written) != buf.size())
     {
         throw CannotOpenSink("Writing store header failed: errno={} {}", errno, std::strerror(errno));
@@ -123,7 +127,7 @@ void BinaryStoreWriter::append(const uint8_t* data, size_t len)
         throw CannotOpenSink("ReplayStoreWriter not started; fd is invalid");
     }
     const uint64_t off = tail.fetch_add(len, std::memory_order_relaxed);
-    ssize_t written = ::pwrite(fd, data, len, static_cast<off_t>(off));
+    ssize_t const written = ::pwrite(fd, data, len, static_cast<off_t>(off));
     if (written < 0 || static_cast<size_t>(written) != len)
     {
         throw CannotOpenSink("pwrite failed: errno={} {}", errno, std::strerror(errno));

@@ -14,13 +14,20 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <stop_token>
+#include <ostream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include "Runtime/AbstractBufferProvider.hpp"
+#include "Runtime/TupleBuffer.hpp"
 
 namespace NES::StoreManager
 {
@@ -30,13 +37,13 @@ class ReplayStoreReader;
 namespace NES
 {
 
-    /// Reads rows produced by Store from a binary file, delegating I/O to ReplayStoreReader.
-    class ReplaySource final : public Source
-    {
-    public:
-        static constexpr std::string_view NAME = "Replay";
-        explicit ReplaySource(const SourceDescriptor& sourceDescriptor);
-        ~ReplaySource() override;
+/// Reads rows produced by Store from a binary file, delegating I/O to ReplayStoreReader.
+class ReplaySource final : public Source
+{
+public:
+    static constexpr std::string_view NAME = "Replay";
+    explicit ReplaySource(const SourceDescriptor& sourceDescriptor);
+    ~ReplaySource() override;
 
     void open(std::shared_ptr<AbstractBufferProvider> bufferProvider) override;
     void close() override;

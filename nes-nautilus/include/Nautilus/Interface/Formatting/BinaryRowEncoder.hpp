@@ -18,13 +18,11 @@
 #include <string>
 #include <vector>
 
-#include <DataTypes/Schema.hpp>
-#include <Nautilus/DataTypes/DataTypesUtil.hpp>
-#include <Nautilus/DataTypes/VarVal.hpp>
-#include <Nautilus/DataTypes/VariableSizedData.hpp>
-#include <Nautilus/Interface/Record.hpp>
-#include <val_ptr.hpp>
 #include <DataTypes/DataType.hpp>
+#include <DataTypes/Schema.hpp>
+#include <Nautilus/Interface/Record.hpp>
+#include <val_arith.hpp>
+#include <val_ptr.hpp>
 
 namespace NES::Nautilus
 {

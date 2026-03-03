@@ -14,12 +14,12 @@
 
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 
-#include <algorithm>
-#include <optional>
+#include <cstdint>
 #include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -28,12 +28,12 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Serialization/SchemaSerializationUtil.hpp>
-#include <Traits/Trait.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <fmt/format.h>
 #include <ErrorHandling.hpp>
 #include <LogicalOperatorRegistry.hpp>
 #include <SerializableOperator.pb.h>
+#include "Traits/TraitSet.hpp"
 
 namespace NES
 {
@@ -47,10 +47,10 @@ std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, Oper
         cfg << &tmp;
         return fmt::format("REPLAY_STORE(opId: {}, config: {}, schema: {})", id, cfg.str(), getOutputSchema());
     }
-    return std::string("REPLAY_STORE");
+    return {"REPLAY_STORE"};
 }
 
-std::string_view ReplayStoreLogicalOperator::getName() const noexcept
+std::string_view ReplayStoreLogicalOperator::getName() noexcept
 {
     return NAME;
 }
@@ -159,7 +159,7 @@ namespace NES
 {
 
 LogicalOperatorRegistryReturnType
-LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
+LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(const LogicalOperatorRegistryArguments& arguments)
 {
     auto logicalOp = ReplayStoreLogicalOperator(arguments.config);
     return logicalOp.withInferredSchema(arguments.inputSchemas);

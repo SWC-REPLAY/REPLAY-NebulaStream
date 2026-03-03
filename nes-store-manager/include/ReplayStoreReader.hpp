@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdint>
 #include <fstream>
+#include <iosfwd>
 #include <string>
 
 #include <DataTypes/Schema.hpp>

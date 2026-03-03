@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <iterator>
@@ -719,7 +720,7 @@ struct SystestBinder::Impl
 
                 Schema schema;
                 {
-                    std::ifstream probe(filePath, std::ios::binary);
+                    std::ifstream const probe(filePath, std::ios::binary);
                     if (probe.good())
                     {
                         schema = StoreManager::ReplayStoreReader::readSchemaFromFile(filePath);
@@ -885,7 +886,7 @@ struct SystestBinder::Impl
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
                 lastMergedConfigOverrides = mergedConfigOverrides;
                 queryCallback(
-                    testFileName, plans, sltSinkProvider, sourceCatalog, std::move(query), currentQueryNumberInTest, mergedConfigOverrides);
+                    testFileName, plans, sltSinkProvider, sourceCatalog, query, currentQueryNumberInTest, mergedConfigOverrides);
                 configOverrides = {ConfigurationOverride{}};
             });
 

@@ -26,6 +26,7 @@
 #include <BackpressureChannel.hpp>
 #include <ErrorHandling.hpp>
 #include <SourceRegistry.hpp>
+#include "Util/Logger/Logger.hpp"
 
 namespace NES
 {

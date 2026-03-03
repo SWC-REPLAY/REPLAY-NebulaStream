@@ -15,15 +15,25 @@
 #include <ReplayStoreReader.hpp>
 
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
+#include <string>
+#include <utility>
+#include <ios>
+#include <vector>
+#include <iosfwd>
 
-#include <ErrorHandling.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <ErrorHandling.hpp>
+#include "ReplayStoreFormat.hpp"
+#include "DataTypes/Schema.hpp"
 
 namespace NES::StoreManager
 {
 
-ReplayStoreReader::ReplayStoreReader(std::string filePath) : filePath(std::move(filePath)) { }
+ReplayStoreReader::ReplayStoreReader(std::string filePath) : filePath(std::move(filePath))
+{
+}
 
 ReplayStoreReader::~ReplayStoreReader()
 {
@@ -141,7 +151,7 @@ uint64_t ReplayStoreReader::readRows(char* dest, uint64_t maxRows, uint32_t tupl
         {
             auto type = schema.getFieldAt(fieldIdx).dataType;
             const auto fieldSize = fieldSizes[fieldIdx];
-            const auto offset = tuplesRead * tupleSize + fieldOffsets[fieldIdx];
+            const auto offset = (tuplesRead * tupleSize) + fieldOffsets[fieldIdx];
             char* fieldDest = dest + offset;
 
             if (type.isType(DataType::Type::VARSIZED))

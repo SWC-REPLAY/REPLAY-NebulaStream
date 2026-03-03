@@ -14,22 +14,27 @@
 
 #include <ReplayStoreFormat.hpp>
 
+#include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <regex>
+#include <string>
+#include <utility>
 
 #include <DataTypes/DataTypeProvider.hpp>
 #include <ErrorHandling.hpp>
+#include "DataTypes/Schema.hpp"
 
 namespace NES::StoreManager
 {
 
 uint64_t fnv1a64(const char* data, size_t len)
 {
-    uint64_t hash = 1469598103934665603ull; // FNV offset basis
+    uint64_t hash = 1469598103934665603ULL; // FNV offset basis
     for (size_t i = 0; i < len; ++i)
     {
         hash ^= static_cast<uint8_t>(data[i]);
-        hash *= 1099511628211ull; // FNV prime
+        hash *= 1099511628211ULL; // FNV prime
     }
     return hash;
 }
@@ -37,10 +42,10 @@ uint64_t fnv1a64(const char* data, size_t len)
 std::string serializeHeader(const std::string& schemaText)
 {
     const uint64_t fingerprint = fnv1a64(schemaText.c_str(), schemaText.size());
-    const uint32_t schemaLen = static_cast<uint32_t>(schemaText.size());
+    const auto schemaLen = static_cast<uint32_t>(schemaText.size());
 
-    const size_t headerSize = sizeof(MAGIC) + sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t)
-        + sizeof(uint32_t) + schemaLen;
+    const size_t headerSize
+        = sizeof(MAGIC) + sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint32_t) + schemaLen;
     std::string buf;
     buf.resize(headerSize);
     size_t off = 0;

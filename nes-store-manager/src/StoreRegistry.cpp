@@ -15,6 +15,10 @@
 #include <StoreRegistry.hpp>
 
 #include <filesystem>
+#include <string>
+#include <mutex>
+#include <optional>
+#include <shared_mutex>
 
 namespace NES::StoreManager
 {
@@ -27,7 +31,7 @@ StoreRegistry& StoreRegistry::instance()
 
 std::string StoreRegistry::registerStore(const std::string& storeId)
 {
-    std::unique_lock lock(mutex);
+    std::unique_lock const lock(mutex);
 
     std::filesystem::create_directories(STORE_MANAGER_WORKING_DIR);
     std::string filePath = std::string(STORE_MANAGER_WORKING_DIR) + "/replay_" + storeId + ".bin";
@@ -39,7 +43,7 @@ std::string StoreRegistry::registerStore(const std::string& storeId)
 
 std::optional<std::string> StoreRegistry::getFilePath(const std::string& storeId) const
 {
-    std::shared_lock lock(mutex);
+    std::shared_lock const lock(mutex);
     auto it = stores.find(storeId);
     if (it != stores.end())
     {
@@ -50,7 +54,7 @@ std::optional<std::string> StoreRegistry::getFilePath(const std::string& storeId
 
 std::optional<std::string> StoreRegistry::getLatestStorePath() const
 {
-    std::shared_lock lock(mutex);
+    std::shared_lock const lock(mutex);
     if (latestStoreId.empty())
     {
         return std::nullopt;
@@ -65,7 +69,7 @@ std::optional<std::string> StoreRegistry::getLatestStorePath() const
 
 void StoreRegistry::unregisterStore(const std::string& storeId)
 {
-    std::unique_lock lock(mutex);
+    std::unique_lock const lock(mutex);
     stores.erase(storeId);
     if (latestStoreId == storeId)
     {
@@ -75,7 +79,7 @@ void StoreRegistry::unregisterStore(const std::string& storeId)
 
 void StoreRegistry::clear()
 {
-    std::unique_lock lock(mutex);
+    std::unique_lock const lock(mutex);
     stores.clear();
     latestStoreId.clear();
 }

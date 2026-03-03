@@ -4,13 +4,18 @@
 
 #include <Sources/ReplaySource.hpp>
 
+#include <cstdint>
 #include <cstring>
+#include <memory>
+#include <iosfwd>
+#include <ios>
+#include <ostream>
 #include <stop_token>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include <Configurations/Descriptor.hpp>
-#include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Nautilus/Interface/BufferRef/LowerSchemaProvider.hpp>
 #include <Nautilus/Interface/BufferRef/RowTupleBufferRef.hpp>
@@ -18,10 +23,12 @@
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <fmt/format.h>
 #include <ErrorHandling.hpp>
 #include <ReplayStoreReader.hpp>
 #include <SourceRegistry.hpp>
 #include <SourceValidationRegistry.hpp>
+#include "Runtime/AbstractBufferProvider.hpp"
 
 namespace NES
 {
@@ -166,7 +173,7 @@ SourceValidationRegistryReturnType RegisterReplaySourceValidation(SourceValidati
     return ReplaySource::validateAndFormat(std::move(args.config));
 }
 
-SourceRegistryReturnType SourceGeneratedRegistrar::RegisterReplaySource(SourceRegistryArguments args)
+SourceRegistryReturnType SourceGeneratedRegistrar::RegisterReplaySource(const SourceRegistryArguments& args)
 {
     return std::make_unique<ReplaySource>(args.sourceDescriptor);
 }

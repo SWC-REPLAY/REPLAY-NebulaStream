@@ -14,14 +14,13 @@
 
 #pragma once
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 #include <Runtime/Execution/OperatorHandler.hpp>
-#include "Runtime/QueryTerminationType.hpp"
 #include <BinaryStoreWriter.hpp>
+#include "Runtime/QueryTerminationType.hpp"
 
 namespace NES
 {

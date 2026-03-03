@@ -36,6 +36,7 @@
 #include <SinkPhysicalOperator.hpp>
 #include <SourcePhysicalOperator.hpp>
 #include <options.hpp>
+#include "Util/Logger/Logger.hpp"
 
 namespace NES
 {
