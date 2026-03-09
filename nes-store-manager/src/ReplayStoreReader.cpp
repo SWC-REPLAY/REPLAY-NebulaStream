@@ -17,16 +17,16 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <ios>
+#include <iosfwd>
 #include <string>
 #include <utility>
-#include <ios>
 #include <vector>
-#include <iosfwd>
 
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
-#include "ReplayStoreFormat.hpp"
 #include "DataTypes/Schema.hpp"
+#include "ReplayStoreFormat.hpp"
 
 namespace NES::StoreManager
 {

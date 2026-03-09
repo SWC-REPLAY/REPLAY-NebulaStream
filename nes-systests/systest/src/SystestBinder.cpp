@@ -720,7 +720,7 @@ struct SystestBinder::Impl
 
                 Schema schema;
                 {
-                    std::ifstream const probe(filePath, std::ios::binary);
+                    const std::ifstream probe(filePath, std::ios::binary);
                     if (probe.good())
                     {
                         schema = StoreManager::ReplayStoreReader::readSchemaFromFile(filePath);
@@ -885,8 +885,7 @@ struct SystestBinder::Impl
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
                 lastMergedConfigOverrides = mergedConfigOverrides;
-                queryCallback(
-                    testFileName, plans, sltSinkProvider, sourceCatalog, query, currentQueryNumberInTest, mergedConfigOverrides);
+                queryCallback(testFileName, plans, sltSinkProvider, sourceCatalog, query, currentQueryNumberInTest, mergedConfigOverrides);
                 configOverrides = {ConfigurationOverride{}};
             });
 

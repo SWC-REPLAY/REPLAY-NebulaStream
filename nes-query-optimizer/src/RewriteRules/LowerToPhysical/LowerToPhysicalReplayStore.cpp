@@ -44,7 +44,7 @@ RewriteRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator logi
     std::stringstream schemaStream;
     schemaStream << logicalOperator.getOutputSchema();
 
-    ReplayStoreOperatorHandler::Config const handlerCfg{
+    const ReplayStoreOperatorHandler::Config handlerCfg{
         .filePath = filePath,
         .schemaText = schemaStream.str(),
     };

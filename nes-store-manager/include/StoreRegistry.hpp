@@ -27,7 +27,7 @@ namespace NES::StoreManager
 class StoreRegistry
 {
 public:
-    static StoreRegistry& instance();
+    static StoreRegistry&  instance();
 
     /// Register a new store, generating a unique file path under the given base directory.
     /// Returns the generated file path.

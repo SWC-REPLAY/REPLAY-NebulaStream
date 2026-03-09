@@ -12,9 +12,9 @@
     limitations under the License.
 */
 
-#include <utility>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
+#include <utility>
 #include <ReplayStoreOperatorHandler.hpp>
 #include "Runtime/Execution/OperatorHandler.hpp"
 
@@ -24,8 +24,7 @@ namespace NES
 {
 
 ReplayStoreOperatorHandler::ReplayStoreOperatorHandler(Config cfg)
-    : 
-     writer(StoreManager::BinaryStoreWriter::Config{
+    : writer(StoreManager::BinaryStoreWriter::Config{
           .filePath = std::move(cfg.filePath),
           .append = cfg.append,
           .writeHeader = cfg.header,

@@ -27,9 +27,9 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Util/PlanRenderer.hpp>
-#include "Traits/TraitSet.hpp"
-#include "SerializableOperator.pb.h"
 #include "Configurations/Enums/EnumWrapper.hpp"
+#include "SerializableOperator.pb.h"
+#include "Traits/TraitSet.hpp"
 
 namespace NES
 {

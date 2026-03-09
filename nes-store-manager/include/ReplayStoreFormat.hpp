@@ -43,13 +43,10 @@ struct FileHeader
     std::string schemaText;
 };
 
-/// Serialize a complete file header (magic + fields + schema text) into a byte buffer.
 std::string serializeHeader(const std::string& schemaText);
 
-/// Parse a file header from an input stream. Returns the header and the data start offset (byte position after header).
 std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs);
 
-/// Reconstruct a Schema from the embedded schema text in a file header.
 Schema parseSchemaFromText(const std::string& schemaText);
 
-} // namespace NES::Replay
+}

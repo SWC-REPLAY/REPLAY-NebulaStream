@@ -16,8 +16,8 @@
 
 #include <cstdint>
 #include <memory>
-#include <stop_token>
 #include <ostream>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <unordered_map>
