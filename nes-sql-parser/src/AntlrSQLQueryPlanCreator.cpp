@@ -29,9 +29,6 @@
 #include <variant>
 #include <vector>
 
-#include <StoreRegistry.hpp>
-#include "Operators/ReplayStoreLogicalOperator.hpp"
-
 #include <AntlrSQLBaseListener.h>
 #include <AntlrSQLLexer.h>
 #include <AntlrSQLParser.h>
@@ -64,6 +61,7 @@
 #include <Iterators/BFSIterator.hpp>
 #include <Operators/ProjectionLogicalOperator.hpp>
 #include <Operators/StoreLogicalOperator.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
@@ -1569,15 +1567,12 @@ void AntlrSQLQueryPlanCreator::exitModelInferenceRelation(AntlrSQLParser::ModelI
     AntlrSQLBaseListener::exitModelInferenceRelation(context);
 }
 
-void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* /*context*/)
+void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
 {
-    // Generate a unique store ID and register it so each query gets its own file
-    static std::atomic<uint64_t> storeCounter{0};
-    const auto storeId = std::to_string(storeCounter.fetch_add(1));
-    const auto filePath = StoreManager::StoreRegistry::instance().registerStore(storeId);
+    const auto storeName = bindIdentifier(context->storeName);
 
     std::unordered_map<std::string, std::string> options;
-    options.emplace("file_path", filePath);
+    options.emplace("store_name", storeName);
 
     helpers.top().storeOptions = std::move(options);
 }
