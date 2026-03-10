@@ -63,6 +63,7 @@
 #include <ErrorHandling.hpp>
 #include <InputFormatterTupleBufferRefProvider.hpp>
 #include <LegacyOptimizer.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <ReplayStoreReader.hpp>
 #include <StoreRegistry.hpp>
 #include <SystestParser.hpp>
@@ -702,6 +703,17 @@ struct SystestBinder::Impl
         }
     }
 
+    /// Pre-register replay stores found in the parsed plan so that subsequent queries can reference them by name.
+    static void preRegisterReplayStores(const LogicalPlan& plan)
+    {
+        for (const auto& storeOp : getOperatorByType<ReplayStoreLogicalOperator>(plan))
+        {
+            const auto& config = storeOp->getConfig();
+            const auto storeName = std::get<std::string>(config.at("store_name"));
+            StoreManager::StoreRegistry::instance().registerStore(storeName);
+        }
+    }
+
     [[nodiscard]] static LogicalOperator
     replaceTimeTravelReadSource(const LogicalOperator& current, const std::shared_ptr<SourceCatalog>& sourceCatalog)
     {
@@ -713,10 +725,10 @@ struct SystestBinder::Impl
 
         if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
         {
-            if (sourceOp.value()->getLogicalSourceName() == "TIME_TRAVEL_READ")
+            const auto storePath = StoreManager::StoreRegistry::instance().getFilePath(sourceOp.value()->getLogicalSourceName());
+            if (storePath.has_value())
             {
-                auto latestPath = StoreManager::StoreRegistry::instance().getLatestStorePath();
-                const std::string filePath = latestPath.value_or("/tmp/REPLAY-NebulaStream/store_read_out.bin");
+                const std::string filePath = storePath.value();
 
                 Schema schema;
                 {
@@ -774,6 +786,7 @@ struct SystestBinder::Impl
         {
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
 
+            preRegisterReplayStores(plan);
             replaceTimeTravelReadSources(plan, sourceCatalog);
 
             setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
