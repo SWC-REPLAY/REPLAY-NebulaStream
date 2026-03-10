@@ -1030,15 +1030,12 @@ void AntlrSQLQueryPlanCreator::exitGroupByClause(AntlrSQLParser::GroupByClauseCo
     AntlrSQLBaseListener::exitGroupByClause(context);
 }
 
-void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* /*context*/)
+void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
 {
-    // Generate a unique store ID and register it so each query gets its own file
-    static std::atomic<uint64_t> storeCounter{0};
-    const auto storeId = std::to_string(storeCounter.fetch_add(1));
-    const auto filePath = StoreManager::StoreRegistry::instance().registerStore(storeId);
+    const auto storeName = bindIdentifier(context->storeName);
 
     std::unordered_map<std::string, std::string> options;
-    options.emplace("file_path", filePath);
+    options.emplace("store_name", storeName);
 
     helpers.top().storeOptions = std::move(options);
 }

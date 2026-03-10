@@ -60,13 +60,13 @@ public:
 
     struct ConfigParameters
     {
-        static inline const DescriptorConfig::ConfigParameter<std::string> FILE_PATH{
-            "file_path",
+        static inline const DescriptorConfig::ConfigParameter<std::string> STORE_NAME{
+            "store_name",
             std::nullopt,
-            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(FILE_PATH, cfg); }};
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_NAME, cfg); }};
 
         static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-            = DescriptorConfig::createConfigParameterContainerMap(FILE_PATH);
+            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME);
     };
 
     static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);
