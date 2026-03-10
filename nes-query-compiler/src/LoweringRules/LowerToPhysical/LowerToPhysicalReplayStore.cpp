@@ -26,6 +26,7 @@
 #include <PhysicalOperator.hpp>
 #include <ReplayStoreOperatorHandler.hpp>
 #include <ReplayStorePhysicalOperator.hpp>
+#include <StoreRegistry.hpp>
 #include "Configurations/Descriptor.hpp"
 #include "Runtime/Execution/OperatorHandler.hpp"
 
