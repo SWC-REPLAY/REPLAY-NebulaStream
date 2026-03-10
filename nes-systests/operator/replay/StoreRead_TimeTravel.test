@@ -14,7 +14,7 @@ CREATE SINK sinkStore(stream.id UINT64, stream.value UINT64, stream.timestamp UI
 CREATE SINK sinkRead(id UINT64, value UINT64, timestamp UINT64) TYPE File;
 
 # 1: store rows to binary file and also write to a sink for comparison
-SELECT id, value, timestamp FROM stream INTO sinkStore TIME_TRAVEL_STORE;
+SELECT id, value, timestamp FROM stream INTO sinkStore TIME_TRAVEL_STORE store1;
 ----
 1,1,1000
 2,1,1001
