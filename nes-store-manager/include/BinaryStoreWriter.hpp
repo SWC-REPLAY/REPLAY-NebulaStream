@@ -56,6 +56,7 @@ public:
     void append(const uint8_t* data, size_t len);
 
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }
+    [[nodiscard]] uint64_t size() const { return tail.load(std::memory_order_relaxed); }
 
 private:
     int fd{-1};

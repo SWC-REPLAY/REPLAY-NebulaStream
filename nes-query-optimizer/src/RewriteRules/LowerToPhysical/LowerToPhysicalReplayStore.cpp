@@ -17,6 +17,7 @@
 #include <memory>
 #include <sstream>
 #include <utility>
+#include <Nautilus/Interface/BufferRef/LowerSchemaProvider.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <RewriteRules/AbstractRewriteRule.hpp>
@@ -43,27 +44,27 @@ RewriteRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator logi
     Descriptor logicalCfg(std::move(cfgCopy));
     const auto storeName = logicalCfg.getFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_NAME);
 
-    const auto registeredPath = StoreManager::StoreRegistry::instance().getFilePath(storeName);
-    PRECONDITION(registeredPath.has_value(), "Store '{}' must be registered before lowering to physical", storeName);
+    auto registeredStore = StoreManager::StoreRegistry::instance().getStore(storeName);
+    PRECONDITION(registeredStore.has_value(), "Store '{}' must be registered before lowering to physical", storeName);
 
-    std::stringstream schemaStream;
-    schemaStream << logicalOperator.getOutputSchema();
+    const auto inputSchema = logicalOperator.getInputSchemas()[0];
 
     const ReplayStoreOperatorHandler::Config handlerCfg{
         .storeName = storeName,
-        .filePath = registeredPath.value(),
-        .schemaText = schemaStream.str(),
+        .schema = inputSchema,
     };
 
     auto handlerId = getNextOperatorHandlerId();
-    auto handler = std::make_shared<ReplayStoreOperatorHandler>(handlerCfg);
+    auto handler = std::make_shared<ReplayStoreOperatorHandler>(handlerCfg, registeredStore.value());
 
-    const auto inputSchema = logicalOperator.getInputSchemas()[0];
     const auto outputSchema = logicalOperator.getOutputSchema();
-    auto physicalOperator = ReplayStorePhysicalOperator(handlerId, inputSchema);
     const auto memoryLayoutTypeTrait = logicalOperator.getTraitSet().tryGet<MemoryLayoutTypeTrait>();
     PRECONDITION(memoryLayoutTypeTrait.has_value(), "Expected a memory layout type trait");
     const auto memoryLayoutType = memoryLayoutTypeTrait.value()->memoryLayout;
+
+    const auto bufferSize = conf.pageSize.getValue();
+    const auto bufferRef = LowerSchemaProvider::lowerSchema(bufferSize, inputSchema, memoryLayoutType);
+    auto physicalOperator = ReplayStorePhysicalOperator(handlerId, inputSchema, bufferRef);
     auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
         physicalOperator,
         inputSchema,

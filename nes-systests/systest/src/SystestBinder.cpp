@@ -714,7 +714,10 @@ struct SystestBinder::Impl
         {
             const auto& config = storeOp->getConfig();
             const auto storeName = std::get<std::string>(config.at("store_name"));
-            StoreManager::StoreRegistry::instance().registerStore(storeName);
+            const auto outputSchema = storeOp->getOutputSchema();
+            std::stringstream schemaStream;
+            schemaStream << outputSchema;
+            StoreManager::StoreRegistry::instance().registerDefaultStore(storeName, outputSchema, schemaStream.str());
         }
     }
 
@@ -754,7 +757,9 @@ struct SystestBinder::Impl
                     }
                 }
 
-                std::unordered_map<std::string, std::string> sourceConfig{{"file_path", filePath}};
+                auto sourceStoreName = sourceOp.value()->getLogicalSourceName();
+                std::unordered_map<std::string, std::string> sourceConfig{
+                    {"file_path", filePath}, {"store_name", sourceStoreName}};
                 std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
                 const InlineSourceLogicalOperator inlineOp{"Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
                 return inlineOp.withChildren(newChildren);

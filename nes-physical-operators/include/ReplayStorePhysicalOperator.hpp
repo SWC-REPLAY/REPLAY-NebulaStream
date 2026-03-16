@@ -14,13 +14,12 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string>
-#include <vector>
 
-#include <cstdint>
-#include <DataTypes/DataType.hpp>
 #include <DataTypes/Schema.hpp>
+#include <Nautilus/Interface/BufferRef/TupleBufferRef.hpp>
 #include <Nautilus/Interface/Record.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
@@ -31,12 +30,13 @@
 namespace NES
 {
 
-/// Physical operator that serializes each input record to a binary row and appends it to a file via an operator handler.
-/// The record is then forwarded to its child unchanged.
+/// Physical operator that accumulates parsed records into a staging TupleBuffer
+/// and writes the buffer to a store via an operator handler.
+/// The record is forwarded to its child unchanged.
 class ReplayStorePhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    ReplayStorePhysicalOperator(OperatorHandlerId handlerId, const Schema& inputSchema);
+    ReplayStorePhysicalOperator(OperatorHandlerId handlerId, const Schema& inputSchema, std::shared_ptr<TupleBufferRef> bufferRef);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;
@@ -48,16 +48,11 @@ public:
     void setChild(PhysicalOperator child) override;
 
 private:
-    void encodeAndAppend(Record& record, ExecutionContext& executionCtx) const;
+    [[nodiscard]] uint64_t getMaxRecordsPerBuffer() const;
 
     OperatorHandlerId handlerId;
     Schema inputSchema;
-    std::vector<std::string> fieldNames;
-    std::vector<DataType> fieldTypes;
-    std::vector<uint32_t> fieldSizes;
-    std::vector<uint32_t> fieldOffsets;
-    uint32_t rowWidth{0};
-
+    std::shared_ptr<TupleBufferRef> bufferRef;
     std::optional<PhysicalOperator> child;
 };
 
