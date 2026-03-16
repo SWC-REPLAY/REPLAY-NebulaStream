@@ -64,6 +64,7 @@ EXCEPTION(UnknownSinkName, 2033, "unknown sink name")
 EXCEPTION(SinkAlreadyExists, 2034, "sink already exists")
 EXCEPTION(QueryAlreadyRegistered, 2035, "query already registered")
 EXCEPTION(UnknownOutputFormatterType, 2036, "unknown output formatter type")
+EXCEPTION(StoreManagerInitFailure, 2037, "cannot initiailze store manager")
 
 /// 3XXX Errors during query runtime
 EXCEPTION(BufferAllocationFailure, 3000, "buffer allocation failure")
