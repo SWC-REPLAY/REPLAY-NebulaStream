@@ -38,16 +38,9 @@ void ReplayStoreOperatorHandler::start(PipelineExecutionContext&, uint32_t)
     writer.ensureHeader();
 }
 
-void ReplayStoreOperatorHandler::stop(QueryTerminationType terminationType, PipelineExecutionContext&)
+void ReplayStoreOperatorHandler::stop(QueryTerminationType, PipelineExecutionContext&)
 {
-    if (terminationType == QueryTerminationType::Graceful)
-    {
-        writer.removeFile();
-    }
-    else
-    {
-        writer.close();
-    }
+    writer.close();
 }
 
 void ReplayStoreOperatorHandler::ensureHeader(PipelineExecutionContext&)

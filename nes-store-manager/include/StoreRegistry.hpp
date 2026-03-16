@@ -47,6 +47,7 @@ public:
 
 private:
     StoreRegistry() = default;
+    ~StoreRegistry() { clear(); }
 
     mutable std::shared_mutex mutex;
     std::unordered_map<std::string, std::string> stores;
