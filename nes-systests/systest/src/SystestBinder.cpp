@@ -179,6 +179,8 @@ public:
 
     void setException(const Exception& exception) { this->exception = exception; }
 
+    void setRunAfter(std::pair<TestName, SystestQueryId> runAfter) { this->runAfter = runAfter; }
+
     std::expected<LogicalPlan, Exception> getBoundPlan() const
     {
         if (boundPlan.has_value())
@@ -318,7 +320,8 @@ public:
                  .expectedResultsOrExpectedError = expectedResultsValue,
                  .additionalSourceThreads = additionalSourceThreads.value(),
                  .configurationOverride = std::move(configurationOverride),
-                 .differentialQueryPlan = differentialQueryPlan});
+                 .differentialQueryPlan = differentialQueryPlan,
+                 .runAfter = runAfter});
         }
         return queries;
     }
@@ -341,6 +344,7 @@ private:
     std::optional<std::shared_ptr<std::vector<std::jthread>>> additionalSourceThreads;
     std::vector<ConfigurationOverride> configurationOverrides{ConfigurationOverride{}};
     std::optional<LogicalPlan> differentialQueryPlan;
+    std::optional<std::pair<TestName, SystestQueryId>> runAfter;
     bool built = false;
 };
 
@@ -808,11 +812,16 @@ struct SystestBinder::Impl
         const std::shared_ptr<SourceCatalog>& sourceCatalog,
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
-        const std::vector<ConfigurationOverride>& configOverrides) const
+        const std::vector<ConfigurationOverride>& configOverrides,
+        const bool sequentialExecution) const
     {
         SystestQueryBuilder currentBuilder{currentQueryNumberInTest};
         currentBuilder.setQueryDefinition(query);
         currentBuilder.setConfigurationOverrides(configOverrides);
+        if (sequentialExecution)
+        {
+            currentBuilder.setRunAfter(std::make_pair(TestName(testFileName), SystestQueryId{currentQueryNumberInTest.getRawValue() - 1}));
+        }
         try
         {
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
@@ -926,12 +935,13 @@ struct SystestBinder::Impl
 
         SystestQueryId lastParsedQueryId = INVALID_SYSTEST_QUERY_ID;
         parser.registerOnQueryCallback(
-            [&](std::string query, SystestQueryId currentQueryNumberInTest)
+            [&](const std::string& query, SystestQueryId currentQueryNumberInTest, bool sequentialExecution)
             {
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
                 lastMergedConfigOverrides = mergedConfigOverrides;
-                queryCallback(testFileName, plans, sltSinkProvider, sourceCatalog, query, currentQueryNumberInTest, mergedConfigOverrides);
+                queryCallback(
+                    testFileName, plans, sltSinkProvider, sourceCatalog, query, currentQueryNumberInTest, mergedConfigOverrides, sequentialExecution);
                 configOverrides = {ConfigurationOverride{}};
             });
 
