@@ -20,14 +20,14 @@ add_source_files(nes-sources
         SourceValidationProvider.cpp
         LogicalSource.cpp
         SourceCatalog.cpp
-        BinaryStoreSource.cpp
+        ReplaySource.cpp
 )
 
 # Register plugins
 add_plugin(File Source nes-sources FileSource.cpp)
 add_plugin(File SourceValidation nes-sources FileSource.cpp)
-add_plugin(BinaryStore Source nes-sources BinaryStoreSource.cpp)
-add_plugin(BinaryStore SourceValidation nes-sources BinaryStoreSource.cpp)
+add_plugin(Replay Source nes-sources ReplaySource.cpp)
+add_plugin(Replay SourceValidation nes-sources ReplaySource.cpp)
 
 # Systest adaptors
 add_plugin(File InlineData nes-sources FileSource.cpp)
