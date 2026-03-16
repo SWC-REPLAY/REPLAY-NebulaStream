@@ -96,6 +96,7 @@ EXCEPTION(FunctionNotImplemented, 9000, "function not implemented")
 EXCEPTION(InvalidRefCountForBuffer, 9001, "invalid reference counter for buffer")
 EXCEPTION(InvalidDynamicCast, 9002, "Invalid dynamic cast")
 EXCEPTION(NotImplemented, 9003, "not implemented")
+EXCEPTION(StoreManagerInitFailure, 9004, "cannot initiailze store manager")
 
 /// Special errors
 EXCEPTION(UnknownException, 9999, "unknown exception")
