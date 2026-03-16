@@ -25,11 +25,8 @@ namespace NES
 
 ReplayStoreOperatorHandler::ReplayStoreOperatorHandler(Config cfg)
     : writer(StoreManager::BinaryStoreWriter::Config{
+          .storeName = std::move(cfg.storeName),
           .filePath = std::move(cfg.filePath),
-          .append = cfg.append,
-          .writeHeader = cfg.header,
-          .directIO = cfg.directIO,
-          .fdatasyncInterval = cfg.fdatasyncInterval,
           .schemaText = std::move(cfg.schemaText),
       })
 {
@@ -41,9 +38,16 @@ void ReplayStoreOperatorHandler::start(PipelineExecutionContext&, uint32_t)
     writer.ensureHeader();
 }
 
-void ReplayStoreOperatorHandler::stop(QueryTerminationType, PipelineExecutionContext&)
+void ReplayStoreOperatorHandler::stop(QueryTerminationType terminationType, PipelineExecutionContext&)
 {
-    writer.close();
+    if (terminationType == QueryTerminationType::Graceful)
+    {
+        writer.removeFile();
+    }
+    else
+    {
+        writer.close();
+    }
 }
 
 void ReplayStoreOperatorHandler::ensureHeader(PipelineExecutionContext&)
