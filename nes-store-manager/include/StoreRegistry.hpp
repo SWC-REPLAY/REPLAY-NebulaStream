@@ -45,9 +45,11 @@ public:
     /// Clear all registrations.
     void clear();
 
+    /// Delete all registered store files from disk and clear the registry.
+    void clearAndDeleteFiles();
+
 private:
     StoreRegistry() = default;
-    ~StoreRegistry() { clear(); }
 
     mutable std::shared_mutex mutex;
     std::unordered_map<std::string, std::string> stores;

@@ -80,11 +80,7 @@ std::optional<std::string> StoreRegistry::getLatestStorePath() const
 void StoreRegistry::unregisterStore(const std::string& storeId)
 {
     const std::unique_lock lock(mutex);
-    if (auto it = stores.find(storeId); it != stores.end())
-    {
-        std::filesystem::remove(it->second);
-        stores.erase(it);
-    }
+    stores.erase(storeId);
     if (latestStoreId == storeId)
     {
         latestStoreId.clear();
@@ -92,6 +88,13 @@ void StoreRegistry::unregisterStore(const std::string& storeId)
 }
 
 void StoreRegistry::clear()
+{
+    const std::unique_lock lock(mutex);
+    stores.clear();
+    latestStoreId.clear();
+}
+
+void StoreRegistry::clearAndDeleteFiles()
 {
     const std::unique_lock lock(mutex);
     for (const auto& [name, filePath] : stores)
