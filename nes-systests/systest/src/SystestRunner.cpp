@@ -126,15 +126,17 @@ std::vector<RunningQuery> runQueries(
     const QueryPerformanceMessageBuilder& queryPerformanceMessage)
 {
     using SystestKey = std::pair<TestName, SystestQueryId>;
+
     struct SystestKeyHash
     {
         size_t operator()(const SystestKey& key) const
         {
-            auto hash1 = std::hash<TestName>{}(key.first);
-            auto hash2 = std::hash<SystestQueryId>{}(key.second);
+            const auto hash1 = std::hash<TestName>{}(key.first);
+            const auto hash2 = std::hash<SystestQueryId>{}(key.second);
             return hash1 ^ (hash2 << 1U);
         }
     };
+
     std::unordered_set<SystestKey, SystestKeyHash> completedQueries; /// Track which queries have completed
 
     std::queue<SystestQuery> pending;

@@ -127,7 +127,11 @@ TEST_F(SystestRunnerTest, ExpectedErrorDuringParsing)
     const auto parseError = std::unexpected(Exception{"parse error", static_cast<uint64_t>(expectedCode)});
 
     const auto result = runQueries(
-        {makeQuery(parseError, ExpectedError{.code = expectedCode, .message = std::nullopt}, std::nullopt, NES::INVALID<NES::Systest::SystestQueryId>)},
+        {makeQuery(
+            parseError,
+            ExpectedError{.code = expectedCode, .message = std::nullopt},
+            std::nullopt,
+            NES::INVALID<NES::Systest::SystestQueryId>)},
         1,
         submitter,
         progressTracker,
@@ -159,8 +163,12 @@ TEST_F(SystestRunnerTest, RuntimeFailureWithUnexpectedCode)
     auto sourceOperator = SourceDescriptorLogicalOperator{testPhysicalSource.value()};
     const LogicalPlan plan{SinkLogicalOperator{dummySinkDescriptor}.withChildren({sourceOperator})};
 
-    const auto result
-        = runQueries({makeQuery(SystestQuery::PlanInfo{plan, Schema{}}, {}, std::nullopt, NES::INVALID<NES::Systest::SystestQueryId>)}, 1, submitter, progressTracker, discardPerformanceMessage);
+    const auto result = runQueries(
+        {makeQuery(SystestQuery::PlanInfo{plan, Schema{}}, {}, std::nullopt, NES::INVALID<NES::Systest::SystestQueryId>)},
+        1,
+        submitter,
+        progressTracker,
+        discardPerformanceMessage);
 
     ASSERT_EQ(result.size(), 1);
     EXPECT_FALSE(result.front().passed);
@@ -191,7 +199,11 @@ TEST_F(SystestRunnerTest, MissingExpectedRuntimeError)
     const LogicalPlan plan{SinkLogicalOperator{dummySinkDescriptor}.withChildren({sourceOperator})};
 
     const auto result = runQueries(
-        {makeQuery(SystestQuery::PlanInfo{plan, Schema{}}, ExpectedError{.code = ErrorCode::InvalidQuerySyntax, .message = std::nullopt}, std::nullopt, NES::INVALID<NES::Systest::SystestQueryId>)},
+        {makeQuery(
+            SystestQuery::PlanInfo{plan, Schema{}},
+            ExpectedError{.code = ErrorCode::InvalidQuerySyntax, .message = std::nullopt},
+            std::nullopt,
+            NES::INVALID<NES::Systest::SystestQueryId>)},
         1,
         submitter,
         progressTracker,
@@ -225,7 +237,8 @@ TEST_F(SystestRunnerTest, SequentialExecutionThrowOnNonExistentDependency)
             {makeQuery(
                 SystestQuery::PlanInfo{plan, Schema{}},
                 ExpectedError{.code = ErrorCode::InvalidQuerySyntax, .message = std::nullopt},
-                runAfter, NES::INVALID<NES::Systest::SystestQueryId>)},
+                runAfter,
+                NES::INVALID<NES::Systest::SystestQueryId>)},
             1,
             submitter,
             progressTracker,
