@@ -11,20 +11,16 @@
 # limitations under the License.
 
 add_subdirectory(src)
-get_source(nes-sources NES_SOURCES_SOURCE_FILES)
+get_source(nes-store-manager NES_STORE_MANAGER_SOURCE_FILES)
 
-add_library(nes-sources ${NES_SOURCES_SOURCE_FILES})
-target_link_libraries(nes-sources PUBLIC nes-common nes-configurations nes-memory nes-executable nes-store-manager)
+add_library(nes-store-manager ${NES_STORE_MANAGER_SOURCE_FILES})
 
-target_include_directories(nes-sources PUBLIC
+target_link_libraries(nes-store-manager PUBLIC nes-common nes-data-types)
+target_compile_definitions(nes-store-manager PRIVATE STORE_MANAGER_WORKING_DIR="${CMAKE_CURRENT_BINARY_DIR}/working-dir/")
+target_include_directories(nes-store-manager PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include/nebulastream/>
-        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>)
+        $<INSTALL_INTERFACE:include/nebulastream/>)
 
 if (NES_ENABLE_PRECOMPILED_HEADERS)
-    target_precompile_headers(nes-sources REUSE_FROM nes-common)
+    target_precompile_headers(nes-store-manager REUSE_FROM nes-common)
 endif ()
-
-create_registries_for_component(Source SourceValidation FileData InlineData)
-
-add_tests_if_enabled(tests)
