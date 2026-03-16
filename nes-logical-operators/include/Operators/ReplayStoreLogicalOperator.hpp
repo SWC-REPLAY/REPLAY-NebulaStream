@@ -14,17 +14,18 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
-#include <Traits/Trait.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Reflection.hpp>
 
@@ -32,30 +33,30 @@ namespace NES
 {
 
 /// Logical operator that persists rows to a binary file while passing them downstream unchanged.
-class StoreLogicalOperator
+class ReplayStoreLogicalOperator
 {
 public:
-    StoreLogicalOperator() = default;
+    ReplayStoreLogicalOperator() = default;
 
-    explicit StoreLogicalOperator(DescriptorConfig::Config validatedConfig) : config(std::move(validatedConfig)) { }
+    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig) : config(std::move(validatedConfig)) { }
 
     [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
     [[nodiscard]] std::string_view getName() const noexcept;
 
     [[nodiscard]] std::vector<LogicalOperator> getChildren() const;
-    [[nodiscard]] StoreLogicalOperator withChildren(std::vector<LogicalOperator> children) const;
-    [[nodiscard]] StoreLogicalOperator withTraitSet(TraitSet traitSet) const;
+    [[nodiscard]] ReplayStoreLogicalOperator withChildren(std::vector<LogicalOperator> children) const;
+    [[nodiscard]] ReplayStoreLogicalOperator withTraitSet(TraitSet traitSet) const;
     [[nodiscard]] TraitSet getTraitSet() const;
-    [[nodiscard]] bool operator==(const StoreLogicalOperator& rhs) const;
+    [[nodiscard]] bool operator==(const ReplayStoreLogicalOperator& rhs) const;
 
     [[nodiscard]] std::vector<Schema> getInputSchemas() const;
     [[nodiscard]] Schema getOutputSchema() const;
-    [[nodiscard]] StoreLogicalOperator withInferredSchema(std::vector<Schema> inputSchemas) const;
+    [[nodiscard]] ReplayStoreLogicalOperator withInferredSchema(std::vector<Schema> inputSchemas) const;
 
 
     [[nodiscard]] const DescriptorConfig::Config& getConfig() const { return config; }
 
-    [[nodiscard]] StoreLogicalOperator withConfig(DescriptorConfig::Config validatedConfig) const;
+    [[nodiscard]] ReplayStoreLogicalOperator withConfig(DescriptorConfig::Config validatedConfig) const;
 
     struct ConfigParameters
     {
@@ -71,26 +72,26 @@ public:
     static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);
 
 private:
-    static constexpr std::string_view NAME = "Store";
+    static constexpr std::string_view NAME = "ReplayStore";
     std::vector<LogicalOperator> children;
     TraitSet traitSet;
 
-    DescriptorConfig::Config config{};
+    DescriptorConfig::Config config;
 };
 
 template <>
-struct Reflector<StoreLogicalOperator>
+struct Reflector<ReplayStoreLogicalOperator>
 {
-    Reflected operator()(const StoreLogicalOperator& op) const;
+    Reflected operator()(const ReplayStoreLogicalOperator& op) const;
 };
 
 template <>
-struct Unreflector<StoreLogicalOperator>
+struct Unreflector<ReplayStoreLogicalOperator>
 {
-    StoreLogicalOperator operator()(const Reflected& reflected) const;
+    ReplayStoreLogicalOperator operator()(const Reflected& reflected) const;
 };
 
-static_assert(LogicalOperatorConcept<StoreLogicalOperator>);
+static_assert(LogicalOperatorConcept<ReplayStoreLogicalOperator>);
 }
 
 namespace NES::detail

@@ -20,12 +20,13 @@
 
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
-#include <Sources/BinaryStoreSource.hpp>
+#include <Sources/ReplaySource.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <BackpressureChannel.hpp>
 #include <ErrorHandling.hpp>
 #include <SourceRegistry.hpp>
+#include "Util/Logger/Logger.hpp"
 
 namespace NES
 {
@@ -53,13 +54,13 @@ SourceProvider::lower(OriginId originId, BackpressureListener backpressureListen
             sourceDescriptor.getSourceType(),
             originId.getRawValue(),
             sourceDescriptor.getParserConfig().parserType);
-        if (sourceDescriptor.getSourceType() == "BinaryStore")
+        if (sourceDescriptor.getSourceType() == "Replay")
         {
-            const auto* binaryStore = dynamic_cast<BinaryStoreSource*>(source.value().get());
-            NES_DEBUG("SourceProvider: created BinaryStoreSource instance? {}", binaryStore ? "yes" : "no");
-            if (binaryStore == nullptr)
+            const auto* replaySource = dynamic_cast<ReplaySource*>(source.value().get());
+            NES_DEBUG("SourceProvider: created ReplaySource instance? {}", replaySource ? "yes" : "no");
+            if (replaySource == nullptr)
             {
-                throw UnknownSourceType("Expected BinaryStoreSource instance for BinaryStore type, but got a different implementation");
+                throw UnknownSourceType("Expected ReplaySource instance for Replay type, but got a different implementation");
             }
         }
         return std::make_unique<SourceHandle>(
