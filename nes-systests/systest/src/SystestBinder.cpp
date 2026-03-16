@@ -43,6 +43,7 @@
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/NESStrongType.hpp>
 #include <Operators/LogicalOperator.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Sinks/InlineSinkLogicalOperator.hpp>
 #include <Operators/Sinks/SinkLogicalOperator.hpp>
 #include <Operators/Sources/InlineSourceLogicalOperator.hpp>
@@ -745,7 +746,10 @@ struct SystestBinder::Impl
         {
             const auto& config = storeOp->getConfig();
             const auto storeName = std::get<std::string>(config.at("store_name"));
-            StoreManager::StoreRegistry::instance().registerStore(storeName);
+            const auto outputSchema = storeOp->getOutputSchema();
+            std::stringstream schemaStream;
+            schemaStream << outputSchema;
+            StoreManager::StoreRegistry::instance().registerDefaultStore(storeName, outputSchema, schemaStream.str());
         }
     }
 
@@ -785,7 +789,8 @@ struct SystestBinder::Impl
                     }
                 }
 
-                std::unordered_map<std::string, std::string> sourceConfig{{"file_path", filePath}};
+                auto sourceStoreName = sourceOp.value()->getLogicalSourceName();
+                std::unordered_map<std::string, std::string> sourceConfig{{"file_path", filePath}, {"store_name", sourceStoreName}};
                 std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
                 const InlineSourceLogicalOperator inlineOp{"Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
                 return inlineOp.withChildren(newChildren);
@@ -941,7 +946,14 @@ struct SystestBinder::Impl
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
                 lastMergedConfigOverrides = mergedConfigOverrides;
                 queryCallback(
-                    testFileName, plans, sltSinkProvider, sourceCatalog, query, currentQueryNumberInTest, mergedConfigOverrides, sequentialExecution);
+                    testFileName,
+                    plans,
+                    sltSinkProvider,
+                    sourceCatalog,
+                    query,
+                    currentQueryNumberInTest,
+                    mergedConfigOverrides,
+                    sequentialExecution);
                 configOverrides = {ConfigurationOverride{}};
             });
 

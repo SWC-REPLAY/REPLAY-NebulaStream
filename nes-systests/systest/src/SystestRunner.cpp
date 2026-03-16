@@ -125,6 +125,7 @@ std::vector<RunningQuery> runQueries(
     const QueryPerformanceMessageBuilder& queryPerformanceMessage)
 {
     using SystestKey = std::pair<TestName, SystestQueryId>;
+
     struct SystestKeyHash
     {
         size_t operator()(const SystestKey& key) const
@@ -134,6 +135,7 @@ std::vector<RunningQuery> runQueries(
             return h1 ^ (h2 << 1U);
         }
     };
+
     std::unordered_set<SystestKey, SystestKeyHash> completedQueries; /// Track which queries have completed
 
     std::queue<SystestQuery> pending;

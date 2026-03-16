@@ -137,7 +137,7 @@ uint64_t ReplayStoreReader::readRows(char* dest, uint64_t maxRows, uint32_t tupl
         }
         else
         {
-            size = type.getSizeInBytes();
+            size = type.getSizeInBytesWithNull();
         }
         fieldSizes.push_back(size);
         currentOffset += size;

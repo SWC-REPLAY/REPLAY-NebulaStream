@@ -57,6 +57,8 @@ public:
 
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }
 
+    [[nodiscard]] uint64_t size() const { return tail.load(std::memory_order_relaxed); }
+
 private:
     int fd{-1};
     std::atomic<uint64_t> tail{0};

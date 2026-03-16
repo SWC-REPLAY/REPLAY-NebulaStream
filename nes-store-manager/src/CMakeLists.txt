@@ -15,4 +15,12 @@ add_source_files(nes-store-manager
         BinaryStoreWriter.cpp
         ReplayStoreReader.cpp
         StoreRegistry.cpp
+        MemoryStore.cpp
+        FileStore.cpp
+        MemoryToFileTransformation.cpp
+        HierarchicalStore.cpp
 )
+
+add_plugin(MemoryStore StoreType nes-store-manager MemoryStore.cpp)
+add_plugin(FileStore StoreType nes-store-manager FileStore.cpp)
+add_plugin(MemoryStore_to_FileStore StoreTransformation nes-store-manager MemoryToFileTransformation.cpp)
