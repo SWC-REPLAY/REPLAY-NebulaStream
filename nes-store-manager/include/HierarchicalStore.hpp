@@ -30,7 +30,7 @@ namespace NES::StoreManager
 /// Policy that determines when to trigger a flush from one level to the next.
 struct FlushPolicy
 {
-    enum class Type
+    enum class Type : uint8_t
     {
         SIZE_THRESHOLD
     };
