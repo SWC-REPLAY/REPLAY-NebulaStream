@@ -37,6 +37,7 @@
 #include <Operators/Sinks/SinkLogicalOperator.hpp>
 #include <Operators/Sources/InlineSourceLogicalOperator.hpp>
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
+#include <Operators/StoreLogicalOperator.hpp>
 #include <Operators/UnionLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/WindowAggregationLogicalFunction.hpp>
 #include <Operators/Windows/JoinLogicalOperator.hpp>
@@ -190,6 +191,12 @@ LogicalPlan LogicalPlanBuilder::addInlineSink(
 {
     return promoteOperatorToRoot(
         queryPlan, InlineSinkLogicalOperator(std::move(type), schema, std::move(sinkConfig), std::move(formatConfig)));
+}
+
+LogicalPlan LogicalPlanBuilder::addStore(const DescriptorConfig::Config& config, const LogicalPlan& queryPlan)
+{
+    const auto storeOp = StoreLogicalOperator(config);
+    return promoteOperatorToRoot(queryPlan, storeOp);
 }
 
 LogicalPlan
