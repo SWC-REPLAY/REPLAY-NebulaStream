@@ -14,24 +14,38 @@
 
 #pragma once
 
-#include <fstream>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <stop_token>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include <Store.hpp>
+#include "Runtime/AbstractBufferProvider.hpp"
+#include "Runtime/TupleBuffer.hpp"
+
+namespace NES::StoreManager
+{
+class ReplayStoreReader;
+}
 
 namespace NES
 {
 
-/// Reads rows produced by Store from a binary file and fills TupleBuffers in row layout.
-class BinaryStoreSource final : public Source
+/// Reads rows from a Store or a binary file, delegating I/O as appropriate.
+class ReplaySource final : public Source
 {
 public:
-    static constexpr std::string_view NAME = "BinaryStore";
-    explicit BinaryStoreSource(const SourceDescriptor& sourceDescriptor);
-    ~BinaryStoreSource() override = default;
+    static constexpr std::string_view NAME = "Replay";
+    explicit ReplaySource(const SourceDescriptor& sourceDescriptor);
+    ~ReplaySource() override;
 
     void open(std::shared_ptr<AbstractBufferProvider> bufferProvider) override;
     void close() override;
@@ -50,9 +64,9 @@ protected:
 
 private:
     std::string filePath;
-    std::ifstream inputFile;
-    uint64_t dataStartOffset{0};
-    std::atomic<uint64_t> totalNumBytesRead{0};
+    std::string storeName;
+    std::optional<StoreManager::Store> store;
+    std::unique_ptr<StoreManager::ReplayStoreReader> reader;
     Schema schema;
 };
 

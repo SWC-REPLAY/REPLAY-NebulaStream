@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <iterator>
@@ -42,6 +43,7 @@
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/NESStrongType.hpp>
 #include <Operators/LogicalOperator.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Sinks/InlineSinkLogicalOperator.hpp>
 #include <Operators/Sinks/SinkLogicalOperator.hpp>
 #include <Operators/Sources/InlineSourceLogicalOperator.hpp>
@@ -54,7 +56,6 @@
 #include <SQLQueryParser/StatementBinder.hpp>
 #include <Sinks/SinkCatalog.hpp>
 #include <Sinks/SinkDescriptor.hpp>
-#include <Sources/BinaryStoreSource.hpp>
 #include <Sources/SourceDataProvider.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Logger/Logger.hpp>
@@ -65,6 +66,9 @@
 #include <ErrorHandling.hpp>
 #include <InputFormatterTupleBufferRefProvider.hpp>
 #include <QueryOptimizerConfiguration.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
+#include <ReplayStoreReader.hpp>
+#include <StoreRegistry.hpp>
 #include <SystestParser.hpp>
 #include <SystestState.hpp>
 
@@ -175,6 +179,8 @@ public:
     void setBoundPlan(LogicalPlan boundPlan) { this->boundPlan = std::move(boundPlan); }
 
     void setException(const Exception& exception) { this->exception = exception; }
+
+    void setRunAfter(std::pair<TestName, SystestQueryId> runAfter) { this->runAfter = runAfter; }
 
     std::expected<LogicalPlan, Exception> getBoundPlan() const
     {
@@ -315,7 +321,8 @@ public:
                  .expectedResultsOrExpectedError = expectedResultsValue,
                  .additionalSourceThreads = additionalSourceThreads.value(),
                  .configurationOverride = std::move(configurationOverride),
-                 .differentialQueryPlan = differentialQueryPlan});
+                 .differentialQueryPlan = differentialQueryPlan,
+                 .runAfter = runAfter});
         }
         return queries;
     }
@@ -338,6 +345,7 @@ private:
     std::optional<std::shared_ptr<std::vector<std::jthread>>> additionalSourceThreads;
     std::vector<ConfigurationOverride> configurationOverrides{ConfigurationOverride{}};
     std::optional<LogicalPlan> differentialQueryPlan;
+    std::optional<std::pair<TestName, SystestQueryId>> runAfter;
     bool built = false;
 };
 
@@ -731,6 +739,20 @@ struct SystestBinder::Impl
         }
     }
 
+    /// Pre-register replay stores found in the parsed plan so that subsequent queries can reference them by name.
+    static void preRegisterReplayStores(const LogicalPlan& plan)
+    {
+        for (const auto& storeOp : getOperatorByType<ReplayStoreLogicalOperator>(plan))
+        {
+            const auto& config = storeOp->getConfig();
+            const auto storeName = std::get<std::string>(config.at("store_name"));
+            const auto outputSchema = storeOp->getOutputSchema();
+            std::stringstream schemaStream;
+            schemaStream << outputSchema;
+            StoreManager::StoreRegistry::instance().registerDefaultStore(storeName, outputSchema, schemaStream.str());
+        }
+    }
+
     [[nodiscard]] static LogicalOperator
     replaceTimeTravelReadSource(const LogicalOperator& current, const std::shared_ptr<SourceCatalog>& sourceCatalog)
     {
@@ -742,16 +764,17 @@ struct SystestBinder::Impl
 
         if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
         {
-            if (sourceOp.value()->getLogicalSourceName() == "TIME_TRAVEL_READ")
+            const auto storePath = StoreManager::StoreRegistry::instance().getFilePath(sourceOp.value()->getLogicalSourceName());
+            if (storePath.has_value())
             {
-                const std::string filePath = "/tmp/REPLAY-NebulaStream/store_read_out.bin";
+                const std::string filePath = storePath.value();
 
                 Schema schema;
                 {
-                    std::ifstream probe(filePath, std::ios::binary);
+                    const std::ifstream probe(filePath, std::ios::binary);
                     if (probe.good())
                     {
-                        schema = BinaryStoreSource::readSchemaFromFile(filePath);
+                        schema = StoreManager::ReplayStoreReader::readSchemaFromFile(filePath);
                     }
                     else
                     {
@@ -766,9 +789,10 @@ struct SystestBinder::Impl
                     }
                 }
 
-                std::unordered_map<std::string, std::string> sourceConfig{{"file_path", filePath}};
+                auto sourceStoreName = sourceOp.value()->getLogicalSourceName();
+                std::unordered_map<std::string, std::string> sourceConfig{{"file_path", filePath}, {"store_name", sourceStoreName}};
                 std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
-                const InlineSourceLogicalOperator inlineOp{"BinaryStore", schema, std::move(sourceConfig), std::move(parserConfig)};
+                const InlineSourceLogicalOperator inlineOp{"Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
                 return inlineOp.withChildren(newChildren);
             }
         }
@@ -793,15 +817,21 @@ struct SystestBinder::Impl
         const std::shared_ptr<SourceCatalog>& sourceCatalog,
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
-        const std::vector<ConfigurationOverride>& configOverrides) const
+        const std::vector<ConfigurationOverride>& configOverrides,
+        const bool sequentialExecution) const
     {
         SystestQueryBuilder currentBuilder{currentQueryNumberInTest};
         currentBuilder.setQueryDefinition(query);
         currentBuilder.setConfigurationOverrides(configOverrides);
+        if (sequentialExecution)
+        {
+            currentBuilder.setRunAfter(std::make_pair(TestName(testFileName), SystestQueryId{currentQueryNumberInTest.getRawValue() - 1}));
+        }
         try
         {
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
 
+            preRegisterReplayStores(plan);
             replaceTimeTravelReadSources(plan, sourceCatalog);
 
             setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
@@ -910,13 +940,20 @@ struct SystestBinder::Impl
 
         SystestQueryId lastParsedQueryId = INVALID_SYSTEST_QUERY_ID;
         parser.registerOnQueryCallback(
-            [&](std::string query, SystestQueryId currentQueryNumberInTest)
+            [&](const std::string& query, SystestQueryId currentQueryNumberInTest, bool sequentialExecution)
             {
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
                 lastMergedConfigOverrides = mergedConfigOverrides;
                 queryCallback(
-                    testFileName, plans, sltSinkProvider, sourceCatalog, std::move(query), currentQueryNumberInTest, mergedConfigOverrides);
+                    testFileName,
+                    plans,
+                    sltSinkProvider,
+                    sourceCatalog,
+                    query,
+                    currentQueryNumberInTest,
+                    mergedConfigOverrides,
+                    sequentialExecution);
                 configOverrides = {ConfigurationOverride{}};
             });
 

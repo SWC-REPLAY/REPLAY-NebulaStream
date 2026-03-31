@@ -14,6 +14,7 @@
 
 #include <AntlrSQLParser/AntlrSQLQueryPlanCreator.hpp>
 
+#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -21,8 +22,12 @@
 #include <optional>
 #include <ranges>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
+
+#include <StoreRegistry.hpp>
+#include "Operators/ReplayStoreLogicalOperator.hpp"
 
 #include <AntlrSQLBaseListener.h>
 #include <AntlrSQLLexer.h>
@@ -50,7 +55,6 @@
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
 #include <Functions/LogicalFunctionProvider.hpp>
-#include <Operators/StoreLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
@@ -517,8 +521,8 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     if (helpers.top().storeOptions.has_value())
     {
         auto opts = *helpers.top().storeOptions;
-        const auto cfg = StoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-        queryPlan = LogicalPlanBuilder::addStore(cfg, queryPlan);
+        const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
+        queryPlan = LogicalPlanBuilder::addReplayStore(cfg, queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -1028,8 +1032,10 @@ void AntlrSQLQueryPlanCreator::exitGroupByClause(AntlrSQLParser::GroupByClauseCo
 
 void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
 {
+    const auto storeName = bindIdentifier(context->storeName);
+
     std::unordered_map<std::string, std::string> options;
-    options.emplace("file_path", "/tmp/REPLAY-NebulaStream/store_read_out.bin");
+    options.emplace("store_name", storeName);
 
     helpers.top().storeOptions = std::move(options);
 }

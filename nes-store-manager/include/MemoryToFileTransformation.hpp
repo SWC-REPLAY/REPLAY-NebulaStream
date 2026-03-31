@@ -14,22 +14,20 @@
 
 #pragma once
 
-#include <utility>
-#include <Operators/LogicalOperator.hpp>
-#include <LoweringRules/AbstractLoweringRule.hpp>
-#include <QueryExecutionConfiguration.hpp>
+#include <string_view>
 
-namespace NES
+#include <Store.hpp>
+
+namespace NES::StoreManager
 {
 
-struct LowerToPhysicalStore : AbstractLoweringRule
+/// Transformation that drains a MemoryStore and writes its TupleBuffers to a downstream Store.
+class MemoryToFileTransformation
 {
-    explicit LowerToPhysicalStore(QueryExecutionConfiguration conf) : conf(std::move(conf)) { }
+public:
+    void execute(Store& source, Store& dest);
 
-    LoweringRuleResultSubgraph apply(LogicalOperator logicalOperator) override;
-
-private:
-    QueryExecutionConfiguration conf;
+    [[nodiscard]] static std::string_view name() noexcept { return "MemoryStore_To_FileStore"; }
 };
 
-}
+} // namespace NES::StoreManager
