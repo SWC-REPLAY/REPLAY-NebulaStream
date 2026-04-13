@@ -16,10 +16,11 @@ add_source_files(nes-store-manager
         ReplayStoreReader.cpp
         StoreRegistry.cpp
         MemoryStore.cpp
+        MemoryRingStore.cpp
         FileStore.cpp
         MemoryToFileTransformation.cpp
 )
-
+add_plugin(MemoryRingStore StoreType nes-store-manager MemoryRingStore.cpp)
 add_plugin(MemoryStore StoreType nes-store-manager MemoryStore.cpp)
 add_plugin(FileStore StoreType nes-store-manager FileStore.cpp)
 add_plugin(MemoryStore_to_FileStore StoreTransformation nes-store-manager MemoryToFileTransformation.cpp)

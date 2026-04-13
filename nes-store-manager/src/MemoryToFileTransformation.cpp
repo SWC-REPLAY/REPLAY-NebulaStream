@@ -27,7 +27,7 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
 {
     auto typedSource = source.getAs<MemoryStore>();
     auto& memStore = typedSource.getMutable();
-    auto schema = memStore.getSchema();
+    const auto schema = memStore.getSchema();
 
     auto buffers = memStore.drain();
     NES_DEBUG("MemoryToFileTransformation: drained {} buffers from MemoryStore", buffers.size());
