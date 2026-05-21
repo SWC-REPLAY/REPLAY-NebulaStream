@@ -33,6 +33,7 @@
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
 #include <Functions/ArithmeticalFunctions/AddLogicalFunction.hpp>
 #include <Functions/ArithmeticalFunctions/DivLogicalFunction.hpp>
 #include <Functions/ArithmeticalFunctions/ModuloLogicalFunction.hpp>
@@ -519,7 +520,8 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     {
         auto opts = *helpers.top().storeOptions;
         const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-        queryPlan = LogicalPlanBuilder::addReplayStore(cfg, queryPlan);
+        queryPlan
+            = LogicalPlanBuilder::addReplayStore(queryPlan, cfg, FieldAccessLogicalFunction("ts"), Windowing::TimeUnit::Milliseconds());
     }
     helpers.pop();
     if (helpers.empty())
