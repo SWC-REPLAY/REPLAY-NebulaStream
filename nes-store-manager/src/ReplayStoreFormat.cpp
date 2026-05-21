@@ -77,6 +77,8 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
     ifs.read(reinterpret_cast<char*>(&header.endianness), sizeof(header.endianness));
     ifs.read(reinterpret_cast<char*>(&header.flags), sizeof(header.flags));
     ifs.read(reinterpret_cast<char*>(&header.fingerprint), sizeof(header.fingerprint));
+    ifs.read(reinterpret_cast<char*>(&header.minTs), sizeof(header.minTs));
+    ifs.read(reinterpret_cast<char*>(&header.maxTs), sizeof(header.maxTs));
     ifs.read(reinterpret_cast<char*>(&schemaLen), sizeof(schemaLen));
     if (!ifs)
     {
@@ -90,7 +92,7 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
         throw CannotOpenSink("Failed to read schema text from header");
     }
 
-    const uint64_t dataStartOffset = 8 + 4 + 1 + 4 + 8 + 4 + schemaLen;
+    const uint64_t dataStartOffset = HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaLen;
     return {header, dataStartOffset};
 }
 
