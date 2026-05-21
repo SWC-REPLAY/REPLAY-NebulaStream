@@ -30,13 +30,12 @@
 namespace NES::StoreManager
 {
 
-std::string serializeHeader(const std::string& schemaText)
+std::string serializeHeader(const std::string& schemaText, uint64_t minTs, uint64_t maxTs)
 {
     const uint64_t fingerprint = fnv1a64(schemaText.c_str(), schemaText.size());
     const auto schemaLen = static_cast<uint32_t>(schemaText.size());
 
-    const size_t headerSize
-        = MAGIC.size() + sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint32_t) + schemaLen;
+    const size_t headerSize = HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaLen;
     std::string buf;
     buf.resize(headerSize);
     size_t off = 0;
@@ -51,6 +50,10 @@ std::string serializeHeader(const std::string& schemaText)
     std::memcpy(buf.data() + off, &flags, sizeof(uint32_t));
     off += sizeof(uint32_t);
     std::memcpy(buf.data() + off, &fingerprint, sizeof(uint64_t));
+    off += sizeof(uint64_t);
+    std::memcpy(buf.data() + off, &minTs, sizeof(uint64_t));
+    off += sizeof(uint64_t);
+    std::memcpy(buf.data() + off, &maxTs, sizeof(uint64_t));
     off += sizeof(uint64_t);
     std::memcpy(buf.data() + off, &schemaLen, sizeof(uint32_t));
     off += sizeof(uint32_t);
