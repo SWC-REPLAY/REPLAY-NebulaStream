@@ -24,6 +24,8 @@
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/LogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Traits/Trait.hpp>
@@ -44,7 +46,13 @@ std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, Oper
         std::stringstream cfg;
         Descriptor tmp{DescriptorConfig::Config(config)};
         cfg << &tmp;
-        return fmt::format("REPLAY_STORE(opId: {}, config: {}, schema: {})", id, cfg.str(), getOutputSchema());
+        return fmt::format(
+            "REPLAY_STORE(opId: {}, config: {}, timeFunction: {} unit: {}, schema: {})",
+            id,
+            cfg.str(),
+            onField.explain(),
+            unit,
+            getOutputSchema());
     }
     return {"REPLAY_STORE"};
 }
@@ -109,7 +117,7 @@ ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withInferredSchema(std::v
 bool ReplayStoreLogicalOperator::operator==(const ReplayStoreLogicalOperator& rhs) const
 {
     return getOutputSchema() == rhs.getOutputSchema() && getInputSchemas() == rhs.getInputSchemas() && getTraitSet() == rhs.getTraitSet()
-        && config == rhs.config;
+        && config == rhs.config && onField == rhs.onField && unit == rhs.unit;
 }
 
 ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withConfig(DescriptorConfig::Config validatedConfig) const
@@ -131,13 +139,13 @@ namespace NES
 
 Reflected Reflector<ReplayStoreLogicalOperator>::operator()(const ReplayStoreLogicalOperator& op) const
 {
-    return reflect(detail::ReflectedStoreLogicalOperator{.config = op.getConfig()});
+    return reflect(detail::ReflectedStoreLogicalOperator{.config = op.getConfig(), .onField = op.onField, .timeUnit = op.unit});
 }
 
 ReplayStoreLogicalOperator Unreflector<ReplayStoreLogicalOperator>::operator()(const Reflected& reflected) const
 {
-    auto [config] = unreflect<detail::ReflectedStoreLogicalOperator>(reflected);
-    return ReplayStoreLogicalOperator(std::move(config));
+    auto [config, onField, timeUnit] = unreflect<detail::ReflectedStoreLogicalOperator>(reflected);
+    return ReplayStoreLogicalOperator(std::move(onField.value()), timeUnit, std::move(config));
 }
 
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)

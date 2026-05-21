@@ -23,6 +23,8 @@
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/LogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Traits/TraitSet.hpp>
@@ -38,7 +40,14 @@ class ReplayStoreLogicalOperator
 public:
     ReplayStoreLogicalOperator() = default;
 
-    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig) : config(std::move(validatedConfig)) { }
+
+    explicit ReplayStoreLogicalOperator(LogicalFunction onField, const Windowing::TimeUnit& unit, DescriptorConfig::Config validatedConfig)
+        : onField(std::move(onField)), unit(unit), config(std::move(validatedConfig))
+    {
+    }
+
+    LogicalFunction onField;
+    Windowing::TimeUnit unit;
 
     [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
     [[nodiscard]] static std::string_view getName() noexcept;
@@ -98,5 +107,7 @@ namespace NES::detail
 struct ReflectedStoreLogicalOperator
 {
     DescriptorConfig::Config config;
+    std::optional<LogicalFunction> onField;
+    Windowing::TimeUnit timeUnit;
 };
 }
