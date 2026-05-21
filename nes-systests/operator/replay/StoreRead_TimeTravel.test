@@ -4,7 +4,7 @@
 
 SEQUENTIAL_EXECUTION
 
-CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, timestamp UINT64);
+CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, ts UINT64);
 CREATE PHYSICAL SOURCE FOR stream TYPE File;
 ATTACH INLINE
 1,1,1000
@@ -12,18 +12,18 @@ ATTACH INLINE
 3,1,1002
 4,2,2000
 
-CREATE SINK sinkStore(stream.id UINT64, stream.value UINT64, stream.timestamp UINT64) TYPE File;
-CREATE SINK sinkRead(id UINT64, value UINT64, timestamp UINT64) TYPE File;
+CREATE SINK sinkStore(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkRead(id UINT64, value UINT64, ts UINT64) TYPE File;
 
 # 1: store rows to binary file and also write to a sink for comparison
-SELECT id, value, timestamp FROM stream INTO sinkStore TIME_TRAVEL_STORE store1;
+SELECT id, value, ts FROM stream INTO sinkStore TIME_TRAVEL_STORE store1;
 ----
 1,1,1000
 2,1,1001
 3,1,1002
 4,2,2000
 
-SELECT id, value, timestamp FROM store1 INTO sinkRead;
+SELECT id, value, ts FROM store1 INTO sinkRead;
 ----
 1,1,1000
 2,1,1001
