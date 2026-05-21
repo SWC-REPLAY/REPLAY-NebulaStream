@@ -31,8 +31,11 @@ constexpr uint32_t VERSION = 1;
 constexpr uint8_t ENDIANNESS_LE = 1;
 
 /// Fixed portion of the header before the variable-length schema text.
-/// magic(8) + version(4) + endianness(1) + flags(4) + fingerprint(8) = 25 bytes
-constexpr size_t HEADER_FIXED_BYTES = 8 + 4 + 1 + 4 + 8;
+/// magic(8) + version(4) + endianness(1) + flags(4) + fingerprint(8) + minTs(8) + maxTs(8) = 41 bytes
+constexpr size_t HEADER_FIXED_BYTES = 8 + 4 + 1 + 4 + 8 + 8 + 8;
+
+constexpr size_t OFFSET_MIN_TS = 8 + 4 + 1 + 4 + 8;
+constexpr size_t OFFSET_MAX_TS = OFFSET_MIN_TS + 8;
 
 struct FileHeader
 {
@@ -40,10 +43,12 @@ struct FileHeader
     uint8_t endianness{0};
     uint32_t flags{0};
     uint64_t fingerprint{0};
+    uint64_t minTs{UINT64_MAX};
+    uint64_t maxTs{0};
     std::string schemaText;
 };
 
-std::string serializeHeader(const std::string& schemaText);
+std::string serializeHeader(const std::string& schemaText, uint64_t minTs = UINT64_MAX, uint64_t maxTs = 0);
 
 std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs);
 
