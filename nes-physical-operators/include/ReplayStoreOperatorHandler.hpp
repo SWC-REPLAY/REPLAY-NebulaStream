@@ -23,6 +23,7 @@
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <Store.hpp>
 
 namespace NES
@@ -48,6 +49,9 @@ public:
 
     /// Write a TupleBuffer to the store.
     void writeBuffer(TupleBuffer buffer);
+
+    /// Write a TupleBuffer with timestamp range to the store.
+    void writeBuffer(TupleBuffer buffer, Timestamp minTs, Timestamp maxTs);
 
 private:
     StoreManager::Store store;

@@ -93,6 +93,11 @@ void MemoryStore::flush(Store& self)
 
 void MemoryStore::write(TupleBuffer buffer, const Schema& writeSchema, Store& self)
 {
+    writeWithTs(std::move(buffer), writeSchema, Timestamp(Timestamp::INVALID_VALUE), Timestamp(Timestamp::INITIAL_VALUE), self);
+}
+
+void MemoryStore::writeWithTs(TupleBuffer buffer, const Schema& writeSchema, Timestamp minTs, Timestamp maxTs, Store& self)
+{
     NES_DEBUG("Writing buffer with {} tuples and total size {} to memory store", buffer.getNumberOfTuples(), buffer.getBufferSize());
     std::unique_lock lock(mutex);
     PRECONDITION(opened, "MemoryStore must be opened before writing");
@@ -103,7 +108,7 @@ void MemoryStore::write(TupleBuffer buffer, const Schema& writeSchema, Store& se
         schema = writeSchema;
     }
     currentSize += buffer.getBufferSize();
-    buffers.push_back(std::move(buffer));
+    buffers.push_back(TimedBuffer{std::move(buffer), minTs, maxTs});
 
     /// Check flush policy and flush to next level if triggered
     if (flushPolicy && flushPolicy->shouldFlush(currentSize))
@@ -128,15 +133,15 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema)
     if (!buffers.empty())
     {
         auto& front = buffers.front();
-        const uint64_t numTuples = front.getNumberOfTuples();
+        const uint64_t numTuples = front.buffer.getNumberOfTuples();
 
-        auto srcSpan = front.getAvailableMemoryArea<uint8_t>();
+        auto srcSpan = front.buffer.getAvailableMemoryArea<uint8_t>();
         auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
         const size_t bytesToCopy = std::min(srcSpan.size(), destSpan.size());
         std::memcpy(destSpan.data(), srcSpan.data(), bytesToCopy);
         buffer.setNumberOfTuples(numTuples);
 
-        currentSize -= front.getBufferSize();
+        currentSize -= front.buffer.getBufferSize();
         buffers.pop_front();
 
         return numTuples;
@@ -177,10 +182,10 @@ bool MemoryStore::isFull() const
     return currentSize >= config.maxBufferSize;
 }
 
-std::vector<TupleBuffer> MemoryStore::drain()
+std::vector<TimedBuffer> MemoryStore::drain()
 {
     const std::unique_lock lock(mutex);
-    std::vector<TupleBuffer> result;
+    std::vector<TimedBuffer> result;
     result.reserve(buffers.size());
     for (auto& buf : buffers)
     {

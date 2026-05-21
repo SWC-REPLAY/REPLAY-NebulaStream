@@ -48,4 +48,15 @@ void ReplayStoreOperatorHandler::writeBuffer(TupleBuffer buffer)
     store.write(std::move(buffer), config.schema);
 }
 
+void ReplayStoreOperatorHandler::writeBuffer(TupleBuffer buffer, Timestamp minTs, Timestamp maxTs)
+{
+    NES_DEBUG(
+        "ReplayStoreOperatorHandler::writeBuffer: {} tuples, minTs={}, maxTs={}, store={}",
+        buffer.getNumberOfTuples(),
+        minTs,
+        maxTs,
+        config.storeName);
+    store.writeWithTs(std::move(buffer), config.schema, minTs, maxTs);
+}
+
 }

@@ -73,6 +73,8 @@ FileStore::~FileStore() = default;
 
 void FileStore::open()
 {
+    fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
+    fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
     writer.open();
     writer.ensureHeader();
     writerOpened = true;
@@ -112,6 +114,11 @@ void FileStore::flush([[maybe_unused]] Store& self)
 
 void FileStore::write(TupleBuffer buffer, const Schema& writeSchema, [[maybe_unused]] Store& self)
 {
+    writeWithTs(std::move(buffer), writeSchema, Timestamp(Timestamp::INVALID_VALUE), Timestamp(Timestamp::INITIAL_VALUE), self);
+}
+
+void FileStore::writeWithTs(TupleBuffer buffer, const Schema& writeSchema, Timestamp minTs, Timestamp maxTs, [[maybe_unused]] Store& self)
+{
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
 
     /// Update schema from the write-time schema which has resolved types
@@ -126,14 +133,28 @@ void FileStore::write(TupleBuffer buffer, const Schema& writeSchema, [[maybe_unu
         return;
     }
 
+    /// Update file-level timestamp range
+    if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
+    {
+        fileMinTs = minTs;
+    }
+    if (maxTs.getRawValue() != Timestamp::INITIAL_VALUE && maxTs > fileMaxTs)
+    {
+        fileMaxTs = maxTs;
+    }
+
     const uint32_t rowWidth = calculateRowWidth(writeSchema);
     auto srcSpan = buffer.getAvailableMemoryArea<uint8_t>();
 
-    /// The TupleBuffer row layout is packed (no padding), matching the binary file format.
-    /// We can write all rows as a contiguous block.
-    const size_t totalBytes = static_cast<size_t>(numTuples) * rowWidth;
-    NES_DEBUG("FileStore::write: {} tuples, rowWidth={}, totalBytes={}, file={}", numTuples, rowWidth, totalBytes, filePath);
-    writer.append(srcSpan.data(), totalBytes);
+    NES_DEBUG(
+        "FileStore::write: {} tuples, rowWidth={}, totalBytes={}, file={}",
+        numTuples,
+        rowWidth,
+        static_cast<size_t>(numTuples) * rowWidth,
+        filePath);
+
+    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
+    writer.append(srcSpan.data(), static_cast<size_t>(numTuples) * rowWidth);
 }
 
 uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema)

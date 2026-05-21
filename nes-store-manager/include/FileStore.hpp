@@ -22,6 +22,7 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <BinaryStoreWriter.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
@@ -62,6 +63,7 @@ public:
     void flush(Store& self);
 
     void write(TupleBuffer buffer, const Schema& schema, Store& self);
+    void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs, Store& self);
     uint64_t read(TupleBuffer& buffer, const Schema& schema);
     [[nodiscard]] bool hasMore() const;
 
@@ -81,6 +83,8 @@ private:
     Config config;
     Schema schema;
     std::string filePath;
+    Timestamp fileMinTs{Timestamp(Timestamp::INVALID_VALUE)};
+    Timestamp fileMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
     BinaryStoreWriter writer;
     std::unique_ptr<ReplayStoreReader> reader;
     bool writerOpened{false};

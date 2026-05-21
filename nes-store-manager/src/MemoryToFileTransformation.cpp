@@ -31,10 +31,14 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
 
     auto buffers = memStore.drain();
     NES_DEBUG("MemoryToFileTransformation: drained {} buffers from MemoryStore", buffers.size());
-    for (auto& buffer : buffers)
+    for (auto& timedBuf : buffers)
     {
-        NES_DEBUG("MemoryToFileTransformation: writing buffer with {} tuples", buffer.getNumberOfTuples());
-        dest.write(std::move(buffer), schema);
+        NES_DEBUG(
+            "MemoryToFileTransformation: writing buffer with {} tuples, minTs={}, maxTs={}",
+            timedBuf.buffer.getNumberOfTuples(),
+            timedBuf.minTs,
+            timedBuf.maxTs);
+        dest.writeWithTs(std::move(timedBuf.buffer), schema, timedBuf.minTs, timedBuf.maxTs);
     }
 }
 

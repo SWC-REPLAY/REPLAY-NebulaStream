@@ -24,6 +24,7 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
@@ -31,7 +32,15 @@
 namespace NES::StoreManager
 {
 
-/// In-memory store that holds TupleBuffers. Satisfies StoreConcept.
+/// Buffer with its timestamp range (min/max timestamps of records within).
+struct TimedBuffer
+{
+    TupleBuffer buffer;
+    Timestamp minTs{Timestamp(Timestamp::INVALID_VALUE)};
+    Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
+};
+
+/// In-memory store that holds TimedBuffers. Satisfies StoreConcept.
 /// Optionally chains to a next-level store with a flush policy and transformation.
 class MemoryStore
 {
@@ -54,6 +63,7 @@ public:
     void flush(Store& self);
 
     void write(TupleBuffer buffer, const Schema& schema, Store& self);
+    void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs, Store& self);
     uint64_t read(TupleBuffer& buffer, const Schema& schema);
     [[nodiscard]] bool hasMore() const;
 
@@ -65,13 +75,13 @@ public:
     /// Check whether the buffer has reached capacity.
     [[nodiscard]] bool isFull() const;
 
-    /// Drain all stored TupleBuffers and return them. Resets internal storage.
-    std::vector<TupleBuffer> drain();
+    /// Drain all stored TimedBuffers and return them. Resets internal storage.
+    std::vector<TimedBuffer> drain();
 
 private:
     Schema schema;
     Config config;
-    std::deque<TupleBuffer> buffers;
+    std::deque<TimedBuffer> buffers;
     uint64_t currentSize{0};
     mutable std::shared_mutex mutex;
     bool opened{false};

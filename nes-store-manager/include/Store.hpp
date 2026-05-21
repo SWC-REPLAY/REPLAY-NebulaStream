@@ -23,6 +23,7 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <ErrorHandling.hpp>
 #include <nameof.hpp>
 
@@ -48,6 +49,11 @@ concept StoreConcept
 
           /// Write a TupleBuffer to the store
           { store.write(std::move(buffer), schema, self) };
+
+          /// Write a TupleBuffer with timestamp range to the store
+          {
+              store.writeWithTs(std::move(buffer), schema, Timestamp(Timestamp::INITIAL_VALUE), Timestamp(Timestamp::INITIAL_VALUE), self)
+          } -> std::same_as<void>;
 
           /// Read data into a TupleBuffer, return number of rows written
           { store.read(bufferRef, schema) } -> std::convertible_to<uint64_t>;
@@ -77,6 +83,7 @@ struct ErasedStore
     virtual void close(Store& self) = 0;
     virtual void flush(Store& self) = 0;
     virtual void write(TupleBuffer buffer, const Schema& schema, Store& self) = 0;
+    virtual void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs, Store& self) = 0;
     [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema) = 0;
     [[nodiscard]] virtual bool hasMore() const = 0;
     [[nodiscard]] virtual Schema getSchema() const = 0;
@@ -103,6 +110,11 @@ struct StoreModel final : ErasedStore
     void flush(Store& self) override { impl.flush(self); }
 
     void write(TupleBuffer buffer, const Schema& schema, Store& self) override { impl.write(std::move(buffer), schema, self); }
+
+    void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs, Store& self) override
+    {
+        impl.writeWithTs(std::move(buffer), schema, minTs, maxTs, self);
+    }
 
     [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) override { return impl.read(buffer, schema); }
 
@@ -201,6 +213,12 @@ struct TypedStore
     {
         Store selfStore(self);
         self->write(std::move(buffer), schema, selfStore);
+    }
+
+    void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs)
+    {
+        Store selfStore(self);
+        self->writeWithTs(std::move(buffer), schema, minTs, maxTs, selfStore);
     }
 
     [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) { return self->read(buffer, schema); }
