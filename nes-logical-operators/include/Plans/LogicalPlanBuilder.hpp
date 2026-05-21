@@ -93,7 +93,8 @@ public:
         std::unordered_map<std::string, std::string> formatConfig,
         const LogicalPlan& queryPlan);
 
-    static LogicalPlan addReplayStore(const DescriptorConfig::Config& config, const LogicalPlan& queryplan);
+    static LogicalPlan addReplayStore(
+        const LogicalPlan& queryPlan, const DescriptorConfig::Config& config, LogicalFunction onField, const Windowing::TimeUnit& unit);
     /// Checks in case a window is contained in the query.
     /// If a watermark operator exists in the queryPlan and if not adds a watermark strategy to the queryPlan.
     static LogicalPlan checkAndAddWatermarkAssigner(LogicalPlan queryPlan, const std::shared_ptr<Windowing::WindowType>& windowType);
