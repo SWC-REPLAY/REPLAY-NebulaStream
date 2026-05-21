@@ -521,7 +521,7 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
         auto opts = *helpers.top().storeOptions;
         const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
         queryPlan
-            = LogicalPlanBuilder::addReplayStore(queryPlan, cfg, FieldAccessLogicalFunction("ts"), Windowing::TimeUnit::Milliseconds());
+            = LogicalPlanBuilder::addReplayStore(queryPlan, cfg, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
     }
     helpers.pop();
     if (helpers.empty())
