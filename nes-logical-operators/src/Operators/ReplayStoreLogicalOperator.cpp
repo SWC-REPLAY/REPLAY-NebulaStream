@@ -28,6 +28,7 @@
 #include <Functions/LogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
+#include <Serialization/LogicalFunctionReflection.hpp>
 #include <Traits/Trait.hpp>
 #include <Traits/TraitSet.hpp>
 #include <Util/PlanRenderer.hpp>
@@ -46,12 +47,14 @@ std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, Oper
         std::stringstream cfg;
         Descriptor tmp{DescriptorConfig::Config(config)};
         cfg << &tmp;
+        std::stringstream ss;
+        ss << unit;
         return fmt::format(
             "REPLAY_STORE(opId: {}, config: {}, timeFunction: {} unit: {}, schema: {})",
             id,
             cfg.str(),
-            onField.explain(),
-            unit,
+            onField.explain(verbosity),
+            ss.str(),
             getOutputSchema());
     }
     return {"REPLAY_STORE"};
