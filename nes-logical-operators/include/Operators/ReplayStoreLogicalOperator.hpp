@@ -38,10 +38,7 @@ namespace NES
 class ReplayStoreLogicalOperator
 {
 public:
-    ReplayStoreLogicalOperator() = default;
-
-
-    explicit ReplayStoreLogicalOperator(LogicalFunction onField, const Windowing::TimeUnit& unit, DescriptorConfig::Config validatedConfig)
+    ReplayStoreLogicalOperator(LogicalFunction onField, const Windowing::TimeUnit& unit, DescriptorConfig::Config validatedConfig)
         : onField(std::move(onField)), unit(unit), config(std::move(validatedConfig))
     {
     }
