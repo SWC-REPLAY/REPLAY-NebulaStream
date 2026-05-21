@@ -26,7 +26,9 @@
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <Watermark/TimeFunction.hpp>
 #include <CompilationContext.hpp>
 #include <ErrorHandling.hpp>
 #include <ExecutionContext.hpp>
@@ -75,8 +77,8 @@ public:
 };
 
 ReplayStorePhysicalOperator::ReplayStorePhysicalOperator(
-    OperatorHandlerId handlerId, const Schema& inputSchema, std::shared_ptr<TupleBufferRef> bufferRef)
-    : handlerId(handlerId), inputSchema(inputSchema), bufferRef(std::move(bufferRef))
+    OperatorHandlerId handlerId, const Schema& inputSchema, std::shared_ptr<TupleBufferRef> bufferRef, EventTimeFunction timeFunction)
+    : handlerId(handlerId), inputSchema(inputSchema), bufferRef(std::move(bufferRef)), timeFunction(std::move(timeFunction))
 {
 }
 
@@ -96,6 +98,9 @@ void ReplayStorePhysicalOperator::open(ExecutionContext& executionCtx, RecordBuf
         openChild(executionCtx, recordBuffer);
     }
 
+    executionCtx.watermarkTs = nautilus::val<Timestamp>(Timestamp(Timestamp::INITIAL_VALUE));
+    timeFunction.open(executionCtx, recordBuffer);
+
     /// Allocate a staging buffer and create state to accumulate parsed records
     const auto stagingBufferRef = executionCtx.allocateBuffer();
     const auto stagingBuffer = RecordBuffer(stagingBufferRef);
@@ -106,6 +111,12 @@ void ReplayStorePhysicalOperator::open(ExecutionContext& executionCtx, RecordBuf
 void ReplayStorePhysicalOperator::execute(ExecutionContext& executionCtx, Record& record) const
 {
     auto* const state = dynamic_cast<ReplayStoreState*>(executionCtx.getLocalState(id));
+
+    const auto ts = timeFunction.getTs(executionCtx, record);
+    if (ts > executionCtx.watermarkTs)
+    {
+        executionCtx.watermarkTs = ts;
+    }
 
     /// If staging buffer is full, flush it to the store and allocate a new one
     if (state->outputIndex >= getMaxRecordsPerBuffer())

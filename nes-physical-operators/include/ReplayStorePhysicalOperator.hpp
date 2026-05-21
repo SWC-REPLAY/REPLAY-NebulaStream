@@ -24,6 +24,7 @@
 #include <Nautilus/Interface/Record.hpp>
 #include <Nautilus/Interface/RecordBuffer.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
+#include <Watermark/TimeFunction.hpp>
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
@@ -37,7 +38,8 @@ namespace NES
 class ReplayStorePhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    ReplayStorePhysicalOperator(OperatorHandlerId handlerId, const Schema& inputSchema, std::shared_ptr<TupleBufferRef> bufferRef);
+    ReplayStorePhysicalOperator(
+        OperatorHandlerId handlerId, const Schema& inputSchema, std::shared_ptr<TupleBufferRef> bufferRef, EventTimeFunction timeFunction);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;
@@ -54,6 +56,7 @@ private:
     OperatorHandlerId handlerId;
     Schema inputSchema;
     std::shared_ptr<TupleBufferRef> bufferRef;
+    EventTimeFunction timeFunction;
     std::optional<PhysicalOperator> child;
 };
 
