@@ -18,6 +18,8 @@
 #include <string>
 
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/LogicalFunction.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -34,6 +36,8 @@ public:
     {
         std::string storeName;
         Schema schema;
+        Windowing::TimeUnit unit;
+        LogicalFunction onField;
     };
 
     ReplayStoreOperatorHandler(Config cfg, StoreManager::Store store);
