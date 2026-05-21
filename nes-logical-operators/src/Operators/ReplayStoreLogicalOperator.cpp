@@ -114,6 +114,7 @@ ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withInferredSchema(std::v
             throw CannotInferSchema("All input schemas must be equal for ReplayStore operator");
         }
     }
+    copy.onField = onField.withInferredDataType(first);
     return copy;
 }
 
