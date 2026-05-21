@@ -23,6 +23,7 @@
 #include <Nautilus/Interface/BufferRef/TupleBufferRef.hpp>
 #include <Nautilus/Interface/Record.hpp>
 #include <Nautilus/Interface/RecordBuffer.hpp>
+#include <Nautilus/Util.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -113,6 +114,7 @@ void ReplayStorePhysicalOperator::execute(ExecutionContext& executionCtx, Record
     auto* const state = dynamic_cast<ReplayStoreState*>(executionCtx.getLocalState(id));
 
     const auto ts = timeFunction.getTs(executionCtx, record);
+    NES_DEBUG_EXEC("ReplayStorePhysicalOperator::execute: timestamp=" << ts);
     if (ts > executionCtx.watermarkTs)
     {
         executionCtx.watermarkTs = ts;
