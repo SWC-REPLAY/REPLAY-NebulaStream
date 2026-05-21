@@ -55,6 +55,9 @@ public:
     /// Append a contiguous buffer using atomic offset reservation and pwrite.
     void append(const uint8_t* data, size_t len);
 
+    /// Update the min/max timestamps in the file header using pwrite to fixed offsets.
+    void updateTimestamps(uint64_t minTs, uint64_t maxTs);
+
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }
 
     [[nodiscard]] uint64_t size() const { return tail.load(std::memory_order_relaxed); }
