@@ -20,6 +20,7 @@
 #include <vector>
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
 #include <Operators/LogicalOperator.hpp>
