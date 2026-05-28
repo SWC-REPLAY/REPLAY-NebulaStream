@@ -147,7 +147,7 @@ void FileStore::appendRawBytes(const uint8_t* data, size_t len)
     writer.append(data, len);
 }
 
-void FileStore::updateFileTimestamps(Timestamp minTs, Timestamp maxTs)
+void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxTs)
 {
     if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
     {
