@@ -69,7 +69,7 @@ public:
 
     /// Update the file header's min/max timestamps (used by MemoryToFileTransformation).
     void updateFileTimestamps(Timestamp minTs, Timestamp maxTs);
-    uint64_t read(TupleBuffer& buffer, const Schema& schema);
+    uint64_t read(TupleBuffer& buffer, const Schema& readSchema);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;
