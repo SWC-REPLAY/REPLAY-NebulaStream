@@ -137,7 +137,7 @@ void FileStore::writeRecord(
     writer.append(recordData, recordSize);
 }
 
-void FileStore::appendRawBytes(const uint8_t* data, size_t len)
+void FileStore::appendRawBytes(const uint8_t* data, const size_t len)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
     writer.append(data, len);
@@ -145,6 +145,8 @@ void FileStore::appendRawBytes(const uint8_t* data, size_t len)
 
 void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxTs)
 {
+    PRECONDITION(minTs.getRawValue() != Timestamp::INVALID_VALUE && maxTs.getRawValue() != Timestamp::INITIAL_VALUE,
+        "updating file timestamps requires valid timestamps!");
     if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
     {
         fileMinTs = minTs;
