@@ -62,7 +62,7 @@ public:
     void close(Store& self);
     void flush(Store& self);
 
-    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self);
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self);
 
     /// Bulk append raw bytes to the file (used by MemoryToFileTransformation).
     void appendRawBytes(const uint8_t* data, size_t len);
