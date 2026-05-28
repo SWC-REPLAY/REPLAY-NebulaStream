@@ -33,16 +33,19 @@
 namespace NES::StoreManager
 {
 
-MemoryStore::MemoryStore(const Schema& schema) : schema(schema)
+MemoryStore::MemoryStore(const Schema& schema, std::shared_ptr<BufferManager> bufferManager)
+    : schema(schema), bufferManager(std::move(bufferManager))
 {
 }
 
-MemoryStore::MemoryStore(const Schema& schema, Config config) : schema(schema), config(config)
+MemoryStore::MemoryStore(const Schema& schema, Config config, std::shared_ptr<BufferManager> bufferManager)
+    : schema(schema), config(config), bufferManager(std::move(bufferManager))
 {
 }
 
-MemoryStore::MemoryStore(const Schema& schema, const Config config, Store nextLevel, FlushPolicy policy)
-    : schema(schema), config(config), nextLevel(std::move(nextLevel)), flushPolicy(policy)
+MemoryStore::MemoryStore(
+    const Schema& schema, const Config config, std::shared_ptr<BufferManager> bufferManager, Store nextLevel, FlushPolicy policy)
+    : schema(schema), config(config), bufferManager(std::move(bufferManager)), nextLevel(std::move(nextLevel)), flushPolicy(policy)
 {
     auto foundTransformation = StoreTransformationRegistry::instance().findTransformation(
         NES::StoreManager::MemoryStore::typeName(), this->nextLevel->typeName());
@@ -66,6 +69,21 @@ void MemoryStore::close(Store& self)
     NES_DEBUG("MemoryStore closing")
     {
         std::unique_lock lock(mutex);
+        /// Seal the active buffer if it has any data
+        if (activeBuffer.has_value() && activeWriteOffset > 0)
+        {
+            /// We need recordSize to compute tuple count. Use schema to derive it.
+            const auto rowWidth = schema.getSizeOfSchemaInBytes();
+            if (rowWidth > 0)
+            {
+                activeBuffer->buffer.setNumberOfTuples(activeWriteOffset / rowWidth);
+            }
+            currentSize += activeBuffer->buffer.getBufferSize();
+            buffers.push_back(std::move(*activeBuffer));
+        }
+        activeBuffer.reset();
+        activeWriteOffset = 0;
+
         if (!buffers.empty())
         {
             lock.unlock();
@@ -91,24 +109,50 @@ void MemoryStore::flush(Store& self)
     }
 }
 
-void MemoryStore::write(TupleBuffer buffer, const Schema& writeSchema, Store& self)
+void MemoryStore::writeRecord(
+    const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self)
 {
-    writeWithTs(std::move(buffer), writeSchema, Timestamp(Timestamp::INVALID_VALUE), Timestamp(Timestamp::INITIAL_VALUE), self);
-}
-
-void MemoryStore::writeWithTs(TupleBuffer buffer, const Schema& writeSchema, Timestamp minTs, Timestamp maxTs, Store& self)
-{
-    NES_DEBUG("Writing buffer with {} tuples and total size {} to memory store", buffer.getNumberOfTuples(), buffer.getBufferSize());
     std::unique_lock lock(mutex);
     PRECONDITION(opened, "MemoryStore must be opened before writing");
     /// Update schema from the write-time schema which has resolved types
-    /// (the construction-time schema may have UNDEFINED types if created before type inference)
     if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
     {
         schema = writeSchema;
     }
-    currentSize += buffer.getBufferSize();
-    buffers.push_back(TimedBuffer{std::move(buffer), minTs, maxTs});
+
+    /// Allocate an active buffer if we don't have one yet
+    if (!activeBuffer.has_value())
+    {
+        allocateActiveBuffer();
+    }
+
+    /// Check if the active buffer has space for this record
+    auto& active = *activeBuffer;
+    const auto bufferSize = active.buffer.getBufferSize();
+    if (activeWriteOffset + recordSize > bufferSize)
+    {
+        /// Seal the active buffer and push to completed deque
+        active.buffer.setNumberOfTuples(activeWriteOffset / recordSize);
+        currentSize += bufferSize;
+        buffers.push_back(std::move(active));
+        allocateActiveBuffer();
+    }
+
+    /// Copy record into active buffer
+    auto& buf = activeBuffer.value();
+    auto destSpan = buf.buffer.getAvailableMemoryArea<uint8_t>();
+    std::memcpy(destSpan.data() + activeWriteOffset, recordData, recordSize);
+    activeWriteOffset += recordSize;
+
+    /// Update active buffer's min/max timestamps
+    if (ts < buf.minTs)
+    {
+        buf.minTs = ts;
+    }
+    if (ts > buf.maxTs)
+    {
+        buf.maxTs = ts;
+    }
 
     /// Check flush policy and flush to next level if triggered
     if (flushPolicy && flushPolicy->shouldFlush(currentSize))
@@ -116,6 +160,13 @@ void MemoryStore::writeWithTs(TupleBuffer buffer, const Schema& writeSchema, Tim
         lock.unlock();
         flush(self);
     }
+}
+
+void MemoryStore::allocateActiveBuffer()
+{
+    auto tb = bufferManager->getBufferBlocking();
+    activeBuffer = TimedBuffer{std::move(tb), Timestamp(Timestamp::INVALID_VALUE), Timestamp(Timestamp::INITIAL_VALUE)};
+    activeWriteOffset = 0;
 }
 
 uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema)
@@ -186,12 +237,26 @@ std::vector<TimedBuffer> MemoryStore::drain()
 {
     const std::unique_lock lock(mutex);
     std::vector<TimedBuffer> result;
-    result.reserve(buffers.size());
+    result.reserve(buffers.size() + (activeBuffer.has_value() ? 1 : 0));
     for (auto& buf : buffers)
     {
         result.push_back(std::move(buf));
     }
     buffers.clear();
+
+    /// Seal and include the active buffer if it has data
+    if (activeBuffer.has_value() && activeWriteOffset > 0)
+    {
+        const auto rowWidth = schema.getSizeOfSchemaInBytes();
+        if (rowWidth > 0)
+        {
+            activeBuffer->buffer.setNumberOfTuples(activeWriteOffset / rowWidth);
+        }
+        result.push_back(std::move(*activeBuffer));
+        activeBuffer.reset();
+        activeWriteOffset = 0;
+    }
+
     currentSize = 0;
     return result;
 }
@@ -203,6 +268,6 @@ namespace NES
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterMemoryStoreStoreType(StoreTypeRegistryArguments args)
 {
-    return StoreManager::makeStore<StoreManager::MemoryStore>(std::move(args.schema));
+    return StoreManager::makeStore<StoreManager::MemoryStore>(std::move(args.schema), std::move(args.bufferManager));
 }
 }

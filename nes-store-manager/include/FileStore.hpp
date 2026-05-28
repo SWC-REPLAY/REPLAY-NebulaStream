@@ -62,8 +62,13 @@ public:
     void close(Store& self);
     void flush(Store& self);
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self);
-    void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs, Store& self);
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self);
+
+    /// Bulk append raw bytes to the file (used by MemoryToFileTransformation).
+    void appendRawBytes(const uint8_t* data, size_t len);
+
+    /// Update the file header's min/max timestamps (used by MemoryToFileTransformation).
+    void updateFileTimestamps(Timestamp minTs, Timestamp maxTs);
     uint64_t read(TupleBuffer& buffer, const Schema& schema);
     [[nodiscard]] bool hasMore() const;
 
@@ -76,9 +81,10 @@ public:
 
     void removeFile();
 
-private:
     /// Calculate packed row width from schema (no padding, matching binary format).
     static uint32_t calculateRowWidth(const Schema& schema);
+
+private:
 
     Config config;
     Schema schema;

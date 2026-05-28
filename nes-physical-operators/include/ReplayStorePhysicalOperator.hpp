@@ -51,8 +51,6 @@ public:
     void setChild(PhysicalOperator child) override;
 
 private:
-    [[nodiscard]] uint64_t getMaxRecordsPerBuffer() const;
-
     OperatorHandlerId handlerId;
     Schema inputSchema;
     std::shared_ptr<TupleBufferRef> bufferRef;

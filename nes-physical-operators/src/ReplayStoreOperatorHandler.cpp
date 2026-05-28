@@ -42,21 +42,10 @@ void ReplayStoreOperatorHandler::stop(QueryTerminationType, PipelineExecutionCon
     store.close();
 }
 
-void ReplayStoreOperatorHandler::writeBuffer(TupleBuffer buffer)
+void ReplayStoreOperatorHandler::writeRecord(const uint8_t* data, uint32_t size, Timestamp ts)
 {
-    NES_DEBUG("ReplayStoreOperatorHandler::writeBuffer: {} tuples, store={}", buffer.getNumberOfTuples(), config.storeName);
-    store.write(std::move(buffer), config.schema);
-}
-
-void ReplayStoreOperatorHandler::writeBuffer(TupleBuffer buffer, Timestamp minTs, Timestamp maxTs)
-{
-    NES_DEBUG(
-        "ReplayStoreOperatorHandler::writeBuffer: {} tuples, minTs={}, maxTs={}, store={}",
-        buffer.getNumberOfTuples(),
-        minTs,
-        maxTs,
-        config.storeName);
-    store.writeWithTs(std::move(buffer), config.schema, minTs, maxTs);
+    NES_DEBUG("ReplayStoreOperatorHandler::writeRecord: size={}, ts={}, store={}", size, ts, config.storeName);
+    store.writeRecord(data, size, ts, config.schema);
 }
 
 }

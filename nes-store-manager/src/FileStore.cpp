@@ -112,12 +112,8 @@ void FileStore::flush([[maybe_unused]] Store& self)
     }
 }
 
-void FileStore::write(TupleBuffer buffer, const Schema& writeSchema, [[maybe_unused]] Store& self)
-{
-    writeWithTs(std::move(buffer), writeSchema, Timestamp(Timestamp::INVALID_VALUE), Timestamp(Timestamp::INITIAL_VALUE), self);
-}
-
-void FileStore::writeWithTs(TupleBuffer buffer, const Schema& writeSchema, Timestamp minTs, Timestamp maxTs, [[maybe_unused]] Store& self)
+void FileStore::writeRecord(
+    const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, [[maybe_unused]] Store& self)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
 
@@ -127,13 +123,32 @@ void FileStore::writeWithTs(TupleBuffer buffer, const Schema& writeSchema, Times
         schema = writeSchema;
     }
 
-    const uint64_t numTuples = buffer.getNumberOfTuples();
-    if (numTuples == 0)
+    /// Update file-level timestamp range
+    if (ts.getRawValue() != Timestamp::INVALID_VALUE)
     {
-        return;
+        if (ts < fileMinTs)
+        {
+            fileMinTs = ts;
+        }
+        if (ts > fileMaxTs)
+        {
+            fileMaxTs = ts;
+        }
+        writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
     }
 
-    /// Update file-level timestamp range
+    NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
+    writer.append(recordData, recordSize);
+}
+
+void FileStore::appendRawBytes(const uint8_t* data, size_t len)
+{
+    PRECONDITION(writerOpened, "FileStore must be opened before writing");
+    writer.append(data, len);
+}
+
+void FileStore::updateFileTimestamps(Timestamp minTs, Timestamp maxTs)
+{
     if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
     {
         fileMinTs = minTs;
@@ -142,19 +157,7 @@ void FileStore::writeWithTs(TupleBuffer buffer, const Schema& writeSchema, Times
     {
         fileMaxTs = maxTs;
     }
-
-    const uint32_t rowWidth = calculateRowWidth(writeSchema);
-    auto srcSpan = buffer.getAvailableMemoryArea<uint8_t>();
-
-    NES_DEBUG(
-        "FileStore::write: {} tuples, rowWidth={}, totalBytes={}, file={}",
-        numTuples,
-        rowWidth,
-        static_cast<size_t>(numTuples) * rowWidth,
-        filePath);
-
     writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
-    writer.append(srcSpan.data(), static_cast<size_t>(numTuples) * rowWidth);
 }
 
 uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema)

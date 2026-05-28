@@ -65,23 +65,17 @@ void stopHandlerProxy(OperatorHandler* handler, PipelineExecutionContext* pipeli
 
 }
 
-/// OperatorState subclass that holds the staging buffer for accumulating parsed records.
+/// OperatorState subclass that holds a scratch buffer for serializing individual records.
 class ReplayStoreState : public OperatorState
 {
 public:
-    explicit ReplayStoreState(const RecordBuffer& resultBuffer)
-        : batchMinTs(nautilus::val<uint64_t>(Timestamp::INVALID_VALUE))
-        , batchMaxTs(nautilus::val<uint64_t>(Timestamp::INITIAL_VALUE))
-        , resultBuffer(resultBuffer)
-        , bufferMemoryArea(resultBuffer.getMemArea())
+    explicit ReplayStoreState(const RecordBuffer& scratchBuffer)
+        : scratchBuffer(scratchBuffer), scratchMemoryArea(scratchBuffer.getMemArea())
     {
     }
 
-    nautilus::val<uint64_t> outputIndex = 0;
-    nautilus::val<uint64_t> batchMinTs;
-    nautilus::val<uint64_t> batchMaxTs;
-    RecordBuffer resultBuffer;
-    nautilus::val<int8_t*> bufferMemoryArea;
+    RecordBuffer scratchBuffer;
+    nautilus::val<int8_t*> scratchMemoryArea;
 };
 
 ReplayStorePhysicalOperator::ReplayStorePhysicalOperator(
@@ -109,12 +103,10 @@ void ReplayStorePhysicalOperator::open(ExecutionContext& executionCtx, RecordBuf
     executionCtx.watermarkTs = nautilus::val<Timestamp>(Timestamp(Timestamp::INITIAL_VALUE));
     timeFunction.open(executionCtx, recordBuffer);
 
-    /// Allocate a staging buffer and create state to accumulate parsed records
-    const auto stagingBufferRef = executionCtx.allocateBuffer();
-    const auto stagingBuffer = RecordBuffer(stagingBufferRef);
-    auto state = std::make_unique<ReplayStoreState>(stagingBuffer);
-    state->batchMinTs = nautilus::val<uint64_t>(Timestamp::INVALID_VALUE);
-    state->batchMaxTs = nautilus::val<uint64_t>(Timestamp::INITIAL_VALUE);
+    /// Allocate a scratch buffer for serializing individual records
+    const auto scratchBufferRef = executionCtx.allocateBuffer();
+    const auto scratchBuffer = RecordBuffer(scratchBufferRef);
+    auto state = std::make_unique<ReplayStoreState>(scratchBuffer);
     executionCtx.setLocalOperatorState(id, std::move(state));
 }
 
@@ -124,59 +116,36 @@ void ReplayStorePhysicalOperator::execute(ExecutionContext& executionCtx, Record
 
     const auto ts = timeFunction.getTs(executionCtx, record);
     NES_DEBUG_EXEC("ReplayStorePhysicalOperator::execute: timestamp=" << ts);
-    const auto tsRaw = ts.convertToValue();
     if (ts > executionCtx.watermarkTs)
     {
         executionCtx.watermarkTs = ts;
     }
-    if (tsRaw < state->batchMinTs)
-    {
-        state->batchMinTs = tsRaw;
-    }
-    if (tsRaw > state->batchMaxTs)
-    {
-        state->batchMaxTs = tsRaw;
-    }
 
-    /// If staging buffer is full, flush it to the store and allocate a new one
-    if (state->outputIndex >= getMaxRecordsPerBuffer())
-    {
-        state->resultBuffer.setNumRecords(state->outputIndex);
-        /// Write the full staging buffer to the store
-        auto handler = executionCtx.getGlobalOperatorHandler(handlerId);
-        auto tbRef = state->resultBuffer.getReference();
-        auto batchMinTs = state->batchMinTs;
-        auto batchMaxTs = state->batchMaxTs;
-        nautilus::invoke(
-            +[](TupleBuffer* tb, OperatorHandler* handler, uint64_t minTsRaw, uint64_t maxTsRaw)
+    /// Serialize the record into the scratch buffer at index 0
+    nautilus::val<uint64_t> writeIndex = 0;
+    bufferRef->writeRecord(writeIndex, state->scratchBuffer, record, executionCtx.pipelineMemoryProvider.bufferProvider);
+
+    /// Pass the serialized record bytes to the store via the handler
+    auto handler = executionCtx.getGlobalOperatorHandler(handlerId);
+    auto memArea = state->scratchMemoryArea;
+    auto tsRaw = ts.convertToValue();
+    auto tupleSize = nautilus::val<uint32_t>(static_cast<uint32_t>(bufferRef->getTupleSize()));
+    nautilus::invoke(
+        +[](const int8_t* data, const uint32_t size, const uint64_t tsVal, OperatorHandler* h)
+        {
+            if (!data || !h)
             {
-                if (!tb || !handler)
-                {
-                    return;
-                }
-                if (auto* storeHandler = dynamic_cast<ReplayStoreOperatorHandler*>(handler))
-                {
-                    TupleBuffer buffer(*tb);
-                    storeHandler->writeBuffer(std::move(buffer), Timestamp(minTsRaw), Timestamp(maxTsRaw));
-                }
-            },
-            tbRef,
-            handler,
-            batchMinTs,
-            batchMaxTs);
-
-        /// Allocate a fresh staging buffer
-        const auto newBufferRef = executionCtx.allocateBuffer();
-        state->resultBuffer = RecordBuffer(newBufferRef);
-        state->bufferMemoryArea = state->resultBuffer.getMemArea();
-        state->outputIndex = nautilus::val<uint64_t>(0);
-        state->batchMinTs = nautilus::val<uint64_t>(Timestamp::INVALID_VALUE);
-        state->batchMaxTs = nautilus::val<uint64_t>(Timestamp::INITIAL_VALUE);
-    }
-
-    /// Write the parsed record into the staging buffer
-    bufferRef->writeRecord(state->outputIndex, state->resultBuffer, record, executionCtx.pipelineMemoryProvider.bufferProvider);
-    state->outputIndex = state->outputIndex + 1;
+                return;
+            }
+            if (auto* storeHandler = dynamic_cast<ReplayStoreOperatorHandler*>(h))
+            {
+                storeHandler->writeRecord(reinterpret_cast<const uint8_t*>(data), size, Timestamp(tsVal));
+            }
+        },
+        memArea,
+        tupleSize,
+        tsRaw,
+        handler);
 
     /// Forward the record to the child (pass-through)
     if (child.has_value())
@@ -191,33 +160,7 @@ void ReplayStorePhysicalOperator::close(ExecutionContext& executionCtx, RecordBu
     {
         closeChild(executionCtx, recordBuffer);
     }
-
-    /// Write the remaining records in the staging buffer to the store
-    auto* const state = dynamic_cast<ReplayStoreState*>(executionCtx.getLocalState(id));
-    state->resultBuffer.setNumRecords(state->outputIndex);
-
-    auto handler = executionCtx.getGlobalOperatorHandler(handlerId);
-    auto tbRef = state->resultBuffer.getReference();
-    auto batchMinTs = state->batchMinTs;
-    auto batchMaxTs = state->batchMaxTs;
-    nautilus::invoke(
-        +[](TupleBuffer* tb, OperatorHandler* handler, uint64_t minTsRaw, uint64_t maxTsRaw)
-        {
-            if (!tb || !handler)
-            {
-                return;
-            }
-            if (auto* storeHandler = dynamic_cast<ReplayStoreOperatorHandler*>(handler))
-            {
-                TupleBuffer buffer(*tb);
-                NES_DEBUG("ReplayStorePhysicalOperator::close: writing {} tuples to store", buffer.getNumberOfTuples());
-                storeHandler->writeBuffer(std::move(buffer), Timestamp(minTsRaw), Timestamp(maxTsRaw));
-            }
-        },
-        tbRef,
-        handler,
-        batchMinTs,
-        batchMaxTs);
+    /// Every record was already written individually in execute(), nothing to flush.
 }
 
 void ReplayStorePhysicalOperator::terminate(ExecutionContext& executionCtx) const
@@ -227,11 +170,6 @@ void ReplayStorePhysicalOperator::terminate(ExecutionContext& executionCtx) cons
     {
         terminateChild(executionCtx);
     }
-}
-
-uint64_t ReplayStorePhysicalOperator::getMaxRecordsPerBuffer() const
-{
-    return bufferRef->getCapacity();
 }
 
 std::optional<PhysicalOperator> ReplayStorePhysicalOperator::getChild() const

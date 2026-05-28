@@ -35,6 +35,10 @@
 namespace NES::StoreManager
 {
 
+StoreRegistry::StoreRegistry() : bufferManager(BufferManager::create())
+{
+}
+
 StoreRegistry& StoreRegistry::instance()
 {
     static StoreRegistry registry;
@@ -64,7 +68,7 @@ void StoreRegistry::registerDefaultStore(const std::string& storeName, const Sch
 
     const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD};
 
-    auto headStore = makeStore<MemoryStore>(schema, MemoryStore::Config{}, std::move(fileStore), policy);
+    auto headStore = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager, std::move(fileStore), policy);
 
     stores.emplace(storeName, headStore);
 }

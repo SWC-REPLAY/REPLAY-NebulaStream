@@ -47,11 +47,8 @@ public:
     void start(PipelineExecutionContext& pipelineExecutionContext, uint32_t localStateVariableId) override;
     void stop(QueryTerminationType terminationType, PipelineExecutionContext& pipelineExecutionContext) override;
 
-    /// Write a TupleBuffer to the store.
-    void writeBuffer(TupleBuffer buffer);
-
-    /// Write a TupleBuffer with timestamp range to the store.
-    void writeBuffer(TupleBuffer buffer, Timestamp minTs, Timestamp maxTs);
+    /// Write a single record to the store.
+    void writeRecord(const uint8_t* data, uint32_t size, Timestamp ts);
 
 private:
     StoreManager::Store store;

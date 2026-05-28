@@ -42,18 +42,13 @@ using Store = TypedStore<>;
 /// Concept defining the interface for all store types.
 template <typename T>
 concept StoreConcept
-    = requires(T& store, const T& constStore, TupleBuffer buffer, TupleBuffer& bufferRef, const Schema& schema, Store& self) {
+    = requires(T& store, const T& constStore, const uint8_t* recordData, uint32_t recordSize, TupleBuffer& bufferRef, const Schema& schema, Store& self) {
           { store.open() };
           { store.close(self) };
           { store.flush(self) };
 
-          /// Write a TupleBuffer to the store
-          { store.write(std::move(buffer), schema, self) };
-
-          /// Write a TupleBuffer with timestamp range to the store
-          {
-              store.writeWithTs(std::move(buffer), schema, Timestamp(Timestamp::INITIAL_VALUE), Timestamp(Timestamp::INITIAL_VALUE), self)
-          } -> std::same_as<void>;
+          /// Write a single record to the store
+          { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), schema, self) } -> std::same_as<void>;
 
           /// Read data into a TupleBuffer, return number of rows written
           { store.read(bufferRef, schema) } -> std::convertible_to<uint64_t>;
@@ -82,8 +77,7 @@ struct ErasedStore
     virtual void open() = 0;
     virtual void close(Store& self) = 0;
     virtual void flush(Store& self) = 0;
-    virtual void write(TupleBuffer buffer, const Schema& schema, Store& self) = 0;
-    virtual void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs, Store& self) = 0;
+    virtual void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self) = 0;
     [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema) = 0;
     [[nodiscard]] virtual bool hasMore() const = 0;
     [[nodiscard]] virtual Schema getSchema() const = 0;
@@ -109,11 +103,9 @@ struct StoreModel final : ErasedStore
 
     void flush(Store& self) override { impl.flush(self); }
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self) override { impl.write(std::move(buffer), schema, self); }
-
-    void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs, Store& self) override
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self) override
     {
-        impl.writeWithTs(std::move(buffer), schema, minTs, maxTs, self);
+        impl.writeRecord(recordData, recordSize, ts, schema, self);
     }
 
     [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) override { return impl.read(buffer, schema); }
@@ -209,16 +201,10 @@ struct TypedStore
         self->flush(selfStore);
     }
 
-    void write(TupleBuffer buffer, const Schema& schema)
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema)
     {
         Store selfStore(self);
-        self->write(std::move(buffer), schema, selfStore);
-    }
-
-    void writeWithTs(TupleBuffer buffer, const Schema& schema, Timestamp minTs, Timestamp maxTs)
-    {
-        Store selfStore(self);
-        self->writeWithTs(std::move(buffer), schema, minTs, maxTs, selfStore);
+        self->writeRecord(recordData, recordSize, ts, schema, selfStore);
     }
 
     [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) { return self->read(buffer, schema); }

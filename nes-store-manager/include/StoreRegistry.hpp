@@ -14,12 +14,14 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
 #include <DataTypes/Schema.hpp>
+#include <Runtime/BufferManager.hpp>
 #include <Store.hpp>
 
 namespace NES::StoreManager
@@ -50,13 +52,14 @@ public:
     void clearAndDeleteFiles();
 
 private:
-    StoreRegistry() = default;
+    StoreRegistry();
 
     /// Generate a unique file path for a store.
     static std::string generateStoreDir(const std::string& storeName);
 
     mutable std::shared_mutex mutex;
     std::unordered_map<std::string, Store> stores; /// store name -> Store instance
+    std::shared_ptr<BufferManager> bufferManager;
 };
 
 }
