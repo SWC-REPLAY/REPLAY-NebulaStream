@@ -110,7 +110,7 @@ void MemoryStore::flush(Store& self)
 }
 
 void MemoryStore::writeRecord(
-    const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self)
+    const uint8_t* recordData, const uint32_t recordSize, const Timestamp ts, const Schema& writeSchema, Store& self)
 {
     std::unique_lock lock(mutex);
     PRECONDITION(opened, "MemoryStore must be opened before writing");
