@@ -116,26 +116,22 @@ void FileStore::writeRecord(
     const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, [[maybe_unused]] Store& self)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
-
+    PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
     /// Update schema from the write-time schema which has resolved types
     if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
     {
         schema = writeSchema;
     }
 
-    /// Update file-level timestamp range
-    if (ts.getRawValue() != Timestamp::INVALID_VALUE)
+    if (ts < fileMinTs)
     {
-        if (ts < fileMinTs)
-        {
-            fileMinTs = ts;
-        }
-        if (ts > fileMaxTs)
-        {
-            fileMaxTs = ts;
-        }
-        writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
+        fileMinTs = ts;
     }
+    if (ts > fileMaxTs)
+    {
+        fileMaxTs = ts;
+    }
+    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
 
     NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
     writer.append(recordData, recordSize);
