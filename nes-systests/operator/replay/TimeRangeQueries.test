@@ -1,0 +1,61 @@
+# name: operator/replay/TimeRangeQueries.test
+# description: Demostrate and test functionality of SQL standard syntax for time travel queries
+# groups: [Replay]
+
+REPLAYABLE # Turns on replay functionality
+
+SEQUENTIAL_EXECUTION # Ensures stores are populated
+
+CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, ts UINT64);
+CREATE PHYSICAL SOURCE FOR stream TYPE File;
+ATTACH INLINE
+1,1,1000
+2,1,1001
+3,1,1002
+4,2,2000
+
+
+CREATE SINK sink(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkAsOf(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkBetween(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkFromTo(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkContainedIn(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkAll(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+
+# Run query once to populate store
+SELECT id, value, ts FROM stream INTO sink;
+----
+1,1,1000
+2,1,1001
+3,1,1002
+4,2,2000
+
+# AS OF ... is inclusive from ... to end
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP '1001';
+----
+2,1,1001
+3,1,1002
+4,2,2000
+
+# exclusive start inclusive end
+#SELECT id, value, ts FROM stream FOR EVENT_TIME BETWEEN '1001' AND '1002';   # inclusive both ends
+#----
+#3,1,1002
+
+# exclusive both edges
+#SELECT id, value, ts FROM stream FOR EVENT_TIME FROM '1002' TO '2000';        # closed-open
+#----
+#4,2,2000
+
+# inclusive both edges
+#SELECT id, value, ts FROM stream FOR EVENT_TIME CONTAINED IN ('1002', '2000');
+#----
+#3,1,1002
+#4,2,2000
+
+#SELECT id, value, ts FROM stream FOR EVENT_TIME ALL;
+#----
+#1,1,1000
+#2,1,1001
+#3,1,1002
+#4,2,2000

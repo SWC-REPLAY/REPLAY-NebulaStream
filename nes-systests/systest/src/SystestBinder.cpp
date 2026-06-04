@@ -24,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <ostream>
 #include <ranges>
 #include <regex>
@@ -50,7 +51,10 @@
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
 #include <Phases/QueryOptimizer.hpp>
 #include <Phases/SemanticAnalyzer.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Plans/LogicalPlan.hpp>
+#include <Plans/LogicalPlanBuilder.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
 #include <SQLQueryParser/StatementBinder.hpp>
 #include <Sinks/SinkCatalog.hpp>
@@ -736,6 +740,46 @@ struct SystestBinder::Impl
         }
     }
 
+    /// Check if the plan already contains a ReplayStoreLogicalOperator.
+    static bool planHasReplayStore(const LogicalPlan& plan)
+    {
+        for (const auto& root : plan.getRootOperators())
+        {
+            for (const auto& child : root.getChildren())
+            {
+                if (child.tryGetAs<ReplayStoreLogicalOperator>().has_value())
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Find the source name from the plan's leaf SourceNameLogicalOperator.
+    static std::string findSourceName(const LogicalPlan& plan)
+    {
+        for (const auto& root : plan.getRootOperators())
+        {
+            std::queue<LogicalOperator> queue;
+            queue.push(root);
+            while (!queue.empty())
+            {
+                auto current = queue.front();
+                queue.pop();
+                if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
+                {
+                    return sourceOp.value()->getLogicalSourceName();
+                }
+                for (const auto& child : current.getChildren())
+                {
+                    queue.push(child);
+                }
+            }
+        }
+        return {};
+    }
+
     /// Pre-register replay stores found in the parsed plan so that subsequent queries can reference them by name.
     /// Must be called AFTER setSinks so that the SinkLogicalOperator has its descriptor (and thus schema) set.
     /// For each ReplayStoreLogicalOperator, registers:
@@ -857,7 +901,8 @@ struct SystestBinder::Impl
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
         const std::vector<ConfigurationOverride>& configOverrides,
-        const bool sequentialExecution) const
+        const bool sequentialExecution,
+        const bool replayable) const
     {
         SystestQueryBuilder currentBuilder{currentQueryNumberInTest};
         currentBuilder.setQueryDefinition(query);
@@ -868,9 +913,29 @@ struct SystestBinder::Impl
         }
         try
         {
+            /// Check that FOR EVENT_TIME is only used when REPLAYABLE is active
+            if (query.find("FOR EVENT_TIME") != std::string::npos && !replayable)
+            {
+                throw InvalidQuerySyntax("FOR EVENT_TIME requires REPLAYABLE directive");
+            }
+
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
 
             setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
+
+            /// When REPLAYABLE is active, auto-insert a replay store operator for queries that don't already have one
+            if (replayable && !planHasReplayStore(plan))
+            {
+                auto sourceName = findSourceName(plan);
+                if (!sourceName.empty())
+                {
+                    auto opts = std::unordered_map<std::string, std::string>{{"store_name", sourceName}};
+                    auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
+                    plan = LogicalPlanBuilder::addReplayStore(
+                        plan, cfg, FieldAccessLogicalFunction("ts"), Windowing::TimeUnit::Milliseconds());
+                }
+            }
+
             preRegisterReplaySources(plan, sourceCatalog);
             replaceTimeTravelReadSources(plan, sourceCatalog);
             setInlineSources(plan);
@@ -978,7 +1043,7 @@ struct SystestBinder::Impl
 
         SystestQueryId lastParsedQueryId = INVALID_SYSTEST_QUERY_ID;
         parser.registerOnQueryCallback(
-            [&](const std::string& query, SystestQueryId currentQueryNumberInTest, bool sequentialExecution)
+            [&](const std::string& query, SystestQueryId currentQueryNumberInTest, bool sequentialExecution, bool replayable)
             {
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
@@ -991,7 +1056,8 @@ struct SystestBinder::Impl
                     query,
                     currentQueryNumberInTest,
                     mergedConfigOverrides,
-                    sequentialExecution);
+                    sequentialExecution,
+                    replayable);
                 configOverrides = {ConfigurationOverride{}};
             });
 

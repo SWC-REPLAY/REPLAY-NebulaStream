@@ -46,6 +46,7 @@ enum class TokenType : uint8_t
     GLOBAL_CONFIGURATION,
     DIFFERENTIAL,
     SEQUENTIAL_EXECUTION,
+    REPLAYABLE,
 };
 
 enum class TestDataIngestionType : uint8_t
@@ -151,7 +152,7 @@ public:
         bool operator==(const ErrorExpectation& other) const = default;
     };
 
-    using QueryCallback = std::function<void(std::string, SystestQueryId, bool)>;
+    using QueryCallback = std::function<void(std::string, SystestQueryId, bool sequentialExecution, bool replayable)>;
     using ResultTuplesCallback = std::function<void(std::vector<std::string>&&, SystestQueryId correspondingQueryId)>;
     using ErrorExpectationCallback = std::function<void(const ErrorExpectation&, SystestQueryId correspondingQueryId)>;
     using DifferentialQueryBlockCallback
