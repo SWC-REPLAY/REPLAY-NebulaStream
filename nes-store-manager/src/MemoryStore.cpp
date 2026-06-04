@@ -29,6 +29,7 @@
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
 #include <StoreTypeRegistry.hpp>
+#include <TimeRange.hpp>
 
 namespace NES::StoreManager
 {
@@ -169,33 +170,89 @@ void MemoryStore::allocateActiveBuffer()
     activeWriteOffset = 0;
 }
 
-uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema)
+/// Compute the byte offset of a field within a row, using the packed binary layout.
+static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string& fieldName)
+{
+    uint32_t offset = 0;
+    for (size_t i = 0; i < schema.getNumberOfFields(); ++i)
+    {
+        const auto& field = schema.getFieldAt(i);
+        if (field.getUnqualifiedName() == fieldName)
+        {
+            return offset;
+        }
+        offset += field.dataType.isType(DataType::Type::VARSIZED) ? sizeof(uint32_t) : field.dataType.getSizeInBytesWithNull();
+    }
+    return std::nullopt;
+}
+
+uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
 {
     if (nextLevel)
     {
         NES_DEBUG("Checking if next level has data to be read")
-        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema); nextLevelRead != 0)
+        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range); nextLevelRead != 0)
         {
             return nextLevelRead;
         }
     }
     NES_DEBUG("Read from memory store into buffer");
     const std::unique_lock lock(mutex);
-    if (!buffers.empty())
+
+    while (!buffers.empty())
     {
         auto& front = buffers.front();
-        const uint64_t numTuples = front.buffer.getNumberOfTuples();
 
+        /// Skip entire buffer if its timestamp range falls outside the query range
+        if (!range.isUnbounded() && !range.overlaps(front.minTs, front.maxTs))
+        {
+            currentSize -= front.buffer.getBufferSize();
+            buffers.pop_front();
+            continue;
+        }
+
+        const uint64_t numTuples = front.buffer.getNumberOfTuples();
         auto srcSpan = front.buffer.getAvailableMemoryArea<uint8_t>();
         auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
-        const size_t bytesToCopy = std::min(srcSpan.size(), destSpan.size());
-        std::memcpy(destSpan.data(), srcSpan.data(), bytesToCopy);
-        buffer.setNumberOfTuples(numTuples);
 
+        /// If the entire buffer is within range, copy it wholesale
+        if (range.isUnbounded() || (front.minTs >= range.start && front.maxTs < range.end))
+        {
+            const size_t bytesToCopy = std::min(srcSpan.size(), destSpan.size());
+            std::memcpy(destSpan.data(), srcSpan.data(), bytesToCopy);
+            buffer.setNumberOfTuples(numTuples);
+            currentSize -= front.buffer.getBufferSize();
+            buffers.pop_front();
+            return numTuples;
+        }
+
+        /// Partially overlapping buffer: row-level filtering
+        const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
+        PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
+
+        const uint32_t rowWidth = readSchema.getSizeOfSchemaInBytes();
+        uint64_t destTuples = 0;
+        for (uint64_t i = 0; i < numTuples; ++i)
+        {
+            const uint8_t* rowPtr = srcSpan.data() + i * rowWidth;
+            uint64_t tsValue = 0;
+            /// Skip the 1-byte null indicator before the actual value
+            std::memcpy(&tsValue, rowPtr + *tsOffset + 1, sizeof(uint64_t));
+            if (range.contains(Timestamp(tsValue)))
+            {
+                std::memcpy(destSpan.data() + destTuples * rowWidth, rowPtr, rowWidth);
+                ++destTuples;
+            }
+        }
         currentSize -= front.buffer.getBufferSize();
         buffers.pop_front();
 
-        return numTuples;
+        if (destTuples > 0)
+        {
+            buffer.setNumberOfTuples(destTuples);
+            return destTuples;
+        }
+        /// All rows filtered out — try next buffer
     }
     return 0;
 }

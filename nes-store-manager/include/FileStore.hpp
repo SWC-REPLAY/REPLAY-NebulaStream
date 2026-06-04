@@ -26,6 +26,7 @@
 #include <BinaryStoreWriter.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
+#include <TimeRange.hpp>
 #include <StoreTransformation.hpp>
 
 namespace NES::StoreManager
@@ -69,7 +70,7 @@ public:
 
     /// Update the file header's min/max timestamps (used by MemoryToFileTransformation).
     void updateFileTimestamps(Timestamp minTs, Timestamp maxTs);
-    uint64_t read(TupleBuffer& buffer, const Schema& readSchema);
+    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;

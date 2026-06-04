@@ -844,35 +844,69 @@ struct SystestBinder::Impl
     /// Replace SourceNameLogicalOperator nodes that reference a registered store with
     /// InlineSourceLogicalOperator("Replay", ...) so the read path uses the store
     /// without going through SourceInferenceRule (which would add source-name qualification).
-    [[nodiscard]] static LogicalOperator
-    replaceTimeTravelReadSource(const LogicalOperator& current, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    /// Extract timestamp from a FOR EVENT_TIME AS OF TIMESTAMP '<ts>' clause in the query string.
+    static std::optional<std::string> extractEventTimeTimestamp(const std::string& query)
+    {
+        const auto pos = query.find("AS OF TIMESTAMP");
+        if (pos == std::string::npos)
+        {
+            return std::nullopt;
+        }
+        /// Find the quoted value after TIMESTAMP
+        const auto quoteStart = query.find('\'', pos);
+        if (quoteStart == std::string::npos)
+        {
+            return std::nullopt;
+        }
+        const auto quoteEnd = query.find('\'', quoteStart + 1);
+        if (quoteEnd == std::string::npos)
+        {
+            return std::nullopt;
+        }
+        return query.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+    }
+
+    [[nodiscard]] static LogicalOperator replaceTimeTravelReadSource(
+        const LogicalOperator& current,
+        const std::shared_ptr<SourceCatalog>& sourceCatalog,
+        const std::optional<std::string>& startTimestamp)
     {
         std::vector<LogicalOperator> newChildren;
         for (const auto& child : current.getChildren())
         {
-            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog));
+            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog, startTimestamp));
         }
 
         if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
         {
             const auto sourceName = sourceOp.value()->getLogicalSourceName();
-            const auto logicalSource = sourceCatalog->getLogicalSource(sourceName);
-            if (logicalSource.has_value())
+
+            /// Check for a replay store registered under the source name directly or with "replay_" prefix
+            for (const auto& candidateName : {sourceName, "replay_" + sourceName, "REPLAY_" + sourceName})
             {
-                /// Check if this logical source has a Replay physical source attached
+                const auto logicalSource = sourceCatalog->getLogicalSource(candidateName);
+                if (!logicalSource.has_value())
+                {
+                    continue;
+                }
                 const auto physicalSources = sourceCatalog->getPhysicalSources(*logicalSource);
                 const bool isReplaySource = physicalSources.has_value()
                     && std::ranges::any_of(*physicalSources, [](const auto& src) { return src.getSourceType() == "Replay"; });
 
                 if (isReplaySource)
                 {
-                    /// Use the unqualified schema from the logical source
+                    /// Build schema with source-qualified names so it matches the sink schema
+                    /// (e.g. STREAM$ID instead of just ID).
                     Schema schema;
                     for (const auto& field : *logicalSource->getSchema())
                     {
-                        schema.addField(field.getUnqualifiedName(), field.dataType);
+                        schema.addField(sourceName + "$" + field.getUnqualifiedName(), field.dataType);
                     }
-                    std::unordered_map<std::string, std::string> sourceConfig{{"store_name", sourceName}};
+                    std::unordered_map<std::string, std::string> sourceConfig{{"store_name", candidateName}};
+                    if (startTimestamp.has_value())
+                    {
+                        sourceConfig["replay_start_timestamp"] = *startTimestamp;
+                    }
                     std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
                     const InlineSourceLogicalOperator inlineOp{"Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
                     return inlineOp.withChildren(newChildren);
@@ -883,12 +917,13 @@ struct SystestBinder::Impl
         return current.withChildren(std::move(newChildren));
     }
 
-    static void replaceTimeTravelReadSources(LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    static void replaceTimeTravelReadSources(
+        LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog, const std::optional<std::string>& startTimestamp)
     {
         std::vector<LogicalOperator> newRoots;
         for (const auto& root : plan.getRootOperators())
         {
-            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog));
+            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog, startTimestamp));
         }
         plan = plan.withRootOperators(newRoots);
     }
@@ -921,23 +956,60 @@ struct SystestBinder::Impl
 
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
 
-            setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
-
-            /// When REPLAYABLE is active, auto-insert a replay store operator for queries that don't already have one
-            if (replayable && !planHasReplayStore(plan))
+            /// When REPLAYABLE is active and this is NOT a time-travel read query,
+            /// inject a replay store between the sink and its children.
+            /// We strip the parser-added sink, add the ReplayStore via the standard builder,
+            /// then re-add the sink on top.
+            const bool isTimeTravelRead = query.find("FOR EVENT_TIME") != std::string::npos;
+            if (replayable && !isTimeTravelRead && !planHasReplayStore(plan))
             {
                 auto sourceName = findSourceName(plan);
-                if (!sourceName.empty())
+                if (!sourceName.empty() && !plan.getRootOperators().empty())
                 {
-                    auto opts = std::unordered_map<std::string, std::string>{{"store_name", sourceName}};
+                    /// Extract and strip the parser-added sink
+                    const auto roots = plan.getRootOperators();
+                    const auto root = roots.front();
+                    auto sinkOp = root.tryGetAs<SinkLogicalOperator>();
+                    std::string sinkName;
+                    if (sinkOp.has_value())
+                    {
+                        sinkName = sinkOp.value()->getSinkName();
+                    }
+
+                    /// Build: Source → Projection → ReplayStore (stripping the old sink)
+                    std::vector<LogicalOperator> childRoots;
+                    for (const auto& child : root.getChildren())
+                    {
+                        childRoots.emplace_back(child);
+                    }
+                    auto childPlan = plan.withRootOperators(childRoots);
+
+                    const auto storeName = "replay_" + sourceName;
+                    auto opts = std::unordered_map<std::string, std::string>{{"store_name", storeName}};
                     auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-                    plan = LogicalPlanBuilder::addReplayStore(
-                        plan, cfg, FieldAccessLogicalFunction("ts"), Windowing::TimeUnit::Milliseconds());
+                    childPlan = LogicalPlanBuilder::addReplayStore(
+                        childPlan, cfg, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
+
+                    /// Re-add the sink on top: Source → Projection → ReplayStore → Sink
+                    if (!sinkName.empty())
+                    {
+                        plan = LogicalPlanBuilder::addSink(sinkName, childPlan);
+                    }
+                    else
+                    {
+                        plan = childPlan;
+                    }
                 }
             }
-
+            setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
             preRegisterReplaySources(plan, sourceCatalog);
-            replaceTimeTravelReadSources(plan, sourceCatalog);
+            /// Only replace sources with replay sources for time-travel read queries.
+            /// Write queries must keep their original source (e.g. File) to populate the store.
+            if (isTimeTravelRead)
+            {
+                const auto startTimestamp = extractEventTimeTimestamp(query);
+                replaceTimeTravelReadSources(plan, sourceCatalog, startTimestamp);
+            }
             setInlineSources(plan);
             currentBuilder.setBoundPlan(std::move(plan));
         }

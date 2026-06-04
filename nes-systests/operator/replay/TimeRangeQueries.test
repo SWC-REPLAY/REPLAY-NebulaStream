@@ -26,19 +26,20 @@ CREATE SINK sinkAll(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYP
 SELECT id, value, ts FROM stream INTO sink;
 ----
 1,1,1000
-2,1,1001
 3,1,1002
+2,1,1001
 4,2,2000
 
 # AS OF ... is inclusive from ... to end
-SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP '1001';
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP '1001' INTO sinkAsOf;
 ----
 2,1,1001
 3,1,1002
 4,2,2000
+5,1,12000
 
-# exclusive start inclusive end
-#SELECT id, value, ts FROM stream FOR EVENT_TIME BETWEEN '1001' AND '1002';   # inclusive both ends
+# inclusive start exclusive end
+#SELECT id, value, ts FROM stream FOR EVENT_TIME BETWEEN '1001' AND '1002';
 #----
 #3,1,1002
 

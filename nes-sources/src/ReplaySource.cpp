@@ -32,6 +32,7 @@
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <fmt/format.h>
+#include <Time/Timestamp.hpp>
 #include <ErrorHandling.hpp>
 #include <ReplayStoreReader.hpp>
 #include <SourceRegistry.hpp>
@@ -50,6 +51,12 @@ ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor)
                                                               : std::string())
     , schema(*sourceDescriptor.getLogicalSource().getSchema())
 {
+    const auto& config = sourceDescriptor.getConfig();
+    if (config.contains("replay_start_timestamp"))
+    {
+        const auto startTs = std::stoull(std::get<std::string>(config.at("replay_start_timestamp")));
+        timeRange = StoreManager::TimeRange{.fieldName = "TS", .start = Timestamp(startTs)};
+    }
 }
 
 ReplaySource::~ReplaySource() = default;
@@ -94,7 +101,7 @@ Source::FillTupleBufferResult ReplaySource::fillTupleBuffer(TupleBuffer& tupleBu
     {
         return FillTupleBufferResult::eos();
     }
-    const uint64_t tuplesWritten = store->read(tupleBuffer, schema);
+    uint64_t const tuplesWritten = store->read(tupleBuffer, schema, timeRange);
     if (tuplesWritten == 0)
     {
         return FillTupleBufferResult::eos();
@@ -139,6 +146,10 @@ DescriptorConfig::Config ReplaySource::validateAndFormat(std::unordered_map<std:
     if (static_cast<unsigned int>(config.contains("store_name")) != 0U)
     {
         validated.emplace("store_name", DescriptorConfig::ConfigType(config.at("store_name")));
+    }
+    if (config.contains("replay_start_timestamp"))
+    {
+        validated.emplace("replay_start_timestamp", DescriptorConfig::ConfigType(config.at("replay_start_timestamp")));
     }
     validated.emplace("number_of_buffers_in_local_pool", DescriptorConfig::ConfigType(static_cast<int64_t>(-1)));
     validated.emplace("max_inflight_buffers", DescriptorConfig::ConfigType(SourceDescriptor::INVALID_MAX_INFLIGHT_BUFFERS));

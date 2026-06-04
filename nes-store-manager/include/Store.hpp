@@ -25,6 +25,7 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <ErrorHandling.hpp>
+#include <TimeRange.hpp>
 #include <nameof.hpp>
 
 namespace NES::StoreManager
@@ -50,8 +51,8 @@ concept StoreConcept
           /// Write a single record to the store
           { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), schema, self) } -> std::same_as<void>;
 
-          /// Read data into a TupleBuffer, return number of rows written
-          { store.read(bufferRef, schema) } -> std::convertible_to<uint64_t>;
+          /// Read data into a TupleBuffer within the given time range, return number of rows written
+          { store.read(bufferRef, schema, TimeRange{}) } -> std::convertible_to<uint64_t>;
 
           /// Check if there is more data to read
           { constStore.hasMore() } -> std::convertible_to<bool>;
@@ -78,7 +79,7 @@ struct ErasedStore
     virtual void close(Store& self) = 0;
     virtual void flush(Store& self) = 0;
     virtual void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self) = 0;
-    [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema) = 0;
+    [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) = 0;
     [[nodiscard]] virtual bool hasMore() const = 0;
     [[nodiscard]] virtual Schema getSchema() const = 0;
     [[nodiscard]] virtual uint64_t size() const = 0;
@@ -108,7 +109,10 @@ struct StoreModel final : ErasedStore
         impl.writeRecord(recordData, recordSize, ts, schema, self);
     }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) override { return impl.read(buffer, schema); }
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) override
+    {
+        return impl.read(buffer, schema, range);
+    }
 
     [[nodiscard]] bool hasMore() const override { return impl.hasMore(); }
 
@@ -207,7 +211,10 @@ struct TypedStore
         self->writeRecord(recordData, recordSize, ts, schema, selfStore);
     }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) { return self->read(buffer, schema); }
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range = TimeRange{})
+    {
+        return self->read(buffer, schema, range);
+    }
 
     [[nodiscard]] bool hasMore() const { return self->hasMore(); }
 

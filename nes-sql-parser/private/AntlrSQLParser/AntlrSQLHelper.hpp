@@ -80,7 +80,6 @@ public:
     std::vector<LogicalFunction> joinKeyRelationHelper;
     std::vector<std::string> joinSourceRenames;
     JoinLogicalOperator::JoinType joinType = JoinLogicalOperator::JoinType::INNER_JOIN;
-    std::optional<std::unordered_map<std::string, std::string>> storeOptions;
     std::optional<std::string> timeTravelTimestamp;
 
     /// Utility variables to keep state between enter/exit parser function calls.

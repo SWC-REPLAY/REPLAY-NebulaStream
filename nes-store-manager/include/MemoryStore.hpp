@@ -29,6 +29,7 @@
 #include <Time/Timestamp.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
+#include <TimeRange.hpp>
 #include <StoreTransformation.hpp>
 
 namespace NES::StoreManager
@@ -65,7 +66,7 @@ public:
     void flush(Store& self);
 
     void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& schema);
+    uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;

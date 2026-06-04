@@ -515,14 +515,6 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
             queryPlan = LogicalPlanBuilder::addSelection(*havingExpr, queryPlan);
         }
     }
-    /// inject store operator into the plan before sink if TIME_TRAVEL_STORE was provided
-    if (helpers.top().storeOptions.has_value())
-    {
-        auto opts = *helpers.top().storeOptions;
-        const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-        queryPlan
-            = LogicalPlanBuilder::addReplayStore(queryPlan, cfg, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
-    }
     helpers.pop();
     if (helpers.empty())
     {
@@ -1027,16 +1019,6 @@ void AntlrSQLQueryPlanCreator::exitGroupByClause(AntlrSQLParser::GroupByClauseCo
 {
     helpers.top().isGroupBy = false;
     AntlrSQLBaseListener::exitGroupByClause(context);
-}
-
-void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
-{
-    const auto storeName = bindIdentifier(context->storeName);
-
-    std::unordered_map<std::string, std::string> options;
-    options.emplace("store_name", storeName);
-
-    helpers.top().storeOptions = std::move(options);
 }
 
 void AntlrSQLQueryPlanCreator::enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context)
