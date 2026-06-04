@@ -121,7 +121,7 @@ queryPrimary
     | '(' query ')'                                                         #subquery
     ;
 /// new layout to be closer to traditional SQL
-querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause?;
+querySpecification: selectClause fromClause timeTravelReadClause? whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause?;
 
 
 fromClause: FROM relation (',' relation)*;
@@ -313,6 +313,8 @@ inlineSink
 
 timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
 
+timeTravelReadClause: FOR EVENT_TIME AS OF TIMESTAMP_KW timestampValue=STRING;
+
 nullNotnull
     : NOT? NULLTOKEN
     ;
@@ -499,6 +501,8 @@ AT_LEAST_ONCE : 'AT_LEAST_ONCE';
 JSON: 'JSON';
 TEXT: 'TEXT';
 TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
+EVENT_TIME: 'EVENT_TIME' | 'event_time';
+TIMESTAMP_KW: 'TIMESTAMP';
 EXPLAIN: 'EXPLAIN' | 'explain';
 
 ///--NebulaSQL-KEYWORD-LIST-END
