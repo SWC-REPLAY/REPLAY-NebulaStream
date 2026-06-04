@@ -515,6 +515,14 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
             queryPlan = LogicalPlanBuilder::addSelection(*havingExpr, queryPlan);
         }
     }
+    /// inject a selection for time-travel reads: ts >= <timestamp>
+    if (helpers.top().timeTravelTimestamp.has_value())
+    {
+        auto tsConst = ConstantValueLogicalFunction(
+            DataTypeProvider::provideDataType(DataType::Type::UINT64), *helpers.top().timeTravelTimestamp);
+        auto predicate = GreaterEqualsLogicalFunction(FieldAccessLogicalFunction("ts"), std::move(tsConst));
+        queryPlan = LogicalPlanBuilder::addSelection(std::move(predicate), queryPlan);
+    }
     /// inject store operator into the plan before sink if TIME_TRAVEL_STORE was provided
     if (helpers.top().storeOptions.has_value())
     {
@@ -1037,5 +1045,16 @@ void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelC
     options.emplace("store_name", storeName);
 
     helpers.top().storeOptions = std::move(options);
+}
+
+void AntlrSQLQueryPlanCreator::enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context)
+{
+    auto tsText = context->timestampValue->getText();
+    /// Strip surrounding quotes from the STRING token (e.g. '1001' -> 1001)
+    if (tsText.size() >= 2 && (tsText.front() == '\'' || tsText.front() == '"'))
+    {
+        tsText = tsText.substr(1, tsText.size() - 2);
+    }
+    helpers.top().timeTravelTimestamp = std::move(tsText);
 }
 }
