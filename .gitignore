@@ -58,3 +58,6 @@ scripts/__pycache__
 # Ignore Claude specific files and all possible combinations of Claude.md
 .claude/
 [Cc][Ll][Aa][Uu][Dd][Ee].md
+
+# Ignore .direnv file
+.direnv/
