@@ -30,6 +30,7 @@ public:
     uint64_t read(TupleBuffer& buffer, const Schema& schema);
     [[nodiscard]] bool hasMore() const;
     [[nodiscard]] size_t size() const;
+
     [[nodiscard]] std::string_view typeName() const noexcept { return "MemoryRingStore"; }
 
 private:
