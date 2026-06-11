@@ -146,7 +146,8 @@ void FileStore::appendRawBytes(const uint8_t* data, const size_t len)
 
 void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxTs)
 {
-    PRECONDITION(minTs.getRawValue() != Timestamp::INVALID_VALUE && maxTs.getRawValue() != Timestamp::INITIAL_VALUE,
+    PRECONDITION(
+        minTs.getRawValue() != Timestamp::INVALID_VALUE && maxTs.getRawValue() != Timestamp::INITIAL_VALUE,
         "updating file timestamps requires valid timestamps!");
     if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
     {
@@ -177,8 +178,7 @@ static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::
 
 /// Filter rows in a buffer in-place, keeping only rows whose timestamp field falls within the range.
 /// Returns the number of rows remaining.
-static uint64_t filterBufferRows(
-    char* data, uint64_t numRows, uint32_t rowWidth, uint32_t tsFieldOffset, const TimeRange& range)
+static uint64_t filterBufferRows(char* data, uint64_t numRows, uint32_t rowWidth, uint32_t tsFieldOffset, const TimeRange& range)
 {
     uint64_t kept = 0;
     for (uint64_t i = 0; i < numRows; ++i)
@@ -223,7 +223,11 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         /// Skip entire file if its timestamp range falls outside the query range
         if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
         {
-            NES_DEBUG("FileStore::read: skipping file {} (ts range [{}, {}] outside query range)", filePath, reader->getMinTs(), reader->getMaxTs());
+            NES_DEBUG(
+                "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)",
+                filePath,
+                reader->getMinTs(),
+                reader->getMaxTs());
             reader->close();
             reader.reset();
             buffer.setLastChunk(true);
