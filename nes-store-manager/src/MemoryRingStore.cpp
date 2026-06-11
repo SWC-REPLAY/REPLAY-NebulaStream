@@ -18,22 +18,18 @@ namespace NES::StoreManager
 {
 MemoryRingStore::MemoryRingStore(Schema schema) : schema(std::move(schema))
 {
-
 }
 
 void MemoryRingStore::open()
 {
-
 }
 
 void MemoryRingStore::close()
 {
-
 }
 
 void MemoryRingStore::flush()
 {
-
 }
 
 bool MemoryRingStore::hasMore() const
