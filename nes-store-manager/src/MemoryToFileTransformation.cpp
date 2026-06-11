@@ -14,15 +14,15 @@
 
 #include <MemoryToFileTransformation.hpp>
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <Util/Logger/Logger.hpp>
 #include <FileStore.hpp>
 #include <MemoryStore.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
-#include "Time/Timestamp.hpp"
+#include <Time/Timestamp.hpp>
 
 namespace NES::StoreManager
 {
