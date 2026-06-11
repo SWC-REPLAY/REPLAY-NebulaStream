@@ -21,7 +21,7 @@
 #include <Runtime/QueryTerminationType.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Store.hpp>
-#include "Time/Timestamp.hpp"
+#include <Time/Timestamp.hpp>
 
 namespace NES
 {
