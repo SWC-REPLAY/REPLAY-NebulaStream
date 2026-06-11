@@ -31,7 +31,7 @@
 #include <MemoryStore.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
-#include "Runtime/BufferManager.hpp"
+#include <Runtime/BufferManager.hpp>
 
 namespace NES::StoreManager
 {
