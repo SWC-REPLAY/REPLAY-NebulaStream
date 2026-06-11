@@ -19,9 +19,9 @@
 
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
-#include <Runtime/TupleBuffer.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Store.hpp>
+#include "Time/Timestamp.hpp"
 
 namespace NES
 {
