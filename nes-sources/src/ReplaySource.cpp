@@ -30,9 +30,9 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <fmt/format.h>
-#include <Time/Timestamp.hpp>
 #include <ErrorHandling.hpp>
 #include <ReplayStoreReader.hpp>
 #include <SourceRegistry.hpp>
@@ -101,7 +101,7 @@ Source::FillTupleBufferResult ReplaySource::fillTupleBuffer(TupleBuffer& tupleBu
     {
         return FillTupleBufferResult::eos();
     }
-    uint64_t const tuplesWritten = store->read(tupleBuffer, schema, timeRange);
+    const uint64_t tuplesWritten = store->read(tupleBuffer, schema, timeRange);
     if (tuplesWritten == 0)
     {
         return FillTupleBufferResult::eos();
