@@ -26,8 +26,8 @@
 #include <BinaryStoreWriter.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
-#include <TimeRange.hpp>
 #include <StoreTransformation.hpp>
+#include <TimeRange.hpp>
 
 namespace NES::StoreManager
 {
@@ -86,7 +86,6 @@ public:
     static uint32_t calculateRowWidth(const Schema& schema);
 
 private:
-
     Config config;
     Schema schema;
     std::string filePath;
