@@ -33,7 +33,7 @@
 #include <StoreTransformationRegistry.hpp>
 #include <StoreTypeRegistry.hpp>
 #include <TimeRange.hpp>
-#include "Time/Timestamp.hpp"
+#include <Time/Timestamp.hpp>
 
 namespace NES::StoreManager
 {
