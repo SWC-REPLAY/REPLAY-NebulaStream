@@ -56,7 +56,7 @@ public:
     void append(const uint8_t* data, size_t len);
 
     /// Update the min/max timestamps in the file header using pwrite to fixed offsets.
-    void updateTimestamps(uint64_t minTs, uint64_t maxTs);
+    void updateTimestamps(uint64_t minTs, uint64_t maxTs) const;
 
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }
 
