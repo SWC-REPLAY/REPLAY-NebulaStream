@@ -20,6 +20,7 @@
 #include <ctime>
 #include <iomanip>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -183,7 +184,7 @@ static uint64_t filterBufferRows(char* data, uint64_t numRows, uint32_t rowWidth
     uint64_t kept = 0;
     for (uint64_t i = 0; i < numRows; ++i)
     {
-        const char* rowPtr = data + i * rowWidth;
+        const char* rowPtr = data + (i * rowWidth);
         uint64_t tsValue = 0;
         /// Skip the 1-byte null indicator before the actual value
         std::memcpy(&tsValue, rowPtr + tsFieldOffset + 1, sizeof(uint64_t));
@@ -191,7 +192,7 @@ static uint64_t filterBufferRows(char* data, uint64_t numRows, uint32_t rowWidth
         {
             if (kept != i)
             {
-                std::memmove(data + kept * rowWidth, rowPtr, rowWidth);
+                std::memmove(data + (kept * rowWidth), rowPtr, rowWidth);
             }
             ++kept;
         }
