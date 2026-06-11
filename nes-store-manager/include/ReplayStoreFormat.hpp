@@ -48,7 +48,7 @@ struct FileHeader
     std::string schemaText;
 };
 
-std::string serializeHeader(const std::string& schemaText, uint64_t minTs = UINT64_MAX, uint64_t maxTs = 0);
+std::string serializeHeader(const std::string& schemaText, uint64_t minTs = UINT64_MAX, uint64_t maxTs = UINT64_MAX);
 
 std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs);
 
