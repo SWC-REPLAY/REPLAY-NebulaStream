@@ -41,7 +41,7 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
     auto storeOp = logicalOperator.getAs<ReplayStoreLogicalOperator>();
 
     auto cfgCopy = DescriptorConfig::Config(storeOp->getConfig());
-    Descriptor const logicalCfg(std::move(cfgCopy));
+    const Descriptor logicalCfg(std::move(cfgCopy));
     const auto storeName = logicalCfg.getFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_NAME);
 
     const auto outputSchema = logicalOperator.getOutputSchema();
