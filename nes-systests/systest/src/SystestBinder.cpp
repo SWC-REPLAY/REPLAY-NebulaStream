@@ -968,7 +968,7 @@ struct SystestBinder::Impl
                 {
                     /// Extract and strip the parser-added sink
                     const auto roots = plan.getRootOperators();
-                    const auto root = roots.front();
+                    const auto& root = roots.front();
                     auto sinkOp = root.tryGetAs<SinkLogicalOperator>();
                     std::string sinkName;
                     if (sinkOp.has_value())
