@@ -17,8 +17,11 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
+#include <string>
 #include <utility>
 #include <vector>
 #include <DataTypes/Schema.hpp>
@@ -30,6 +33,7 @@
 #include <StoreTransformationRegistry.hpp>
 #include <StoreTypeRegistry.hpp>
 #include <TimeRange.hpp>
+#include "Time/Timestamp.hpp"
 
 namespace NES::StoreManager
 {
@@ -166,7 +170,7 @@ void MemoryStore::writeRecord(
 void MemoryStore::allocateActiveBuffer()
 {
     auto tb = bufferManager->getBufferBlocking();
-    activeBuffer = TimedBuffer{std::move(tb), Timestamp(Timestamp::INVALID_VALUE), Timestamp(Timestamp::INITIAL_VALUE)};
+    activeBuffer = TimedBuffer{.buffer=std::move(tb), .minTs=Timestamp(Timestamp::INVALID_VALUE), .maxTs=Timestamp(Timestamp::INITIAL_VALUE)};
     activeWriteOffset = 0;
 }
 
@@ -234,13 +238,13 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
         uint64_t destTuples = 0;
         for (uint64_t i = 0; i < numTuples; ++i)
         {
-            const uint8_t* rowPtr = srcSpan.data() + i * rowWidth;
+            const uint8_t* rowPtr = srcSpan.data() + (i * rowWidth);
             uint64_t tsValue = 0;
             /// Skip the 1-byte null indicator before the actual value
             std::memcpy(&tsValue, rowPtr + *tsOffset + 1, sizeof(uint64_t));
             if (range.contains(Timestamp(tsValue)))
             {
-                std::memcpy(destSpan.data() + destTuples * rowWidth, rowPtr, rowWidth);
+                std::memcpy(destSpan.data() + (destTuples * rowWidth), rowPtr, rowWidth);
                 ++destTuples;
             }
         }
