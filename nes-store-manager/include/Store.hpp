@@ -217,7 +217,7 @@ struct TypedStore
         self->writeRecord(recordData, recordSize, ts, schema, selfStore);
     }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range = TimeRange{})
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range)
     {
         return self->read(buffer, schema, range);
     }
