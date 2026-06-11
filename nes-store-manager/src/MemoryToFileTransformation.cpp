@@ -60,10 +60,7 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
             continue;
         }
         auto srcSpan = timedBuf.buffer.getAvailableMemoryArea<uint8_t>();
-        NES_DEBUG(
-            "MemoryToFileTransformation: writing {} tuples, {} bytes",
-            numTuples,
-            static_cast<size_t>(numTuples) * rowWidth);
+        NES_DEBUG("MemoryToFileTransformation: writing {} tuples, {} bytes", numTuples, static_cast<size_t>(numTuples) * rowWidth);
         fileStore.appendRawBytes(srcSpan.data(), static_cast<size_t>(numTuples) * rowWidth);
     }
 
