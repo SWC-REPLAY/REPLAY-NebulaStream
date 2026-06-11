@@ -26,9 +26,7 @@
 #include <Nautilus/Util.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
-#include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
-#include <Util/Logger/Logger.hpp>
 #include <Watermark/TimeFunction.hpp>
 #include <CompilationContext.hpp>
 #include <ErrorHandling.hpp>
@@ -40,6 +38,7 @@
 #include <function.hpp>
 #include <val_arith.hpp>
 #include <val_ptr.hpp>
+#include "Nautilus/Interface/TimestampRef.hpp"
 
 namespace NES
 {
