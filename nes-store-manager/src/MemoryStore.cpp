@@ -170,7 +170,8 @@ void MemoryStore::writeRecord(
 void MemoryStore::allocateActiveBuffer()
 {
     auto tb = bufferManager->getBufferBlocking();
-    activeBuffer = TimedBuffer{.buffer=std::move(tb), .minTs=Timestamp(Timestamp::INVALID_VALUE), .maxTs=Timestamp(Timestamp::INITIAL_VALUE)};
+    activeBuffer
+        = TimedBuffer{.buffer = std::move(tb), .minTs = Timestamp(Timestamp::INVALID_VALUE), .maxTs = Timestamp(Timestamp::INITIAL_VALUE)};
     activeWriteOffset = 0;
 }
 
