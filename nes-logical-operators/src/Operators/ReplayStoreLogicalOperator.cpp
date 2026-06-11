@@ -29,7 +29,6 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Serialization/LogicalFunctionReflection.hpp>
-#include <Traits/Trait.hpp>
 #include <Traits/TraitSet.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Reflection.hpp>
@@ -154,7 +153,7 @@ ReplayStoreLogicalOperator Unreflector<ReplayStoreLogicalOperator>::operator()(c
 
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 LogicalOperatorRegistryReturnType
-LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
+LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(const LogicalOperatorRegistryArguments& arguments)
 {
     if (!arguments.reflected.isEmpty())
     {
