@@ -24,8 +24,8 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <queue>
 #include <ostream>
+#include <queue>
 #include <ranges>
 #include <regex>
 #include <sstream>
@@ -41,6 +41,8 @@
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Identifiers/NESStrongType.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
@@ -51,8 +53,6 @@
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
 #include <Phases/QueryOptimizer.hpp>
 #include <Phases/SemanticAnalyzer.hpp>
-#include <DataTypes/TimeUnit.hpp>
-#include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Plans/LogicalPlan.hpp>
 #include <Plans/LogicalPlanBuilder.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
