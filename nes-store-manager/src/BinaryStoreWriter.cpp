@@ -25,7 +25,6 @@
 #include <ErrorHandling.hpp>
 #include <ReplayStoreFormat.hpp>
 
-#include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -130,7 +129,7 @@ void BinaryStoreWriter::append(const uint8_t* data, size_t len)
     }
 }
 
-void BinaryStoreWriter::updateTimestamps(uint64_t minTs, uint64_t maxTs)
+void BinaryStoreWriter::updateTimestamps(uint64_t minTs, uint64_t maxTs) const
 {
     if (fd < 0)
     {
