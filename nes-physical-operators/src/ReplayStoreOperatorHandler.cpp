@@ -39,7 +39,6 @@ void ReplayStoreOperatorHandler::start(PipelineExecutionContext&, uint32_t)
 void ReplayStoreOperatorHandler::stop(QueryTerminationType, PipelineExecutionContext&)
 {
     store.flush();
-    store.close();
 }
 
 void ReplayStoreOperatorHandler::writeRecord(const uint8_t* data, uint32_t size, Timestamp ts)

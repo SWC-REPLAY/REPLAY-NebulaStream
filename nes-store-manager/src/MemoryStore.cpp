@@ -107,6 +107,22 @@ void MemoryStore::close(Store& self)
 
 void MemoryStore::flush(Store& self)
 {
+    std::unique_lock lock(mutex);
+    /// Seal the active buffer so its data becomes readable
+    if (activeBuffer.has_value() && activeWriteOffset > 0)
+    {
+        const auto rowWidth = schema.getSizeOfSchemaInBytes();
+        if (rowWidth > 0)
+        {
+            activeBuffer->buffer.setNumberOfTuples(activeWriteOffset / rowWidth);
+        }
+        currentSize += activeBuffer->buffer.getBufferSize();
+        buffers.push_back(std::move(*activeBuffer));
+        activeBuffer.reset();
+        activeWriteOffset = 0;
+    }
+    lock.unlock();
+
     if (nextLevel && transformation)
     {
         transformation->execute(self, *nextLevel);
