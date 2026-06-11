@@ -30,6 +30,7 @@
 #include <ReplayStoreOperatorHandler.hpp>
 #include <ReplayStorePhysicalOperator.hpp>
 #include <StoreRegistry.hpp>
+#include "Runtime/Execution/OperatorHandler.hpp"
 
 namespace NES
 {
@@ -40,7 +41,7 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
     auto storeOp = logicalOperator.getAs<ReplayStoreLogicalOperator>();
 
     auto cfgCopy = DescriptorConfig::Config(storeOp->getConfig());
-    Descriptor logicalCfg(std::move(cfgCopy));
+    Descriptor const logicalCfg(std::move(cfgCopy));
     const auto storeName = logicalCfg.getFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_NAME);
 
     const auto outputSchema = logicalOperator.getOutputSchema();
