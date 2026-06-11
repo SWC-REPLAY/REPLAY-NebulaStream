@@ -42,30 +42,36 @@ using Store = TypedStore<>;
 
 /// Concept defining the interface for all store types.
 template <typename T>
-concept StoreConcept
-    = requires(T& store, const T& constStore, const uint8_t* recordData, uint32_t recordSize, TupleBuffer& bufferRef, const Schema& schema, Store& self) {
-          { store.open() };
-          { store.close(self) };
-          { store.flush(self) };
+concept StoreConcept = requires(
+    T& store,
+    const T& constStore,
+    const uint8_t* recordData,
+    uint32_t recordSize,
+    TupleBuffer& bufferRef,
+    const Schema& schema,
+    Store& self) {
+    { store.open() };
+    { store.close(self) };
+    { store.flush(self) };
 
-          /// Write a single record to the store
-          { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), schema, self) } -> std::same_as<void>;
+    /// Write a single record to the store
+    { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), schema, self) } -> std::same_as<void>;
 
-          /// Read data into a TupleBuffer within the given time range, return number of rows written
-          { store.read(bufferRef, schema, TimeRange{}) } -> std::convertible_to<uint64_t>;
+    /// Read data into a TupleBuffer within the given time range, return number of rows written
+    { store.read(bufferRef, schema, TimeRange{}) } -> std::convertible_to<uint64_t>;
 
-          /// Check if there is more data to read
-          { constStore.hasMore() } -> std::convertible_to<bool>;
+    /// Check if there is more data to read
+    { constStore.hasMore() } -> std::convertible_to<bool>;
 
-          /// Get the schema associated with this store
-          { constStore.getSchema() } -> std::convertible_to<Schema>;
+    /// Get the schema associated with this store
+    { constStore.getSchema() } -> std::convertible_to<Schema>;
 
-          /// Get the current size in bytes of stored data
-          { constStore.size() } -> std::convertible_to<uint64_t>;
+    /// Get the current size in bytes of stored data
+    { constStore.size() } -> std::convertible_to<uint64_t>;
 
-          /// Get a human-readable type name
-          { constStore.typeName() } noexcept -> std::convertible_to<std::string_view>;
-      };
+    /// Get a human-readable type name
+    { constStore.typeName() } noexcept -> std::convertible_to<std::string_view>;
+};
 
 namespace detail
 {
