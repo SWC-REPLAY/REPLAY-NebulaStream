@@ -151,9 +151,9 @@ ReplayStoreLogicalOperator Unreflector<ReplayStoreLogicalOperator>::operator()(c
     return ReplayStoreLogicalOperator(std::move(onField.value()), timeUnit, std::move(config));
 }
 
-/// NOLINTNEXTLINE(performance-unnecessary-value-param)
+/// NOLINTBEGIN(performance-unnecessary-value-param)
 LogicalOperatorRegistryReturnType
-LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(const LogicalOperatorRegistryArguments& arguments)
+LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
 {
     if (!arguments.reflected.isEmpty())
     {
@@ -162,5 +162,7 @@ LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(const Logi
     PRECONDITION(false, "Operator is only built directly via parser or via reflection, not using the registry");
     std::unreachable();
 }
+
+/// NOLINTEND(performance-unnecessary-value-param)
 
 }
