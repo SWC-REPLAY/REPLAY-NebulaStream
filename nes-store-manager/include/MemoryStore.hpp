@@ -29,8 +29,8 @@
 #include <Time/Timestamp.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
-#include <TimeRange.hpp>
 #include <StoreTransformation.hpp>
+#include <TimeRange.hpp>
 
 namespace NES::StoreManager
 {
