@@ -38,7 +38,7 @@
 #include <function.hpp>
 #include <val_arith.hpp>
 #include <val_ptr.hpp>
-#include "Nautilus/Interface/TimestampRef.hpp"
+#include <Nautilus/Interface/TimestampRef.hpp>
 
 namespace NES
 {
