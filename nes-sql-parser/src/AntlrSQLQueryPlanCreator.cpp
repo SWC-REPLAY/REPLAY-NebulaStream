@@ -33,7 +33,6 @@
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
-#include <DataTypes/TimeUnit.hpp>
 #include <Functions/ArithmeticalFunctions/AddLogicalFunction.hpp>
 #include <Functions/ArithmeticalFunctions/DivLogicalFunction.hpp>
 #include <Functions/ArithmeticalFunctions/ModuloLogicalFunction.hpp>
@@ -52,7 +51,6 @@
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
 #include <Functions/LogicalFunctionProvider.hpp>
-#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
