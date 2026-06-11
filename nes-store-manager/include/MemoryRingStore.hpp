@@ -12,6 +12,10 @@
     limitations under the License.
 */
 #pragma once
+#include <cstdint>
+#include <cstddef>
+#include <string_view>
+#include <array>
 #include "DataTypes/Schema.hpp"
 #include "Runtime/TupleBuffer.hpp"
 
@@ -20,7 +24,7 @@ namespace NES::StoreManager
 class MemoryRingStore
 {
 public:
-    explicit MemoryRingStore(Schema schema);
+    explicit MemoryRingStore(const Schema& schema);
 
     void open();
     void close();
@@ -31,13 +35,13 @@ public:
     [[nodiscard]] bool hasMore() const;
     [[nodiscard]] size_t size() const;
 
-    [[nodiscard]] std::string_view typeName() const noexcept { return "MemoryRingStore"; }
+    [[nodiscard]] static std::string_view typeName() noexcept { return "MemoryRingStore"; }
 
 private:
     static constexpr size_t RINGBUFFER_SIZE = 2;
     Schema schema;
     std::array<TupleBuffer, RINGBUFFER_SIZE> ringBuffer;
-    std::array<TupleBuffer, RINGBUFFER_SIZE>::iterator readIterator;
-    std::array<TupleBuffer, RINGBUFFER_SIZE>::iterator writeIterator;
+    std::array<TupleBuffer, RINGBUFFER_SIZE>::iterator readIterator{};
+    std::array<TupleBuffer, RINGBUFFER_SIZE>::iterator writeIterator{};
 };
 }
