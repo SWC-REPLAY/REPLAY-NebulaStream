@@ -12,12 +12,12 @@
     limitations under the License.
 */
 #pragma once
-#include <cstdint>
-#include <cstddef>
-#include <string_view>
 #include <array>
-#include "DataTypes/Schema.hpp"
-#include "Runtime/TupleBuffer.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+#include <DataTypes/Schema.hpp>
+#include <Runtime/TupleBuffer.hpp>
 
 namespace NES::StoreManager
 {
