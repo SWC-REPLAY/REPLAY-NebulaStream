@@ -49,7 +49,7 @@
 #include <WindowTypes/Types/TimeBasedWindowType.hpp>
 #include <WindowTypes/Types/WindowType.hpp>
 #include <ErrorHandling.hpp>
-#include "DataTypes/TimeUnit.hpp"
+#include <DataTypes/TimeUnit.hpp>
 
 namespace NES
 {
