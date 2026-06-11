@@ -27,6 +27,13 @@
 namespace NES::StoreManager
 {
 
+/// Per-query store configuration. All fields default to nullopt, meaning "use hardcoded default".
+struct StoreConfig
+{
+    std::optional<size_t> memoryBufferSize; 
+    std::optional<std::string> storeOrder; 
+};
+
 /// Manages named store instances, allowing concurrent TIME_TRAVEL queries to each use their own store.
 class StoreRegistry
 {
@@ -38,6 +45,10 @@ public:
 
     /// Register a default hierarchical store (MemoryStore -> FileStore).
     void registerDefaultStore(const std::string& storeName, const Schema& schema, const std::string& schemaText);
+
+    /// Register a store with custom configuration (store order, buffer sizes, etc.).
+    void registerConfiguredStore(
+        const std::string& storeName, const Schema& schema, const std::string& schemaText, const StoreConfig& config);
 
     /// Look up the store for a given name.
     [[nodiscard]] std::optional<Store> getStore(const std::string& storeName) const;

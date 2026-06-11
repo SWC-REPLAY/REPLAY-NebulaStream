@@ -238,7 +238,7 @@ void SystestParser::parse()
 {
     SystestQueryIdAssigner queryIdAssigner{};
     bool sequentialExecution = false;
-    bool replayable = false;
+    std::optional<std::string> replayableConfigLine;
     while (auto token = getNextToken())
     {
         switch (token.value())
@@ -257,7 +257,7 @@ void SystestParser::parse()
                 lastParsedQueryId = queryId;
                 if (onQueryCallback)
                 {
-                    onQueryCallback(query, queryId, sequentialExecution, replayable);
+                    onQueryCallback(query, queryId, sequentialExecution, replayableConfigLine);
                 }
                 break;
             }
@@ -318,7 +318,25 @@ void SystestParser::parse()
                 break;
             }
             case TokenType::REPLAYABLE: {
-                replayable = not replayable;
+                if (replayableConfigLine.has_value())
+                {
+                    replayableConfigLine = std::nullopt;
+                }
+                else
+                {
+                    /// Accumulate the REPLAYABLE line, continuing across multiple lines
+                    /// if a SET( is opened but not yet closed with ).
+                    std::string accumulated = lines[currentLine];
+                    if (accumulated.find("SET(") != std::string::npos)
+                    {
+                        while (accumulated.find(')') == std::string::npos && (currentLine + 1) < lines.size())
+                        {
+                            ++currentLine;
+                            accumulated += ' ' + lines[currentLine];
+                        }
+                    }
+                    replayableConfigLine = accumulated;
+                }
                 break;
             }
             case TokenType::ERROR_EXPECTATION:

@@ -14,14 +14,17 @@
 
 #include <StoreRegistry.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <shared_mutex>
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <DataTypes/Schema.hpp>
 #include <Util/Logger/Logger.hpp>
@@ -54,24 +57,75 @@ void StoreRegistry::registerStore(const std::string& storeName, Store store)
 
 void StoreRegistry::registerDefaultStore(const std::string& storeName, const Schema& schema, const std::string& schemaText)
 {
+    registerConfiguredStore(storeName, schema, schemaText, StoreConfig{});
+}
+
+void StoreRegistry::registerConfiguredStore(
+    const std::string& storeName, const Schema& schema, const std::string& schemaText, const StoreConfig& config)
+{
     const std::unique_lock lock(mutex);
-    NES_DEBUG("Registering default store with name {} and schema {}", storeName, schemaText);
+    NES_DEBUG("Registering configured store with name {} and schema {}", storeName, schemaText);
 
     const auto storeDir = generateStoreDir(storeName);
+    const auto storeOrder = config.storeOrder.value_or("MemoryStore->FileStore");
 
-    /// Validate that a transformation exists for MemoryStore -> FileStore
-    auto transformation = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
-    PRECONDITION(transformation.has_value(), "No transformation registered for 'MemoryStore' -> 'FileStore'");
+    /// Parse the store order string by splitting on "->"
+    std::vector<std::string> storeNames;
+    {
+        std::string remaining = storeOrder;
+        while (true)
+        {
+            auto pos = remaining.find("->");
+            if (pos == std::string::npos)
+            {
+                storeNames.push_back(remaining);
+                break;
+            }
+            storeNames.push_back(remaining.substr(0, pos));
+            remaining = remaining.substr(pos + 2);
+        }
+    }
 
-    /// Build the chain bottom-up: FileStore (tail) <- MemoryStore (head)
-    auto fileStore
-        = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+    PRECONDITION(!storeNames.empty(), "Store order must not be empty");
+    for (const auto& name : storeNames)
+    {
+        PRECONDITION(
+            name == "MemoryStore" || name == "FileStore", "Unknown store type '{}' in store order '{}'", name, storeOrder);
+    }
 
-    const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD};
+    /// Build the store chain bottom-up (last in the order is the tail).
+    /// Supported chains: "MemoryStore->FileStore", "MemoryStore", "FileStore"
+    const bool hasMemoryStore = std::ranges::find(storeNames, "MemoryStore") != storeNames.end();
+    const bool hasFileStore = std::ranges::find(storeNames, "FileStore") != storeNames.end();
 
-    auto headStore = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager, std::move(fileStore), policy);
+    if (hasMemoryStore && hasFileStore)
+    {
+        auto transformation = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
+        PRECONDITION(transformation.has_value(), "No transformation registered for 'MemoryStore' -> 'FileStore'");
 
-    stores.emplace(storeName, headStore);
+        auto fileStore = makeStore<FileStore>(
+            FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+
+        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
+        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+
+        auto headStore = makeStore<MemoryStore>(
+            schema, MemoryStore::Config{.maxBufferSize = bufferSize}, bufferManager, std::move(fileStore), policy);
+
+        stores.emplace(storeName, headStore);
+    }
+    else if (hasMemoryStore)
+    {
+        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
+        auto headStore = makeStore<MemoryStore>(schema, MemoryStore::Config{.maxBufferSize = bufferSize}, bufferManager);
+        stores.emplace(storeName, headStore);
+    }
+    else if (hasFileStore)
+    {
+        auto headStore = makeStore<FileStore>(
+            FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+        stores.emplace(storeName, headStore);
+    }
 }
 
 std::optional<Store> StoreRegistry::getStore(const std::string& storeName) const

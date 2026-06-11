@@ -740,6 +740,104 @@ struct SystestBinder::Impl
         }
     }
 
+    /// Parse a human-readable size string (e.g. "32MB", "1GB", "65536") into bytes.
+    static size_t parseSizeString(const std::string& s)
+    {
+        size_t pos = 0;
+        const auto number = std::stoull(s, &pos);
+        const auto suffix = s.substr(pos);
+        if (suffix.empty() || suffix == "B")
+        {
+            return number;
+        }
+        if (suffix == "KB")
+        {
+            return number * 1024UZ;
+        }
+        if (suffix == "MB")
+        {
+            return number * 1024UZ * 1024UZ;
+        }
+        if (suffix == "GB")
+        {
+            return number * 1024UZ * 1024UZ * 1024UZ;
+        }
+        throw InvalidQuerySyntax("Unknown size suffix '{}' in '{}'", suffix, s);
+    }
+
+    /// Parse a REPLAYABLE line for an optional SET(...) clause.
+    /// Expected format: REPLAYABLE SET('value' AS REPLAY.KEY, ...)
+    /// If no SET clause is found, returns a default (empty) StoreConfig.
+    static StoreManager::StoreConfig extractReplayConfig(const std::string& replayableLine)
+    {
+        StoreManager::StoreConfig config;
+
+        const auto setPos = replayableLine.find("SET(");
+        if (setPos == std::string::npos)
+        {
+            return config;
+        }
+
+        const auto closePos = replayableLine.find(')', setPos);
+        if (closePos == std::string::npos)
+        {
+            throw InvalidQuerySyntax("Unmatched parenthesis in REPLAYABLE SET clause");
+        }
+
+        const auto innerStart = setPos + 4; // length of "SET("
+        const auto inner = replayableLine.substr(innerStart, closePos - innerStart);
+
+        /// Parse comma-separated entries: 'value' AS REPLAY.KEY
+        std::istringstream stream(inner);
+        std::string segment;
+        while (std::getline(stream, segment, ','))
+        {
+            std::string trimmed{trimWhiteSpaces(segment)};
+            if (trimmed.empty())
+            {
+                continue;
+            }
+
+            const auto asPos = trimmed.find(" AS ");
+            if (asPos == std::string::npos)
+            {
+                throw InvalidQuerySyntax("Expected 'value' AS REPLAY.KEY in SET clause, got '{}'", trimmed);
+            }
+
+            std::string value{trimWhiteSpaces(trimmed.substr(0, asPos))};
+            std::string key{trimWhiteSpaces(trimmed.substr(asPos + 4))};
+
+            /// Strip surrounding quotes from value
+            if (value.size() >= 2
+                && ((value.front() == '\'' && value.back() == '\'') || (value.front() == '"' && value.back() == '"')))
+            {
+                value = value.substr(1, value.size() - 2);
+            }
+
+            /// Validate REPLAY.* namespace
+            if (!key.starts_with("REPLAY."))
+            {
+                throw InvalidQuerySyntax("SET key '{}' must be in the REPLAY.* namespace", key);
+            }
+            const auto param = key.substr(7); // length of "REPLAY."
+
+            if (param == "MEMORY_BUFFER_SIZE")
+            {
+                config.memoryBufferSize = parseSizeString(value);
+            }
+            else if (param == "STORE_ORDER")
+            {
+                config.storeOrder = value;
+            }
+            else
+            {
+                throw InvalidQuerySyntax("Unknown REPLAY configuration key '{}'", key);
+            }
+        }
+
+        return config;
+    }
+
     /// Check if the plan already contains a ReplayStoreLogicalOperator.
     static bool planHasReplayStore(const LogicalPlan& plan)
     {
@@ -786,7 +884,8 @@ struct SystestBinder::Impl
     ///   1. A logical source in the SourceCatalog (so SourceInferenceRule finds it for read queries)
     ///   2. A Replay-typed physical source (so LogicalSourceExpansionRule produces a working SourceDescriptor)
     ///   3. A fully initialized store in the StoreRegistry (MemoryStore -> FileStore hierarchy, ready for writes)
-    static void preRegisterReplaySources(const LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    static void preRegisterReplaySources(
+        const LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog, const StoreManager::StoreConfig& storeConfig)
     {
         for (const auto& root : plan.getRootOperators())
         {
@@ -837,7 +936,7 @@ struct SystestBinder::Impl
             /// with no setup overhead in ReplayStoreOperatorHandler::open().
             std::stringstream schemaStream;
             schemaStream << storeSchema;
-            StoreManager::StoreRegistry::instance().registerDefaultStore(storeName, storeSchema, schemaStream.str());
+            StoreManager::StoreRegistry::instance().registerConfiguredStore(storeName, storeSchema, schemaStream.str(), storeConfig);
         }
     }
 
@@ -937,8 +1036,10 @@ struct SystestBinder::Impl
         const SystestQueryId& currentQueryNumberInTest,
         const std::vector<ConfigurationOverride>& configOverrides,
         const bool sequentialExecution,
-        const bool replayable) const
+        const std::optional<std::string>& replayableConfigLine) const
     {
+        const bool replayable = replayableConfigLine.has_value();
+
         SystestQueryBuilder currentBuilder{currentQueryNumberInTest};
         currentBuilder.setQueryDefinition(query);
         currentBuilder.setConfigurationOverrides(configOverrides);
@@ -953,6 +1054,9 @@ struct SystestBinder::Impl
             {
                 throw InvalidQuerySyntax("FOR EVENT_TIME requires REPLAYABLE directive");
             }
+
+            /// Parse replay store configuration from the REPLAYABLE SET(...) line
+            auto replayConfig = replayableConfigLine.has_value() ? extractReplayConfig(replayableConfigLine.value()) : StoreManager::StoreConfig{};
 
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
 
@@ -1002,7 +1106,7 @@ struct SystestBinder::Impl
                 }
             }
             setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
-            preRegisterReplaySources(plan, sourceCatalog);
+            preRegisterReplaySources(plan, sourceCatalog, replayConfig);
             /// Only replace sources with replay sources for time-travel read queries.
             /// Write queries must keep their original source (e.g. File) to populate the store.
             if (isTimeTravelRead)
@@ -1115,7 +1219,10 @@ struct SystestBinder::Impl
 
         SystestQueryId lastParsedQueryId = INVALID_SYSTEST_QUERY_ID;
         parser.registerOnQueryCallback(
-            [&](const std::string& query, SystestQueryId currentQueryNumberInTest, bool sequentialExecution, bool replayable)
+            [&](const std::string& query,
+                SystestQueryId currentQueryNumberInTest,
+                bool sequentialExecution,
+                const std::optional<std::string>& replayableConfigLine)
             {
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
@@ -1129,7 +1236,7 @@ struct SystestBinder::Impl
                     currentQueryNumberInTest,
                     mergedConfigOverrides,
                     sequentialExecution,
-                    replayable);
+                    replayableConfigLine);
                 configOverrides = {ConfigurationOverride{}};
             });
 
