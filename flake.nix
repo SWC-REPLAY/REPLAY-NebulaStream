@@ -786,8 +786,27 @@
               ++ [
                 "-DCMAKE_PROJECT_INCLUDE=${devCmakePrelude}"
                 "-DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON"
+                "-DCMAKE_BUILD_RPATH=${runtimeLibraryPathCMake}"
               ]
               ++ cmakeCommonFlags combo;
+            allBuildInputs =
+                cmakeCtx.thirdPartyDeps
+                ++ [ mlirBinary ]
+                ++ sanitizer.extraPackages
+                ++ stdlib.extraPackages;
+            # Transitive runtime libraries needed by grpc, boost, etc.
+            # that are not direct buildInputs but are linked into binaries.
+            transitiveRuntimeDeps = [
+                pkgs.icu
+                pkgs.zlib.out
+                pkgs.c-ares
+                pkgs.openssl.out
+                pkgs.libuuid.lib
+            ];
+            runtimeLibraryPath = lib.makeLibraryPath (allBuildInputs ++ transitiveRuntimeDeps);
+            runtimeLibraryPathCMake = lib.concatStringsSep ";" (
+              lib.unique (map (dep: "${dep}/lib") (allBuildInputs ++ transitiveRuntimeDeps))
+            );
             envVars =
               sanitizer.extraEnv
               // stdlib.extraEnv
@@ -805,11 +824,7 @@
             // envVars
             // {
               name = "nebula-stream-${sanitizer.name}-${stdlib.name}";
-              buildInputs =
-                cmakeCtx.thirdPartyDeps
-                ++ [ mlirBinary ]
-                ++ sanitizer.extraPackages
-                ++ stdlib.extraPackages;
+              buildInputs = allBuildInputs;
               nativeBuildInputs = buildTools ++ llvmToolsVariant;
               packages = devTools;
               LLVM_TOOLCHAIN_VERSION = llvmToolchainVersion;
@@ -818,9 +833,7 @@
               cmakeFlags = cmakeFlagsList;
               shellHook = ''
                 unset NES_PREBUILT_VCPKG_ROOT
-                if [ -n "''${CMAKE_LIBRARY_PATH:-}" ]; then
-                  export LD_LIBRARY_PATH="''${CMAKE_LIBRARY_PATH}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-                fi
+                export LD_LIBRARY_PATH="${runtimeLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               '' + ccacheShellHook;
             }
           );
