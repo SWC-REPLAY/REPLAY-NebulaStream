@@ -23,7 +23,9 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <ErrorHandling.hpp>
+#include <TimeRange.hpp>
 #include <nameof.hpp>
 
 namespace NES::StoreManager
@@ -40,30 +42,36 @@ using Store = TypedStore<>;
 
 /// Concept defining the interface for all store types.
 template <typename T>
-concept StoreConcept
-    = requires(T& store, const T& constStore, TupleBuffer buffer, TupleBuffer& bufferRef, const Schema& schema, Store& self) {
-          { store.open() };
-          { store.close(self) };
-          { store.flush(self) };
+concept StoreConcept = requires(
+    T& store,
+    const T& constStore,
+    const uint8_t* recordData,
+    uint32_t recordSize,
+    TupleBuffer& bufferRef,
+    const Schema& schema,
+    Store& self) {
+    { store.open() };
+    { store.close(self) };
+    { store.flush(self) };
 
-          /// Write a TupleBuffer to the store
-          { store.write(std::move(buffer), schema, self) };
+    /// Write a single record to the store
+    { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), schema, self) } -> std::same_as<void>;
 
-          /// Read data into a TupleBuffer, return number of rows written
-          { store.read(bufferRef, schema) } -> std::convertible_to<uint64_t>;
+    /// Read data into a TupleBuffer within the given time range, return number of rows written
+    { store.read(bufferRef, schema, TimeRange{}) } -> std::convertible_to<uint64_t>;
 
-          /// Check if there is more data to read
-          { constStore.hasMore() } -> std::convertible_to<bool>;
+    /// Check if there is more data to read
+    { constStore.hasMore() } -> std::convertible_to<bool>;
 
-          /// Get the schema associated with this store
-          { constStore.getSchema() } -> std::convertible_to<Schema>;
+    /// Get the schema associated with this store
+    { constStore.getSchema() } -> std::convertible_to<Schema>;
 
-          /// Get the current size in bytes of stored data
-          { constStore.size() } -> std::convertible_to<uint64_t>;
+    /// Get the current size in bytes of stored data
+    { constStore.size() } -> std::convertible_to<uint64_t>;
 
-          /// Get a human-readable type name
-          { constStore.typeName() } noexcept -> std::convertible_to<std::string_view>;
-      };
+    /// Get a human-readable type name
+    { constStore.typeName() } noexcept -> std::convertible_to<std::string_view>;
+};
 
 namespace detail
 {
@@ -76,8 +84,8 @@ struct ErasedStore
     virtual void open() = 0;
     virtual void close(Store& self) = 0;
     virtual void flush(Store& self) = 0;
-    virtual void write(TupleBuffer buffer, const Schema& schema, Store& self) = 0;
-    [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema) = 0;
+    virtual void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self) = 0;
+    [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) = 0;
     [[nodiscard]] virtual bool hasMore() const = 0;
     [[nodiscard]] virtual Schema getSchema() const = 0;
     [[nodiscard]] virtual uint64_t size() const = 0;
@@ -102,9 +110,15 @@ struct StoreModel final : ErasedStore
 
     void flush(Store& self) override { impl.flush(self); }
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self) override { impl.write(std::move(buffer), schema, self); }
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self) override
+    {
+        impl.writeRecord(recordData, recordSize, ts, schema, self);
+    }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) override { return impl.read(buffer, schema); }
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) override
+    {
+        return impl.read(buffer, schema, range);
+    }
 
     [[nodiscard]] bool hasMore() const override { return impl.hasMore(); }
 
@@ -197,13 +211,16 @@ struct TypedStore
         self->flush(selfStore);
     }
 
-    void write(TupleBuffer buffer, const Schema& schema)
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema)
     {
         Store selfStore(self);
-        self->write(std::move(buffer), schema, selfStore);
+        self->writeRecord(recordData, recordSize, ts, schema, selfStore);
     }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) { return self->read(buffer, schema); }
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range)
+    {
+        return self->read(buffer, schema, range);
+    }
 
     [[nodiscard]] bool hasMore() const { return self->hasMore(); }
 

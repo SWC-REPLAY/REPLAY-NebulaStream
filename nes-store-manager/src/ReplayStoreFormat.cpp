@@ -30,13 +30,12 @@
 namespace NES::StoreManager
 {
 
-std::string serializeHeader(const std::string& schemaText)
+std::string serializeHeader(const std::string& schemaText, uint64_t minTs, uint64_t maxTs)
 {
     const uint64_t fingerprint = fnv1a64(schemaText.c_str(), schemaText.size());
     const auto schemaLen = static_cast<uint32_t>(schemaText.size());
 
-    const size_t headerSize
-        = MAGIC.size() + sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint32_t) + schemaLen;
+    const size_t headerSize = HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaLen;
     std::string buf;
     buf.resize(headerSize);
     size_t off = 0;
@@ -51,6 +50,10 @@ std::string serializeHeader(const std::string& schemaText)
     std::memcpy(buf.data() + off, &flags, sizeof(uint32_t));
     off += sizeof(uint32_t);
     std::memcpy(buf.data() + off, &fingerprint, sizeof(uint64_t));
+    off += sizeof(uint64_t);
+    std::memcpy(buf.data() + off, &minTs, sizeof(uint64_t));
+    off += sizeof(uint64_t);
+    std::memcpy(buf.data() + off, &maxTs, sizeof(uint64_t));
     off += sizeof(uint64_t);
     std::memcpy(buf.data() + off, &schemaLen, sizeof(uint32_t));
     off += sizeof(uint32_t);
@@ -74,6 +77,8 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
     ifs.read(reinterpret_cast<char*>(&header.endianness), sizeof(header.endianness));
     ifs.read(reinterpret_cast<char*>(&header.flags), sizeof(header.flags));
     ifs.read(reinterpret_cast<char*>(&header.fingerprint), sizeof(header.fingerprint));
+    ifs.read(reinterpret_cast<char*>(&header.minTs), sizeof(header.minTs));
+    ifs.read(reinterpret_cast<char*>(&header.maxTs), sizeof(header.maxTs));
     ifs.read(reinterpret_cast<char*>(&schemaLen), sizeof(schemaLen));
     if (!ifs)
     {
@@ -87,7 +92,7 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
         throw CannotOpenSink("Failed to read schema text from header");
     }
 
-    const uint64_t dataStartOffset = 8 + 4 + 1 + 4 + 8 + 4 + schemaLen;
+    const uint64_t dataStartOffset = HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaLen;
     return {header, dataStartOffset};
 }
 

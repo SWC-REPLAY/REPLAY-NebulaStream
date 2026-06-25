@@ -62,6 +62,12 @@ public:
     /// Get the byte offset where data begins (after the header).
     [[nodiscard]] uint64_t getDataStartOffset() const { return dataStartOffset; }
 
+    /// Get the minimum timestamp stored in this file.
+    [[nodiscard]] uint64_t getMinTs() const { return header.minTs; }
+
+    /// Get the maximum timestamp stored in this file.
+    [[nodiscard]] uint64_t getMaxTs() const { return header.maxTs; }
+
     /// Get the current stream position.
     [[nodiscard]] std::streampos getPosition();
 

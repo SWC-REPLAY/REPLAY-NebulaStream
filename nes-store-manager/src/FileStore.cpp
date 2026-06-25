@@ -20,6 +20,7 @@
 #include <ctime>
 #include <iomanip>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -33,6 +34,7 @@
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
 #include <StoreTypeRegistry.hpp>
+#include <TimeRange.hpp>
 
 namespace NES::StoreManager
 {
@@ -73,6 +75,8 @@ FileStore::~FileStore() = default;
 
 void FileStore::open()
 {
+    fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
+    fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
     writer.open();
     writer.ensureHeader();
     writerOpened = true;
@@ -110,38 +114,98 @@ void FileStore::flush([[maybe_unused]] Store& self)
     }
 }
 
-void FileStore::write(TupleBuffer buffer, const Schema& writeSchema, [[maybe_unused]] Store& self)
+void FileStore::writeRecord(
+    const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, [[maybe_unused]] Store& self)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
-
+    PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
     /// Update schema from the write-time schema which has resolved types
     if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
     {
         schema = writeSchema;
     }
 
-    const uint64_t numTuples = buffer.getNumberOfTuples();
-    if (numTuples == 0)
+    if (ts < fileMinTs)
     {
-        return;
+        fileMinTs = ts;
     }
+    if (ts > fileMaxTs)
+    {
+        fileMaxTs = ts;
+    }
+    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
 
-    const uint32_t rowWidth = calculateRowWidth(writeSchema);
-    auto srcSpan = buffer.getAvailableMemoryArea<uint8_t>();
-
-    /// The TupleBuffer row layout is packed (no padding), matching the binary file format.
-    /// We can write all rows as a contiguous block.
-    const size_t totalBytes = static_cast<size_t>(numTuples) * rowWidth;
-    NES_DEBUG("FileStore::write: {} tuples, rowWidth={}, totalBytes={}, file={}", numTuples, rowWidth, totalBytes, filePath);
-    writer.append(srcSpan.data(), totalBytes);
+    NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
+    writer.append(recordData, recordSize);
 }
 
-uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema)
+void FileStore::appendRawBytes(const uint8_t* data, const size_t len)
+{
+    PRECONDITION(writerOpened, "FileStore must be opened before writing");
+    writer.append(data, len);
+}
+
+void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxTs)
+{
+    PRECONDITION(
+        minTs.getRawValue() != Timestamp::INVALID_VALUE && maxTs.getRawValue() != Timestamp::INITIAL_VALUE,
+        "updating file timestamps requires valid timestamps!");
+    if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
+    {
+        fileMinTs = minTs;
+    }
+    if (maxTs.getRawValue() != Timestamp::INITIAL_VALUE && maxTs > fileMaxTs)
+    {
+        fileMaxTs = maxTs;
+    }
+    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
+}
+
+/// Compute the byte offset of a field within a row, using the packed binary layout.
+static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string& fieldName)
+{
+    uint32_t offset = 0;
+    for (size_t i = 0; i < schema.getNumberOfFields(); ++i)
+    {
+        const auto& field = schema.getFieldAt(i);
+        if (field.getUnqualifiedName() == fieldName)
+        {
+            return offset;
+        }
+        offset += field.dataType.isType(DataType::Type::VARSIZED) ? sizeof(uint32_t) : field.dataType.getSizeInBytesWithNull();
+    }
+    return std::nullopt;
+}
+
+/// Filter rows in a buffer in-place, keeping only rows whose timestamp field falls within the range.
+/// Returns the number of rows remaining.
+static uint64_t filterBufferRows(char* data, uint64_t numRows, uint32_t rowWidth, uint32_t tsFieldOffset, const TimeRange& range)
+{
+    uint64_t kept = 0;
+    for (uint64_t i = 0; i < numRows; ++i)
+    {
+        const char* rowPtr = data + (i * rowWidth);
+        uint64_t tsValue = 0;
+        /// Skip the 1-byte null indicator before the actual value
+        std::memcpy(&tsValue, rowPtr + tsFieldOffset + 1, sizeof(uint64_t));
+        if (range.contains(Timestamp(tsValue)))
+        {
+            if (kept != i)
+            {
+                std::memmove(data + (kept * rowWidth), rowPtr, rowWidth);
+            }
+            ++kept;
+        }
+    }
+    return kept;
+}
+
+uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
 {
     if (nextLevel)
     {
         NES_DEBUG("Checking if next level has data to be read");
-        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema); nextLevelRead == 0)
+        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range); nextLevelRead == 0)
         {
             return nextLevelRead;
         }
@@ -156,6 +220,20 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema)
         reader = std::make_unique<ReplayStoreReader>(filePath);
         reader->open();
         NES_DEBUG("FileStore::read: opened reader for file={}, dataStartOffset={}", filePath, reader->getDataStartOffset());
+
+        /// Skip entire file if its timestamp range falls outside the query range
+        if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
+        {
+            NES_DEBUG(
+                "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)",
+                filePath,
+                reader->getMinTs(),
+                reader->getMaxTs());
+            reader->close();
+            reader.reset();
+            buffer.setLastChunk(true);
+            return 0;
+        }
     }
 
     if (!reader->isEof())
@@ -165,8 +243,17 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema)
         const uint64_t capacity = buffer.getBufferSize() / tupleSize;
         char* dest = buffer.getAvailableMemoryArea<char>().data();
 
-        const uint64_t tuplesRead = reader->readRows(dest, capacity, tupleSize, readSchema);
+        uint64_t tuplesRead = reader->readRows(dest, capacity, tupleSize, readSchema);
         NES_DEBUG("FileStore::read: tuplesRead={}, tupleSize={}, capacity={}, file={}", tuplesRead, tupleSize, capacity, filePath);
+
+        /// Apply row-level filtering if a time range is specified
+        if (!range.isUnbounded() && tuplesRead > 0)
+        {
+            const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
+            PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
+            tuplesRead = filterBufferRows(dest, tuplesRead, tupleSize, *tsOffset, range);
+        }
+
         buffer.setNumberOfTuples(tuplesRead);
 
         if (tuplesRead > 0)
@@ -185,7 +272,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema)
     /// Own data exhausted — delegate to next level
     if (nextLevel)
     {
-        return nextLevel->read(buffer, readSchema);
+        return nextLevel->read(buffer, readSchema, range);
     }
 
     buffer.setLastChunk(true);

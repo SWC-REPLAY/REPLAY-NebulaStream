@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -22,10 +23,12 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <BinaryStoreWriter.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
+#include <TimeRange.hpp>
 
 namespace NES::StoreManager
 {
@@ -61,8 +64,14 @@ public:
     void close(Store& self);
     void flush(Store& self);
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& schema);
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self);
+
+    /// Bulk append raw bytes to the file (used by MemoryToFileTransformation).
+    void appendRawBytes(const uint8_t* data, size_t len);
+
+    /// Update the file header's min/max timestamps (used by MemoryToFileTransformation).
+    void updateFileTimestamps(Timestamp minTs, Timestamp maxTs);
+    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;
@@ -74,13 +83,15 @@ public:
 
     void removeFile();
 
-private:
     /// Calculate packed row width from schema (no padding, matching binary format).
     static uint32_t calculateRowWidth(const Schema& schema);
 
+private:
     Config config;
     Schema schema;
     std::string filePath;
+    Timestamp fileMinTs{Timestamp(Timestamp::INVALID_VALUE)};
+    Timestamp fileMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
     BinaryStoreWriter writer;
     std::unique_ptr<ReplayStoreReader> reader;
     bool writerOpened{false};
