@@ -97,13 +97,22 @@ void StoreRegistry::registerConfiguredStore(
     const bool hasMemoryStore = std::ranges::find(storeNames, "MemoryStore") != storeNames.end();
     const bool hasFileStore = std::ranges::find(storeNames, "FileStore") != storeNames.end();
 
+    const auto fileTotalSize = config.fileTotalSize.value_or(FileStore::Config{}.totalSize);
+    const auto fileSegmentSize = config.fileSegmentSize.value_or(FileStore::Config{}.segmentSize);
+
     if (hasMemoryStore && hasFileStore)
     {
         auto transformation = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
         PRECONDITION(transformation.has_value(), "No transformation registered for 'MemoryStore' -> 'FileStore'");
 
-        auto fileStore
-            = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+        auto fileStore = makeStore<FileStore>(
+            FileStore::Config{
+                .storeName = storeName,
+                .storeDir = storeDir,
+                .schemaText = schemaText,
+                .totalSize = fileTotalSize,
+                .segmentSize = fileSegmentSize},
+            schema);
 
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
@@ -121,8 +130,14 @@ void StoreRegistry::registerConfiguredStore(
     }
     else if (hasFileStore)
     {
-        auto headStore
-            = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+        auto headStore = makeStore<FileStore>(
+            FileStore::Config{
+                .storeName = storeName,
+                .storeDir = storeDir,
+                .schemaText = schemaText,
+                .totalSize = fileTotalSize,
+                .segmentSize = fileSegmentSize},
+            schema);
         stores.emplace(storeName, headStore);
     }
 }

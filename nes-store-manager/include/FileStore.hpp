@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -35,8 +36,10 @@ namespace NES::StoreManager
 
 class ReplayStoreReader;
 
-/// File-backed store wrapping BinaryStoreWriter/ReplayStoreReader. Satisfies StoreConcept.
-/// Optionally chains to a next-level store with a flush policy and transformation.
+/// File-backed store with pre-allocated segmented storage.
+/// Each segment tracks its own min/max timestamps for efficient time-range skipping.
+/// Wraps around circularly when all segments are full.
+/// Satisfies StoreConcept. Optionally chains to a next-level store.
 class FileStore
 {
 public:
@@ -45,6 +48,8 @@ public:
         std::string storeName;
         std::string storeDir;
         std::string schemaText;
+        size_t totalSize = 1 * 1024 * 1024; /// Total pre-allocated size for data (default 1MB)
+        size_t segmentSize = 64 * 1024; /// Size per segment (default 64KB)
     };
 
     /// Standalone constructor (no chaining).
@@ -66,10 +71,10 @@ public:
 
     void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self);
 
-    /// Bulk append raw bytes to the file (used by MemoryToFileTransformation).
+    /// Bulk append raw bytes (used by MemoryToFileTransformation).
     void appendRawBytes(const uint8_t* data, size_t len);
 
-    /// Update the file header's min/max timestamps (used by MemoryToFileTransformation).
+    /// Update timestamps for the active segment (used by MemoryToFileTransformation).
     void updateFileTimestamps(Timestamp minTs, Timestamp maxTs);
     uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
@@ -90,11 +95,13 @@ private:
     Config config;
     Schema schema;
     std::string filePath;
-    Timestamp fileMinTs{Timestamp(Timestamp::INVALID_VALUE)};
-    Timestamp fileMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
     BinaryStoreWriter writer;
     std::unique_ptr<ReplayStoreReader> reader;
     bool writerOpened{false};
+
+    /// Segment read state: ordered list of segment indices to read, and current position.
+    std::vector<uint32_t> readSegmentOrder;
+    size_t readSegmentPos{0};
 
     /// Chaining support (all optional — empty for standalone/tail stores).
     std::optional<Store> nextLevel;

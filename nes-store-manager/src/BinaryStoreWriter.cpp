@@ -14,7 +14,6 @@
 
 #include <BinaryStoreWriter.hpp>
 
-#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -34,6 +33,11 @@ namespace NES::StoreManager
 
 BinaryStoreWriter::BinaryStoreWriter(Config cfg) : config(std::move(cfg))
 {
+    PRECONDITION(config.segmentSize > 0, "segmentSize must be > 0");
+    PRECONDITION(config.totalSize >= config.segmentSize, "totalSize must be >= segmentSize");
+    segmentCount = static_cast<uint32_t>(config.totalSize / config.segmentSize);
+    PRECONDITION(segmentCount > 0, "Must have at least one segment");
+    segments.resize(segmentCount);
 }
 
 BinaryStoreWriter::~BinaryStoreWriter()
@@ -47,33 +51,52 @@ BinaryStoreWriter::~BinaryStoreWriter()
 
 void BinaryStoreWriter::open()
 {
-    constexpr int flags = O_CREAT | O_WRONLY;
+    constexpr int flags = O_CREAT | O_RDWR;
     const std::string& filePath = config.filePath;
     fd = ::open(filePath.c_str(), flags, 0644);
     if (fd < 0)
     {
         throw CannotOpenSink("Could not open output file: {} (errno={}, msg={})", filePath, errno, std::strerror(errno));
     }
-    struct stat st{};
-    if (::fstat(fd, &st) != 0)
+
+    /// Write the segmented header
+    auto headerBuf = serializeSegmentedHeader(config.schemaText, config.segmentSize, segmentCount);
+
+    segmentTableStart = segmentTableOffset(config.schemaText.size());
+    dataAreaStart = segmentDataAreaOffset(config.schemaText.size(), segmentCount);
+
+    const ssize_t written = ::pwrite(fd, headerBuf.data(), headerBuf.size(), 0);
+    if (written < 0 || static_cast<size_t>(written) != headerBuf.size())
     {
-        const int err = errno;
         ::close(fd);
         fd = -1;
-        throw CannotOpenSink("fstat failed for {}: errno={}, msg={}", filePath, err, std::strerror(err));
+        throw CannotOpenSink("Writing segmented header failed: errno={} {}", errno, std::strerror(errno));
     }
-    tail.store(static_cast<uint64_t>(st.st_size), std::memory_order_relaxed);
-    headerWritten.store(st.st_size > 0, std::memory_order_relaxed);
+
+    /// Pre-allocate the full file: header + segment data areas
+    const size_t totalFileSize = dataAreaStart + (static_cast<size_t>(segmentCount) * config.segmentSize);
+    if (::ftruncate(fd, static_cast<off_t>(totalFileSize)) != 0)
+    {
+        ::close(fd);
+        fd = -1;
+        throw CannotOpenSink("ftruncate failed: errno={} {}", errno, std::strerror(errno));
+    }
+
+    activeSegmentIndex = 0;
+    wrapCount = 0;
+    opened = true;
 }
 
 void BinaryStoreWriter::close()
 {
     if (fd >= 0)
     {
+        flushSegmentState();
         ::fsync(fd);
         ::close(fd);
         fd = -1;
     }
+    opened = false;
 }
 
 void BinaryStoreWriter::removeFile()
@@ -84,52 +107,79 @@ void BinaryStoreWriter::removeFile()
     INVARIANT(ec == 0, "Could not remove file: {}", ec);
 }
 
-void BinaryStoreWriter::ensureHeader()
+uint32_t BinaryStoreWriter::append(const uint8_t* data, size_t len, uint64_t timestamp)
 {
-    bool expected = false;
-    if (!headerWritten.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    PRECONDITION(opened, "BinaryStoreWriter must be opened before writing");
+    PRECONDITION(len <= config.segmentSize, "Record size {} exceeds segment size {}", len, config.segmentSize);
+
+    /// Check if the record fits in the active segment
+    auto& seg = segments[activeSegmentIndex];
+    if (seg.usedBytes + len > config.segmentSize)
     {
-        return;
+        advanceSegment();
     }
 
-    if (tail.load(std::memory_order_relaxed) > 0)
-    {
-        return;
-    }
+    auto& activeSeg = segments[activeSegmentIndex];
+    const size_t offset = segmentDataOffset(dataAreaStart, activeSegmentIndex, config.segmentSize) + activeSeg.usedBytes;
 
-    auto buf = serializeHeader(config.schemaText);
-
-    const uint64_t off = tail.fetch_add(buf.size(), std::memory_order_relaxed);
-    if (off != 0)
-    {
-        return; /// another writer raced
-    }
-    const ssize_t written = ::pwrite(fd, buf.data(), buf.size(), 0);
-    if (written < 0 || static_cast<size_t>(written) != buf.size())
-    {
-        throw CannotOpenSink("Writing store header failed: errno={} {}", errno, std::strerror(errno));
-    }
-}
-
-void BinaryStoreWriter::append(const uint8_t* data, size_t len)
-{
-    if (len == 0)
-    {
-        return;
-    }
-    if (fd < 0)
-    {
-        throw CannotOpenSink("ReplayStoreWriter not started; fd is invalid");
-    }
-    const uint64_t off = tail.fetch_add(len, std::memory_order_relaxed);
-    const ssize_t written = ::pwrite(fd, data, len, static_cast<off_t>(off));
+    const ssize_t written = ::pwrite(fd, data, len, static_cast<off_t>(offset));
     if (written < 0 || static_cast<size_t>(written) != len)
     {
         throw CannotOpenSink("pwrite failed: errno={} {}", errno, std::strerror(errno));
     }
+
+    activeSeg.usedBytes += len;
+
+    /// Update segment timestamps
+    if (timestamp < activeSeg.minTs)
+    {
+        activeSeg.minTs = timestamp;
+    }
+    if (timestamp > activeSeg.maxTs)
+    {
+        activeSeg.maxTs = timestamp;
+    }
+
+    flushSegmentDescriptor(activeSegmentIndex);
+
+    return activeSegmentIndex;
 }
 
-void BinaryStoreWriter::updateTimestamps(uint64_t minTs, uint64_t maxTs) const
+void BinaryStoreWriter::appendRaw(const uint8_t* data, size_t len)
+{
+    PRECONDITION(opened, "BinaryStoreWriter must be opened before writing");
+
+    size_t remaining = len;
+    const uint8_t* ptr = data;
+
+    while (remaining > 0)
+    {
+        auto& seg = segments[activeSegmentIndex];
+        const size_t available = config.segmentSize - seg.usedBytes;
+        if (available == 0)
+        {
+            advanceSegment();
+            continue;
+        }
+
+        const size_t toWrite = std::min(remaining, available);
+        const size_t offset = segmentDataOffset(dataAreaStart, activeSegmentIndex, config.segmentSize) + seg.usedBytes;
+
+        const ssize_t written = ::pwrite(fd, ptr, toWrite, static_cast<off_t>(offset));
+        if (written < 0 || static_cast<size_t>(written) != toWrite)
+        {
+            throw CannotOpenSink("pwrite failed: errno={} {}", errno, std::strerror(errno));
+        }
+
+        seg.usedBytes += toWrite;
+        flushSegmentDescriptor(activeSegmentIndex);
+
+        ptr += toWrite;
+        remaining -= toWrite;
+    }
+}
+
+void BinaryStoreWriter::updateFileTimestamps(uint64_t minTs, uint64_t maxTs) const
 {
     if (fd < 0)
     {
@@ -144,6 +194,91 @@ void BinaryStoreWriter::updateTimestamps(uint64_t minTs, uint64_t maxTs) const
     if (written < 0 || static_cast<size_t>(written) != sizeof(uint64_t))
     {
         throw CannotOpenSink("Failed to update maxTs in header: errno={} {}", errno, std::strerror(errno));
+    }
+}
+
+void BinaryStoreWriter::updateSegmentTimestamps(uint32_t segmentIndex, uint64_t minTs, uint64_t maxTs)
+{
+    PRECONDITION(segmentIndex < segmentCount, "Segment index out of range");
+    auto& seg = segments[segmentIndex];
+    if (minTs < seg.minTs)
+    {
+        seg.minTs = minTs;
+    }
+    if (maxTs > seg.maxTs)
+    {
+        seg.maxTs = maxTs;
+    }
+    flushSegmentDescriptor(segmentIndex);
+}
+
+uint64_t BinaryStoreWriter::size() const
+{
+    uint64_t total = 0;
+    for (const auto& seg : segments)
+    {
+        total += seg.usedBytes;
+    }
+    return total;
+}
+
+void BinaryStoreWriter::advanceSegment()
+{
+    uint32_t nextIndex = (activeSegmentIndex + 1) % segmentCount;
+    if (nextIndex == 0)
+    {
+        ++wrapCount;
+    }
+
+    /// Reset the segment we're about to overwrite
+    segments[nextIndex].usedBytes = 0;
+    segments[nextIndex].minTs = UINT64_MAX;
+    segments[nextIndex].maxTs = 0;
+    flushSegmentDescriptor(nextIndex);
+
+    activeSegmentIndex = nextIndex;
+    flushSegmentState();
+}
+
+void BinaryStoreWriter::flushSegmentDescriptor(uint32_t segmentIndex) const
+{
+    if (fd < 0)
+    {
+        return;
+    }
+    const size_t offset = segmentTableStart + (static_cast<size_t>(segmentIndex) * SEGMENT_DESCRIPTOR_BYTES);
+    const auto& seg = segments[segmentIndex];
+
+    /// Write usedBytes, minTs, maxTs as a contiguous 24-byte block
+    uint8_t buf[SEGMENT_DESCRIPTOR_BYTES];
+    std::memcpy(buf, &seg.usedBytes, sizeof(uint64_t));
+    std::memcpy(buf + 8, &seg.minTs, sizeof(uint64_t));
+    std::memcpy(buf + 16, &seg.maxTs, sizeof(uint64_t));
+
+    const ssize_t written = ::pwrite(fd, buf, SEGMENT_DESCRIPTOR_BYTES, static_cast<off_t>(offset));
+    if (written < 0 || static_cast<size_t>(written) != SEGMENT_DESCRIPTOR_BYTES)
+    {
+        throw CannotOpenSink("Failed to flush segment descriptor: errno={} {}", errno, std::strerror(errno));
+    }
+}
+
+void BinaryStoreWriter::flushSegmentState() const
+{
+    if (fd < 0)
+    {
+        return;
+    }
+    /// activeSegmentIndex and wrapCount are stored right after schema text and segmentSize + segmentCount
+    const size_t offset = HEADER_FIXED_BYTES + sizeof(uint32_t) + config.schemaText.size() + sizeof(uint64_t) + sizeof(uint32_t);
+
+    uint8_t buf[sizeof(uint32_t) + sizeof(uint32_t)];
+    std::memcpy(buf, &activeSegmentIndex, sizeof(uint32_t));
+    std::memcpy(buf + sizeof(uint32_t), &wrapCount, sizeof(uint32_t));
+
+    const ssize_t written = ::pwrite(fd, buf, sizeof(buf), static_cast<off_t>(offset));
+    if (written < 0 || static_cast<size_t>(written) != sizeof(buf))
+    {
+        throw CannotOpenSink("Failed to flush segment state: errno={} {}", errno, std::strerror(errno));
     }
 }
 

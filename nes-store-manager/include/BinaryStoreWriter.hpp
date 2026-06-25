@@ -18,10 +18,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include <ReplayStoreFormat.hpp>
 
 namespace NES::StoreManager
 {
-/// POSIX-based binary file writer for the Replay store format.
+/// POSIX-based binary file writer for the segmented Replay store format.
+/// Pre-allocates a fixed file size partitioned into segments, each with its own min/max timestamps.
+/// Wraps around circularly when all segments are full.
 class BinaryStoreWriter
 {
 public:
@@ -30,6 +35,8 @@ public:
         std::string storeName;
         std::string filePath;
         std::string schemaText;
+        size_t totalSize = 1 * 1024 * 1024; /// Total pre-allocated size for segment data (default 1MB)
+        size_t segmentSize = 64 * 1024; /// Size of each segment (default 64KB)
     };
 
     explicit BinaryStoreWriter(Config cfg);
@@ -40,7 +47,7 @@ public:
     BinaryStoreWriter(BinaryStoreWriter&&) = delete;
     BinaryStoreWriter& operator=(BinaryStoreWriter&&) = delete;
 
-    /// Open the file for writing. Initializes the tail offset from current file size.
+    /// Open the file, write the segmented header, and pre-allocate the full file.
     void open();
 
     /// Fsync and close the file descriptor.
@@ -49,25 +56,53 @@ public:
     /// Remove the backing file from disk.
     void removeFile();
 
-    /// Thread-safe: write the file header exactly once (if file is empty and writeHeader is enabled).
-    void ensureHeader();
+    /// Append a record to the active segment. Advances to the next segment (circular) if needed.
+    /// Returns the segment index the record was written to.
+    uint32_t append(const uint8_t* data, size_t len, uint64_t timestamp);
 
-    /// Append a contiguous buffer using atomic offset reservation and pwrite.
-    void append(const uint8_t* data, size_t len);
+    /// Append raw bytes to the active segment without timestamp tracking.
+    /// Used by MemoryToFileTransformation for bulk writes.
+    void appendRaw(const uint8_t* data, size_t len);
 
-    /// Update the min/max timestamps in the file header using pwrite to fixed offsets.
-    void updateTimestamps(uint64_t minTs, uint64_t maxTs) const;
+    /// Update the overall file-level min/max timestamps in the header.
+    void updateFileTimestamps(uint64_t minTs, uint64_t maxTs) const;
+
+    /// Update a specific segment's min/max timestamps and usedBytes in the segment table.
+    void updateSegmentTimestamps(uint32_t segmentIndex, uint64_t minTs, uint64_t maxTs);
 
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }
 
-    [[nodiscard]] uint64_t size() const { return tail.load(std::memory_order_relaxed); }
+    /// Total bytes of data written across all segments (approximate, for size() reporting).
+    [[nodiscard]] uint64_t size() const;
+
+    [[nodiscard]] uint32_t getSegmentCount() const { return segmentCount; }
+    [[nodiscard]] uint64_t getSegmentSize() const { return config.segmentSize; }
+    [[nodiscard]] uint32_t getActiveSegmentIndex() const { return activeSegmentIndex; }
+    [[nodiscard]] uint32_t getWrapCount() const { return wrapCount; }
+    [[nodiscard]] const std::vector<SegmentDescriptor>& getSegments() const { return segments; }
+
+    /// Get the file offset where segment data areas begin.
+    [[nodiscard]] size_t getDataAreaStart() const { return dataAreaStart; }
 
 private:
+    /// Advance to the next segment, wrapping around if necessary. Resets the new segment's descriptor.
+    void advanceSegment();
+
+    /// Write the segment table entry for a given segment index to the file.
+    void flushSegmentDescriptor(uint32_t segmentIndex) const;
+
+    /// Write the activeSegmentIndex and wrapCount fields in the header.
+    void flushSegmentState() const;
+
     int fd{-1};
-    std::atomic<uint64_t> tail{0};
-    std::atomic<bool> headerWritten{false};
     Config config;
-    uint64_t writesSinceSync{0};
+    uint32_t segmentCount{0};
+    uint32_t activeSegmentIndex{0};
+    uint32_t wrapCount{0};
+    size_t dataAreaStart{0}; /// File offset where segment data begins
+    size_t segmentTableStart{0}; /// File offset where segment table begins
+    std::vector<SegmentDescriptor> segments;
+    bool opened{false};
 };
 
 }

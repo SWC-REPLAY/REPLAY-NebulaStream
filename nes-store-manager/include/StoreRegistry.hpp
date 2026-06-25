@@ -32,6 +32,8 @@ struct StoreConfig
 {
     std::optional<size_t> memoryBufferSize;
     std::optional<std::string> storeOrder;
+    std::optional<size_t> fileTotalSize; /// Total pre-allocated file size for segments
+    std::optional<size_t> fileSegmentSize; /// Size per segment
 };
 
 /// Manages named store instances, allowing concurrent TIME_TRAVEL queries to each use their own store.

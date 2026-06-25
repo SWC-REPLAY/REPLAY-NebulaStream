@@ -56,7 +56,12 @@ FileStore::FileStore(Config config, const Schema& schema)
     : config(std::move(config))
     , schema(schema)
     , filePath(generateFilePath(this->config))
-    , writer(BinaryStoreWriter::Config{.storeName = this->config.storeName, .filePath = filePath, .schemaText = this->config.schemaText})
+    , writer(BinaryStoreWriter::Config{
+          .storeName = this->config.storeName,
+          .filePath = filePath,
+          .schemaText = this->config.schemaText,
+          .totalSize = this->config.totalSize,
+          .segmentSize = this->config.segmentSize})
 {
 }
 
@@ -64,7 +69,12 @@ FileStore::FileStore(Config config, const Schema& schema, Store nextLevel, Store
     : config(std::move(config))
     , schema(schema)
     , filePath(generateFilePath(this->config))
-    , writer(BinaryStoreWriter::Config{.storeName = this->config.storeName, .filePath = filePath, .schemaText = this->config.schemaText})
+    , writer(BinaryStoreWriter::Config{
+          .storeName = this->config.storeName,
+          .filePath = filePath,
+          .schemaText = this->config.schemaText,
+          .totalSize = this->config.totalSize,
+          .segmentSize = this->config.segmentSize})
     , nextLevel(std::move(nextLevel))
     , transformation(std::move(transformation))
     , flushPolicy(policy)
@@ -75,10 +85,7 @@ FileStore::~FileStore() = default;
 
 void FileStore::open()
 {
-    fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
-    fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
     writer.open();
-    writer.ensureHeader();
     writerOpened = true;
     if (nextLevel)
     {
@@ -106,8 +113,6 @@ void FileStore::close([[maybe_unused]] Store& self)
 
 void FileStore::flush([[maybe_unused]] Store& self)
 {
-    /// BinaryStoreWriter uses pwrite which is immediately durable after fsync.
-    /// A full flush is performed on close().
     if (nextLevel)
     {
         nextLevel->flush();
@@ -125,24 +130,14 @@ void FileStore::writeRecord(
         schema = writeSchema;
     }
 
-    if (ts < fileMinTs)
-    {
-        fileMinTs = ts;
-    }
-    if (ts > fileMaxTs)
-    {
-        fileMaxTs = ts;
-    }
-    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
-
     NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
-    writer.append(recordData, recordSize);
+    writer.append(recordData, recordSize, ts.getRawValue());
 }
 
 void FileStore::appendRawBytes(const uint8_t* data, const size_t len)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
-    writer.append(data, len);
+    writer.appendRaw(data, len);
 }
 
 void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxTs)
@@ -150,15 +145,12 @@ void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxT
     PRECONDITION(
         minTs.getRawValue() != Timestamp::INVALID_VALUE && maxTs.getRawValue() != Timestamp::INITIAL_VALUE,
         "updating file timestamps requires valid timestamps!");
-    if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
-    {
-        fileMinTs = minTs;
-    }
-    if (maxTs.getRawValue() != Timestamp::INITIAL_VALUE && maxTs > fileMaxTs)
-    {
-        fileMaxTs = maxTs;
-    }
-    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
+
+    /// Update the active segment's timestamps
+    writer.updateSegmentTimestamps(writer.getActiveSegmentIndex(), minTs.getRawValue(), maxTs.getRawValue());
+
+    /// Also update file-level timestamps
+    writer.updateFileTimestamps(minTs.getRawValue(), maxTs.getRawValue());
 }
 
 /// Compute the byte offset of a field within a row, using the packed binary layout.
@@ -178,7 +170,6 @@ static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::
 }
 
 /// Filter rows in a buffer in-place, keeping only rows whose timestamp field falls within the range.
-/// Returns the number of rows remaining.
 static uint64_t filterBufferRows(char* data, uint64_t numRows, uint32_t rowWidth, uint32_t tsFieldOffset, const TimeRange& range)
 {
     uint64_t kept = 0;
@@ -220,51 +211,122 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         reader = std::make_unique<ReplayStoreReader>(filePath);
         reader->open();
         NES_DEBUG("FileStore::read: opened reader for file={}, dataStartOffset={}", filePath, reader->getDataStartOffset());
-    }
-    else
-    {
-        /// Reset reader to beginning of data so repeated reads are independent
-        reader->clearErrors();
-        reader->seekTo(static_cast<std::streampos>(reader->getDataStartOffset()));
-    }
 
-    /// Skip entire file if its timestamp range falls outside the query range
-    if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
-    {
-        NES_DEBUG(
-            "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)", filePath, reader->getMinTs(), reader->getMaxTs());
-        return 0;
+        if (reader->isSegmented())
+        {
+            /// Build segment read order (oldest to newest, filtered by time range)
+            readSegmentOrder = reader->getSegmentReadOrder(range);
+            readSegmentPos = 0;
+            NES_DEBUG("FileStore::read: {} segments to read", readSegmentOrder.size());
+
+            if (readSegmentOrder.empty())
+            {
+                NES_DEBUG("FileStore::read: no segments match time range, skipping file");
+                reader->close();
+                reader.reset();
+                buffer.setLastChunk(true);
+                return 0;
+            }
+        }
+        else
+        {
+            /// Legacy v1 file: check file-level timestamps
+            if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
+            {
+                NES_DEBUG(
+                    "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)",
+                    filePath,
+                    reader->getMinTs(),
+                    reader->getMaxTs());
+                reader->close();
+                reader.reset();
+                buffer.setLastChunk(true);
+                return 0;
+            }
+        }
     }
 
     const uint32_t tupleSize = calculateRowWidth(readSchema);
     PRECONDITION(tupleSize > 0, "Schema must have at least one field to compute row width");
     const uint64_t capacity = buffer.getBufferSize() / tupleSize;
     char* dest = buffer.getAvailableMemoryArea<char>().data();
-    uint64_t totalTuples = 0;
 
-    while (!reader->isEof() && totalTuples < capacity)
+    if (reader->isSegmented())
     {
-        uint64_t tuplesRead = reader->readRows(dest + (totalTuples * tupleSize), capacity - totalTuples, tupleSize, readSchema);
-        NES_DEBUG("FileStore::read: tuplesRead={}, tupleSize={}, capacity={}, file={}", tuplesRead, tupleSize, capacity, filePath);
-
-        if (tuplesRead == 0)
+        /// Segment-aware reading: read from segments in order
+        while (readSegmentPos < readSegmentOrder.size())
         {
-            break;
+            const uint32_t segIdx = readSegmentOrder[readSegmentPos];
+            uint64_t tuplesRead = reader->readSegmentRows(segIdx, dest, capacity, tupleSize, readSchema);
+
+            NES_DEBUG(
+                "FileStore::read: segment {}, tuplesRead={}, tupleSize={}, capacity={}", segIdx, tuplesRead, tupleSize, capacity);
+
+            /// Apply row-level filtering if a time range is specified
+            if (!range.isUnbounded() && tuplesRead > 0)
+            {
+                const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
+                PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
+                tuplesRead = filterBufferRows(dest, tuplesRead, tupleSize, *tsOffset, range);
+            }
+
+            ++readSegmentPos;
+
+            if (tuplesRead > 0)
+            {
+                buffer.setNumberOfTuples(tuplesRead);
+                if (readSegmentPos >= readSegmentOrder.size() && !nextLevel)
+                {
+                    buffer.setLastChunk(true);
+                }
+                return tuplesRead;
+            }
+            /// If this segment yielded no rows after filtering, continue to next segment
         }
 
-        /// Apply row-level filtering if a time range is specified
-        if (!range.isUnbounded())
+        /// All segments exhausted
+        NES_DEBUG("FileStore::read: all segments exhausted, file={}", filePath);
+    }
+    else
+    {
+        /// Legacy v1 reading path
+        if (!reader->isEof())
         {
-            const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
-            PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
-            tuplesRead = filterBufferRows(dest + (totalTuples * tupleSize), tuplesRead, tupleSize, *tsOffset, range);
+            uint64_t tuplesRead = reader->readRows(dest, capacity, tupleSize, readSchema);
+            NES_DEBUG(
+                "FileStore::read: tuplesRead={}, tupleSize={}, capacity={}, file={}", tuplesRead, tupleSize, capacity, filePath);
+
+            if (!range.isUnbounded() && tuplesRead > 0)
+            {
+                const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
+                PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
+                tuplesRead = filterBufferRows(dest, tuplesRead, tupleSize, *tsOffset, range);
+            }
+
+            buffer.setNumberOfTuples(tuplesRead);
+
+            if (tuplesRead > 0)
+            {
+                const bool atEof = reader->isEof() || reader->peek() == std::char_traits<char>::eof();
+                if (atEof && !nextLevel)
+                {
+                    buffer.setLastChunk(true);
+                }
+                return tuplesRead;
+            }
         }
 
-        totalTuples += tuplesRead;
+        NES_DEBUG("FileStore::read: own data exhausted, file={}", filePath);
     }
 
-    buffer.setNumberOfTuples(totalTuples);
-    return totalTuples;
+    /// Own data exhausted — delegate to next level
+    if (nextLevel)
+    {
+        return nextLevel->read(buffer, readSchema, range);
+    }
+
+    buffer.setLastChunk(true);
+    return 0;
 }
 
 bool FileStore::hasMore() const
@@ -273,11 +335,17 @@ bool FileStore::hasMore() const
     {
         return true; /// Haven't started reading yet, assume data exists
     }
-    if (!reader->isEof())
+    if (reader->isSegmented())
+    {
+        if (readSegmentPos < readSegmentOrder.size())
+        {
+            return true;
+        }
+    }
+    else if (!reader->isEof())
     {
         return true;
     }
-    /// Own data exhausted — check next level
     if (nextLevel)
     {
         return nextLevel->hasMore();

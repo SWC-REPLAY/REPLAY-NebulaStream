@@ -55,7 +55,17 @@ void ReplayStoreReader::open()
     header = std::move(parsedHeader);
     dataStartOffset = offset;
     opened = true;
-    NES_DEBUG("ReplayStoreReader: dataStartOffset={}", dataStartOffset);
+    NES_DEBUG("ReplayStoreReader: dataStartOffset={}, version={}, segmented={}", dataStartOffset, header.version, isSegmented());
+
+    if (isSegmented())
+    {
+        NES_DEBUG(
+            "ReplayStoreReader: segmentCount={}, segmentSize={}, activeSegmentIndex={}, wrapCount={}",
+            header.segmentCount,
+            header.segmentSize,
+            header.activeSegmentIndex,
+            header.wrapCount);
+    }
 }
 
 void ReplayStoreReader::close()
@@ -187,6 +197,77 @@ uint64_t ReplayStoreReader::readRows(char* dest, uint64_t maxRows, uint32_t tupl
 
     totalBytesRead += tuplesRead * currentOffset;
     return tuplesRead;
+}
+
+std::vector<uint32_t> ReplayStoreReader::getSegmentReadOrder(const TimeRange& range) const
+{
+    PRECONDITION(isSegmented(), "getSegmentReadOrder requires a segmented file");
+
+    std::vector<uint32_t> order;
+    order.reserve(header.segmentCount);
+
+    /// Determine the oldest segment. If we've wrapped, oldest is (activeSegmentIndex + 1) % count.
+    /// If no wrapping, oldest is 0.
+    uint32_t startIndex = 0;
+    if (header.wrapCount > 0)
+    {
+        startIndex = (header.activeSegmentIndex + 1) % header.segmentCount;
+    }
+
+    for (uint32_t i = 0; i < header.segmentCount; ++i)
+    {
+        uint32_t idx = (startIndex + i) % header.segmentCount;
+        const auto& seg = header.segments[idx];
+
+        /// Skip empty segments
+        if (seg.usedBytes == 0)
+        {
+            continue;
+        }
+
+        /// Skip segments outside the time range
+        if (!range.isUnbounded() && !range.overlaps(Timestamp(seg.minTs), Timestamp(seg.maxTs)))
+        {
+            NES_DEBUG("ReplayStoreReader: skipping segment {} (ts [{}, {}] outside range)", idx, seg.minTs, seg.maxTs);
+            continue;
+        }
+
+        order.push_back(idx);
+    }
+
+    return order;
+}
+
+void ReplayStoreReader::seekToSegment(uint32_t segmentIndex)
+{
+    PRECONDITION(isSegmented(), "seekToSegment requires a segmented file");
+    PRECONDITION(segmentIndex < header.segmentCount, "Segment index out of range");
+
+    const size_t offset = segmentDataOffset(dataStartOffset, segmentIndex, header.segmentSize);
+    inputFile.clear();
+    inputFile.seekg(static_cast<std::streamoff>(offset));
+}
+
+uint64_t ReplayStoreReader::readSegmentRows(
+    uint32_t segmentIndex, char* dest, uint64_t maxRows, uint32_t tupleSize, const Schema& schema)
+{
+    PRECONDITION(isSegmented(), "readSegmentRows requires a segmented file");
+    PRECONDITION(segmentIndex < header.segmentCount, "Segment index out of range");
+
+    const auto& seg = header.segments[segmentIndex];
+    if (seg.usedBytes == 0 || tupleSize == 0)
+    {
+        return 0;
+    }
+
+    /// Compute how many rows this segment contains
+    const uint64_t segmentRows = seg.usedBytes / tupleSize;
+    const uint64_t rowsToRead = std::min(maxRows, segmentRows);
+
+    /// Seek to the start of this segment's data
+    seekToSegment(segmentIndex);
+
+    return readRows(dest, rowsToRead, tupleSize, schema);
 }
 
 bool ReplayStoreReader::isEof() const
