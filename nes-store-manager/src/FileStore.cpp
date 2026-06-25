@@ -130,13 +130,15 @@ void FileStore::writeRecord(
         schema = writeSchema;
     }
 
-    NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
+    NES_INFO("FileStore::writeRecord: recordSize={}, ts={}, file={}, activeSegment={}", recordSize, ts, filePath, writer.getActiveSegmentIndex());
     writer.append(recordData, recordSize, ts.getRawValue());
 }
 
 void FileStore::appendRawBytes(const uint8_t* data, const size_t len)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
+    NES_INFO("FileStore::appendRawBytes: len={}, activeSegment={}, usedBytes={}", len, writer.getActiveSegmentIndex(),
+        writer.getSegments()[writer.getActiveSegmentIndex()].usedBytes);
     writer.appendRaw(data, len);
 }
 
@@ -147,6 +149,7 @@ void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxT
         "updating file timestamps requires valid timestamps!");
 
     /// Update the active segment's timestamps
+    NES_INFO("FileStore::updateFileTimestamps: minTs={}, maxTs={}, activeSegment={}", minTs, maxTs, writer.getActiveSegmentIndex());
     writer.updateSegmentTimestamps(writer.getActiveSegmentIndex(), minTs.getRawValue(), maxTs.getRawValue());
 
     /// Also update file-level timestamps
@@ -217,7 +220,14 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
             /// Build segment read order (oldest to newest, filtered by time range)
             readSegmentOrder = reader->getSegmentReadOrder(range);
             readSegmentPos = 0;
-            NES_DEBUG("FileStore::read: {} segments to read", readSegmentOrder.size());
+            NES_INFO("FileStore::read: {} segments to read out of {}, segmentSize={}, activeIdx={}, wrapCount={}",
+                readSegmentOrder.size(), reader->getSegmentCount(), reader->getSegmentSize(),
+                reader->getActiveSegmentIndex(), reader->getWrapCount());
+            for (uint32_t i = 0; i < reader->getSegmentCount() && i < 5; ++i)
+            {
+                const auto& seg = reader->getSegments()[i];
+                NES_INFO("FileStore::read: segment[{}] usedBytes={} minTs={} maxTs={}", i, seg.usedBytes, seg.minTs, seg.maxTs);
+            }
 
             if (readSegmentOrder.empty())
             {
@@ -259,7 +269,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
             const uint32_t segIdx = readSegmentOrder[readSegmentPos];
             uint64_t tuplesRead = reader->readSegmentRows(segIdx, dest, capacity, tupleSize, readSchema);
 
-            NES_DEBUG(
+            NES_INFO(
                 "FileStore::read: segment {}, tuplesRead={}, tupleSize={}, capacity={}", segIdx, tuplesRead, tupleSize, capacity);
 
             /// Apply row-level filtering if a time range is specified
