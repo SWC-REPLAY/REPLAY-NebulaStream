@@ -101,7 +101,7 @@ TEST_F(SystestParserTest, testCallbackQuery)
     std::vector<std::string> receivedResultTuples;
 
     parser.registerOnQueryCallback(
-        [&](const std::string& queryOut, SystestQueryId, bool)
+        [&](const std::string& queryOut, SystestQueryId, bool, const std::optional<std::string>&)
         {
             ASSERT_EQ(queryIn, queryOut);
             queryCallbackCalled = true;
@@ -129,7 +129,7 @@ TEST_F(SystestParserTest, testResultTuplesWithoutQuery)
 
     const std::string str = delimiter + "\n" + tpl1 + "\n" + tpl2 + "\n";
 
-    parser.registerOnQueryCallback([&](const std::string&, SystestQueryId, bool) { FAIL(); });
+    parser.registerOnQueryCallback([&](const std::string&, SystestQueryId, bool, const std::optional<std::string>&) { FAIL(); });
     parser.registerOnResultTuplesCallback(
         [&](const std::vector<std::string>&, const SystestQueryId)
         {
@@ -153,7 +153,7 @@ TEST_F(SystestParserTest, testDifferentialQueryCallbackFromFile)
     bool differentialQueryCallbackCalled = false;
 
     parser.registerOnQueryCallback(
-        [&](const std::string& queryOut, SystestQueryId, bool)
+        [&](const std::string& queryOut, SystestQueryId, bool, const std::optional<std::string>&)
         {
             ASSERT_FALSE(differentialQueryCallbackCalled) << "Main query callback was called after the differential one.";
             ASSERT_FALSE(mainQueryCallbackCalled) << "Main query callback should only be called once.";
@@ -201,7 +201,7 @@ TEST_F(SystestParserTest, testDifferentialQueryCallbackInlineSyntax)
     bool differentialQueryCallbackCalled = false;
 
     parser.registerOnQueryCallback(
-        [&](const std::string& queryOut, SystestQueryId, bool)
+        [&](const std::string& queryOut, SystestQueryId, bool, const std::optional<std::string>&)
         {
             ASSERT_FALSE(differentialQueryCallbackCalled) << "Main query callback was called after the differential one.";
             ASSERT_FALSE(mainQueryCallbackCalled) << "Main query callback should only be called once.";
@@ -268,7 +268,8 @@ SELECT producedPower, timestamp FROM source INTO we;
 )";
 
     std::string receivedQuery;
-    parser.registerOnQueryCallback([&](const std::string& queryOut, SystestQueryId, bool) { receivedQuery = queryOut; });
+    parser.registerOnQueryCallback([&](const std::string& queryOut, SystestQueryId, bool, std::optional<std::string>)
+                                   { receivedQuery = queryOut; });
     parser.registerOnCreateCallback(
         [&](const std::string&, const std::optional<std::pair<TestDataIngestionType, std::vector<std::string>>>&) { });
     parser.registerOnResultTuplesCallback([](std::vector<std::string>&& tuples, SystestQueryId) { (void)std::move(tuples); });

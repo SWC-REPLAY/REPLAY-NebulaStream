@@ -136,6 +136,7 @@ static constexpr std::string_view DifferentialToken = "===="sv;
 static constexpr std::string_view ConfigurationToken = "CONFIGURATION"sv;
 static constexpr std::string_view GlobalConfigurationToken = "GLOBALCONFIGURATION"sv;
 static constexpr std::string_view SequentialExecutionToken = "SEQUENTIAL_EXECUTION"sv;
+static constexpr std::string_view ReplayableToken = "REPLAYABLE"sv;
 
 static const std::array stringToToken = std::to_array<std::pair<std::string_view, TokenType>>(
     {{CreateToken, TokenType::CREATE},
@@ -145,7 +146,8 @@ static const std::array stringToToken = std::to_array<std::pair<std::string_view
      {ConfigurationToken, TokenType::CONFIGURATION},
      {GlobalConfigurationToken, TokenType::GLOBAL_CONFIGURATION},
      {DifferentialToken, TokenType::DIFFERENTIAL},
-     {SequentialExecutionToken, TokenType::SEQUENTIAL_EXECUTION}});
+     {SequentialExecutionToken, TokenType::SEQUENTIAL_EXECUTION},
+     {ReplayableToken, TokenType::REPLAYABLE}});
 
 void SystestParser::registerSubstitutionRule(const SubstitutionRule& rule)
 {
@@ -237,6 +239,7 @@ void SystestParser::parse()
 {
     SystestQueryIdAssigner queryIdAssigner{};
     bool sequentialExecution = false;
+    std::optional<std::string> replayableConfigLine;
     while (auto token = getNextToken())
     {
         switch (token.value())
@@ -255,7 +258,7 @@ void SystestParser::parse()
                 lastParsedQueryId = queryId;
                 if (onQueryCallback)
                 {
-                    onQueryCallback(query, queryId, sequentialExecution);
+                    onQueryCallback(query, queryId, sequentialExecution, replayableConfigLine);
                 }
                 break;
             }
@@ -313,6 +316,28 @@ void SystestParser::parse()
             }
             case TokenType::SEQUENTIAL_EXECUTION: {
                 sequentialExecution = not sequentialExecution;
+                break;
+            }
+            case TokenType::REPLAYABLE: {
+                if (replayableConfigLine.has_value())
+                {
+                    replayableConfigLine = std::nullopt;
+                }
+                else
+                {
+                    /// Accumulate the REPLAYABLE line, continuing across multiple lines
+                    /// if a SET( is opened but not yet closed with ).
+                    std::string accumulated = lines[currentLine];
+                    if (accumulated.find("SET(") != std::string::npos)
+                    {
+                        while (accumulated.find(')') == std::string::npos && (currentLine + 1) < lines.size())
+                        {
+                            ++currentLine;
+                            accumulated += ' ' + lines[currentLine];
+                        }
+                    }
+                    replayableConfigLine = accumulated;
+                }
                 break;
             }
             case TokenType::ERROR_EXPECTATION:
