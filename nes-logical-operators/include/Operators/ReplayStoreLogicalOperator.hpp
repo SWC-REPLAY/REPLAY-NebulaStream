@@ -23,6 +23,8 @@
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/LogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Traits/TraitSet.hpp>
@@ -36,17 +38,17 @@ namespace NES
 class ReplayStoreLogicalOperator : public ManagedByOperator
 {
 public:
-    ReplayStoreLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
-
-    explicit ReplayStoreLogicalOperator(WeakLogicalOperator self, DescriptorConfig::Config validatedConfig)
-        : ManagedByOperator(std::move(self)), config(std::move(validatedConfig))
+    ReplayStoreLogicalOperator(
+        LogicalFunction tsExtractionFunction, const Windowing::TimeUnit& unit, DescriptorConfig::Config validatedConfig)
+        : ManagedByOperator(WeakLogicalOperator{})
+        , tsExtractionFunction(std::move(tsExtractionFunction))
+        , unit(unit)
+        , config(std::move(validatedConfig))
     {
     }
 
-    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig)
-        : ManagedByOperator(WeakLogicalOperator{}), config(std::move(validatedConfig))
-    {
-    }
+    LogicalFunction tsExtractionFunction;
+    Windowing::TimeUnit unit;
 
     [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
     [[nodiscard]] static std::string_view getName() noexcept;
@@ -106,5 +108,7 @@ namespace NES::detail
 struct ReflectedStoreLogicalOperator
 {
     DescriptorConfig::Config config;
+    std::optional<LogicalFunction> onField;
+    Windowing::TimeUnit timeUnit;
 };
 }

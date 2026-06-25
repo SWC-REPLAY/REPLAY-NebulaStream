@@ -18,9 +18,11 @@
 #include <string>
 
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/LogicalFunction.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
-#include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <Store.hpp>
 
 namespace NES
@@ -34,6 +36,8 @@ public:
     {
         std::string storeName;
         Schema schema;
+        Windowing::TimeUnit unit;
+        LogicalFunction onField;
     };
 
     ReplayStoreOperatorHandler(Config cfg, StoreManager::Store store);
@@ -42,8 +46,8 @@ public:
     void start(PipelineExecutionContext& pipelineExecutionContext, uint32_t localStateVariableId) override;
     void stop(QueryTerminationType terminationType, PipelineExecutionContext& pipelineExecutionContext) override;
 
-    /// Write a TupleBuffer to the store.
-    void writeBuffer(TupleBuffer buffer);
+    /// Write a single record to the store.
+    void writeRecord(const uint8_t* data, uint32_t size, Timestamp ts);
 
 private:
     StoreManager::Store store;

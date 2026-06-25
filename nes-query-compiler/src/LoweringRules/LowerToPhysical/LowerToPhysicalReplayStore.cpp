@@ -17,12 +17,14 @@
 #include <memory>
 #include <utility>
 #include <Configurations/Descriptor.hpp>
+#include <Functions/FunctionProvider.hpp>
 #include <Interface/BufferRef/LowerSchemaProvider.hpp>
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Traits/MemoryLayoutTypeTrait.hpp>
+#include <Watermark/TimeFunction.hpp>
 #include <ErrorHandling.hpp>
 #include <LoweringRuleRegistry.hpp>
 #include <PhysicalOperator.hpp>
@@ -39,7 +41,7 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
     auto storeOp = logicalOperator.getAs<ReplayStoreLogicalOperator>();
 
     auto cfgCopy = DescriptorConfig::Config(storeOp->getConfig());
-    Descriptor logicalCfg(std::move(cfgCopy));
+    const Descriptor logicalCfg(std::move(cfgCopy));
     const auto storeName = logicalCfg.getFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_NAME);
 
     const auto outputSchema = logicalOperator.getOutputSchema();
@@ -47,9 +49,14 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
     auto registeredStore = StoreManager::StoreRegistry::instance().getStore(storeName);
     PRECONDITION(registeredStore.has_value(), "Store '{}' must be pre-registered before lowering", storeName);
 
+    const auto physicalFunction = QueryCompilation::FunctionProvider::lowerFunction(storeOp->tsExtractionFunction);
+    EventTimeFunction timeFunction(physicalFunction, storeOp->unit);
+
     ReplayStoreOperatorHandler::Config handlerCfg{
         .storeName = storeName,
         .schema = outputSchema,
+        .unit = storeOp->unit,
+        .onField = storeOp->tsExtractionFunction,
     };
 
     auto handlerId = getNextOperatorHandlerId();
@@ -60,7 +67,7 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
     PRECONDITION(memoryLayoutTypeTrait.has_value(), "Expected a memory layout type trait");
     const auto memoryLayoutType = memoryLayoutTypeTrait.value()->memoryLayout;
     auto bufferRef = LowerSchemaProvider::lowerSchema(conf.pageSize.getValue(), inputSchema, memoryLayoutType);
-    auto physicalOperator = ReplayStorePhysicalOperator(handlerId, inputSchema, std::move(bufferRef));
+    auto physicalOperator = ReplayStorePhysicalOperator(handlerId, inputSchema, std::move(bufferRef), std::move(timeFunction));
     auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
         physicalOperator,
         inputSchema,

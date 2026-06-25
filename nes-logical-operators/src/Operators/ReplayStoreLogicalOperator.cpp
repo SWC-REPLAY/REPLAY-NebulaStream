@@ -24,9 +24,11 @@
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/LogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
-#include <Traits/Trait.hpp>
+#include <Serialization/LogicalFunctionReflection.hpp>
 #include <Traits/TraitSet.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Reflection.hpp>
@@ -44,7 +46,15 @@ std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, Oper
         std::stringstream cfg;
         Descriptor tmp{DescriptorConfig::Config(config)};
         cfg << &tmp;
-        return fmt::format("REPLAY_STORE(opId: {}, config: {}, schema: {})", id, cfg.str(), getOutputSchema());
+        std::stringstream ss;
+        ss << unit;
+        return fmt::format(
+            "REPLAY_STORE(opId: {}, config: {}, timeFunction: {} unit: {}, schema: {})",
+            id,
+            cfg.str(),
+            tsExtractionFunction.explain(verbosity),
+            ss.str(),
+            getOutputSchema());
     }
     return {"REPLAY_STORE"};
 }
@@ -103,13 +113,14 @@ ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withInferredSchema(std::v
             throw CannotInferSchema("All input schemas must be equal for ReplayStore operator");
         }
     }
+    copy.tsExtractionFunction = tsExtractionFunction.withInferredDataType(first);
     return copy;
 }
 
 bool ReplayStoreLogicalOperator::operator==(const ReplayStoreLogicalOperator& rhs) const
 {
     return getOutputSchema() == rhs.getOutputSchema() && getInputSchemas() == rhs.getInputSchemas() && getTraitSet() == rhs.getTraitSet()
-        && config == rhs.config;
+        && config == rhs.config && tsExtractionFunction == rhs.tsExtractionFunction && unit == rhs.unit;
 }
 
 ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withConfig(DescriptorConfig::Config validatedConfig) const
@@ -132,17 +143,18 @@ namespace NES
 Reflected
 Reflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(const TypedLogicalOperator<ReplayStoreLogicalOperator>& op) const
 {
-    return reflect(detail::ReflectedStoreLogicalOperator{.config = op->getConfig()});
+    return reflect(
+        detail::ReflectedStoreLogicalOperator{.config = op->getConfig(), .onField = op->tsExtractionFunction, .timeUnit = op->unit});
 }
 
 TypedLogicalOperator<ReplayStoreLogicalOperator> Unreflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(
-    const Reflected& reflected, const ReflectionContext& context) const
+    const Reflected& reflected, const ReflectionContext& context [[maybe_unused]]) const
 {
-    auto [config] = context.unreflect<detail::ReflectedStoreLogicalOperator>(reflected);
-    return TypedLogicalOperator<ReplayStoreLogicalOperator>{ReplayStoreLogicalOperator(std::move(config))};
+    auto [config, onField, timeUnit] = context.unreflect<detail::ReflectedStoreLogicalOperator>(reflected);
+    return ReplayStoreLogicalOperator(std::move(onField.value()), timeUnit, std::move(config));
 }
 
-/// NOLINTNEXTLINE(performance-unnecessary-value-param)
+/// NOLINTBEGIN(performance-unnecessary-value-param)
 LogicalOperatorRegistryReturnType
 LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
 {
@@ -153,5 +165,7 @@ LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOpe
     PRECONDITION(false, "Operator is only built directly via parser or via reflection, not using the registry");
     std::unreachable();
 }
+
+/// NOLINTEND(performance-unnecessary-value-param)
 
 }

@@ -21,6 +21,7 @@
 #include <vector>
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
 #include <Operators/LogicalOperator.hpp>
@@ -96,7 +97,8 @@ public:
         std::unordered_map<std::string, std::string> formatConfig,
         const LogicalPlan& queryPlan);
 
-    static LogicalPlan addReplayStore(const DescriptorConfig::Config& config, const LogicalPlan& queryplan);
+    static LogicalPlan addReplayStore(
+        const LogicalPlan& queryPlan, const DescriptorConfig::Config& config, LogicalFunction onField, const Windowing::TimeUnit& unit);
     static LogicalPlan addUdbRecording(std::optional<std::string> traceName, const LogicalPlan& queryPlan);
     /// Checks in case a window is contained in the query.
     /// If a watermark operator exists in the queryPlan and if not adds a watermark strategy to the queryPlan.
