@@ -84,7 +84,7 @@ public:
     void exitConstantDefault(AntlrSQLParser::ConstantDefaultContext* context) override;
     void exitThresholdMinSizeParameter(AntlrSQLParser::ThresholdMinSizeParameterContext* context) override;
     void enterInlineSource(AntlrSQLParser::InlineSourceContext* context) override;
-    void enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context) override;
+    void enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context) override;
     void enterUdbClause(AntlrSQLParser::UdbClauseContext* context) override;
 };
 

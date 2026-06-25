@@ -51,7 +51,6 @@
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
 #include <Functions/LogicalFunctionProvider.hpp>
-#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
@@ -537,13 +536,6 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
         {
             queryPlan = LogicalPlanBuilder::addSelection(*havingExpr, queryPlan);
         }
-    }
-    /// inject store operator into the plan before sink if TIME_TRAVEL_STORE was provided
-    if (helpers.top().storeOptions.has_value())
-    {
-        auto opts = *helpers.top().storeOptions;
-        const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-        queryPlan = LogicalPlanBuilder::addReplayStore(cfg, queryPlan);
     }
     /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
     if (helpers.top().hasUdbClause)
@@ -1116,14 +1108,15 @@ void AntlrSQLQueryPlanCreator::exitModelInferenceRelation(AntlrSQLParser::ModelI
     AntlrSQLBaseListener::exitModelInferenceRelation(context);
 }
 
-void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
+void AntlrSQLQueryPlanCreator::enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context)
 {
-    const auto storeName = bindIdentifier(context->storeName);
-
-    std::unordered_map<std::string, std::string> options;
-    options.emplace("store_name", storeName);
-
-    helpers.top().storeOptions = std::move(options);
+    auto tsText = context->timestampValue->getText();
+    /// Strip surrounding quotes from the STRING token (e.g. '1001' -> 1001)
+    if (tsText.size() >= 2 && (tsText.front() == '\'' || tsText.front() == '"'))
+    {
+        tsText = tsText.substr(1, tsText.size() - 2);
+    }
+    helpers.top().timeTravelTimestamp = std::move(tsText);
 }
 
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
