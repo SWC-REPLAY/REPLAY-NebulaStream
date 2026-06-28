@@ -899,6 +899,11 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     {
         queryPlan = LogicalPlanBuilder::addReplayStore(*storeName, queryPlan);
     }
+    /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
+    if (helpers.top().hasUdbClause)
+    {
+        queryPlan = LogicalPlanBuilder::addUdbRecording(helpers.top().udbTraceName, queryPlan);
+    }
     helpers.pop();
     if (helpers.empty())
     {

@@ -91,6 +91,7 @@ public:
     void exitThresholdMinSizeParameter(AntlrSQLParser::ThresholdMinSizeParameterContext* context) override;
     void enterAnonymousSource(AntlrSQLParser::AnonymousSourceContext* context) override;
     void enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context) override;
+    void enterUdbClause(AntlrSQLParser::UdbClauseContext* context) override;
 };
 
 }

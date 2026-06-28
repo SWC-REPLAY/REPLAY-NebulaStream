@@ -136,7 +136,7 @@ queryPrimary
     | '(' query ')'                                                         #subquery
     ;
 /// new layout to be closer to traditional SQL
-querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause?;
+querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause? udbClause?;
 
 
 fromClause: FROM relation (',' relation)*;
