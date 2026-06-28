@@ -33,6 +33,7 @@
 #include <Operators/IngestionTimeWatermarkAssignerLogicalOperator.hpp>
 #include <Operators/ProjectionLogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
+#include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Operators/SelectionLogicalOperator.hpp>
 #include <Operators/Sinks/InlineSinkLogicalOperator.hpp>
 #include <Operators/Sinks/SinkLogicalOperator.hpp>
@@ -197,6 +198,11 @@ LogicalPlan LogicalPlanBuilder::addReplayStore(const DescriptorConfig::Config& c
 {
     const auto storeOp = ReplayStoreLogicalOperator(config);
     return promoteOperatorToRoot(queryPlan, storeOp);
+}
+
+LogicalPlan LogicalPlanBuilder::addUdbRecording(std::optional<std::string> traceName, const LogicalPlan& queryPlan)
+{
+    return promoteOperatorToRoot(queryPlan, UdbRecordingLogicalOperator(std::move(traceName)));
 }
 
 LogicalPlan
