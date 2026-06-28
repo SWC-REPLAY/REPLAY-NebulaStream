@@ -121,7 +121,7 @@ queryPrimary
     | '(' query ')'                                                         #subquery
     ;
 /// new layout to be closer to traditional SQL
-querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause?;
+querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause? udbClause?;
 
 
 fromClause: FROM relation (',' relation)*;
@@ -313,6 +313,8 @@ inlineSink
 
 timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
 
+udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
+
 nullNotnull
     : NOT? NULLTOKEN
     ;
@@ -499,6 +501,7 @@ AT_LEAST_ONCE : 'AT_LEAST_ONCE';
 JSON: 'JSON';
 TEXT: 'TEXT';
 TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
+TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
 EXPLAIN: 'EXPLAIN' | 'explain';
 
 ///--NebulaSQL-KEYWORD-LIST-END
