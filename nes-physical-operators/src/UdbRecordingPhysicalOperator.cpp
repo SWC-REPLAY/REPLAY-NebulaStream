@@ -42,32 +42,27 @@ namespace
 /// Prerequisites:
 ///   1. UDB_BINARY_PATH must point to the udb executable, e.g. via direnv:
 ///        export UDB_BINARY_PATH=/path/to/udb
-///   2. ptrace_scope must be 0 on Linux, otherwise user-space processes are not allowed to attach.
-///      Check with: cat /proc/sys/kernel/yama/ptrace_scope
-///      Allow for the current session with: echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 void spawnUdbProxy(const char* traceName)
 {
-    const char* udbBin = std::getenv("UDB_BINARY_PATH");
-    if (udbBin == nullptr)
+    const char* udbBinEnv = std::getenv("UDB_BINARY_PATH");
+    if (udbBinEnv == nullptr)
     {
         NES_ERROR("UDB_BINARY_PATH is not set — skipping udb recording");
         return;
     }
+    /// Copy immediately so a concurrent setenv/unsetenv cannot invalidate the pointer.
+    const std::string udbBin = udbBinEnv;
 
     /// Build strings before fork() — malloc is not async-signal-safe in the child.
-    char pidBuf[32];
-    ::snprintf(pidBuf, sizeof(pidBuf), "%d", static_cast<int>(::getpid()));
+    const std::string pidStr = std::to_string(static_cast<int>(::getpid()));
+    const std::string traceFile = (traceName != nullptr) ? std::string(traceName) + ".undo" : std::string{};
 
-    char traceFileBuf[512];
-    if (traceName != nullptr)
-        ::snprintf(traceFileBuf, sizeof(traceFileBuf), "%s.undo", traceName);
-
-    NES_DEBUG("UdbRecordingPhysicalOperator: spawning udb (binary={}, pid={})", udbBin, pidBuf);
+    NES_DEBUG("UdbRecordingPhysicalOperator: spawning udb (binary={}, pid={})", udbBin, pidStr);
 
     /// Pipe with O_CLOEXEC on the write end: exec closes it automatically on success.
     /// If execlp fails the child writes a byte so the parent can log the error safely.
-    int pipeFd[2];
-    if (::pipe2(pipeFd, O_CLOEXEC) != 0)
+    std::array<int, 2> pipeFd{};
+    if (::pipe2(pipeFd.data(), O_CLOEXEC) != 0)
     {
         NES_ERROR("UdbRecordingPhysicalOperator: pipe2 failed");
         return;
@@ -77,15 +72,22 @@ void spawnUdbProxy(const char* traceName)
     if (child == 0)
     {
         /// Child: write end is O_CLOEXEC — exec closes it. On failure write a byte so parent detects it.
+        // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
         if (traceName != nullptr)
-            ::execl(udbBin, udbBin, "--pid", pidBuf, "--recording-file", traceFileBuf, nullptr);
+        {
+            ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), "--recording-file", traceFile.c_str(), nullptr);
+        }
         else
-            ::execl(udbBin, udbBin, "--pid", pidBuf, nullptr);
+        {
+            ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), nullptr);
+        }
+        // NOLINTEND(cppcoreguidelines-pro-type-vararg)
 
         /// execlp only returns on failure — only async-signal-safe calls allowed here.
         const char errByte = 1;
         static_cast<void>(::write(pipeFd[1], &errByte, 1));
-        ::_exit(127);
+        constexpr int exitExecFailed = 127;
+        std::_Exit(exitExecFailed);
     }
 
     /// Parent: close write end, then check if child signalled failure.
@@ -99,13 +101,15 @@ void spawnUdbProxy(const char* traceName)
     }
 
     /// Grant ptrace permission to exactly this child; avoids having to lower yama/ptrace_scope to 0 (c.f. man 2 prctl)
-    if (::prctl(PR_SET_PTRACER, static_cast<unsigned long>(child)) < 0)
+    if (::prctl(PR_SET_PTRACER, static_cast<int64_t>(child)) < 0) /// NOLINT(cppcoreguidelines-pro-type-vararg)
     {
         NES_ERROR("UdbRecordingPhysicalOperator: prctl(PR_SET_PTRACER) failed, errno={}", errno);
     }
 
     char result = 0;
-    if (::read(pipeFd[0], &result, 1) == 1)
+    ssize_t n;
+    do { n = ::read(pipeFd[0], &result, 1); } while (n < 0 && errno == EINTR); // retry on SIGCHLD or other interrupts
+    if (n == 1)
     {
         NES_ERROR("UdbRecordingPhysicalOperator: execlp failed for binary '{}'", udbBin);
         ::waitpid(child, nullptr, 0);
@@ -126,7 +130,7 @@ void UdbRecordingPhysicalOperator::setup(ExecutionContext& executionCtx, Compila
         setupChild(executionCtx, compilationContext);
     }
     const char* traceNamePtr = traceName.has_value() ? traceName->c_str() : nullptr;
-    nautilus::invoke(spawnUdbProxy, nautilus::val<const char*>(traceNamePtr));
+    spawnUdbProxy(traceNamePtr);
 }
 
 void UdbRecordingPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const

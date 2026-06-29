@@ -86,13 +86,12 @@ Schema UdbRecordingLogicalOperator::getOutputSchema() const
 
 UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withInferredSchema(std::vector<Schema>) const
 {
-    auto copy = *this;
-    return copy;
+    return *this;
 }
 
 bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& rhs) const
 {
-    return getOutputSchema() == rhs.getOutputSchema() && getTraitSet() == rhs.getTraitSet() && traceName == rhs.traceName;
+    return traitSet == rhs.traitSet && traceName == rhs.traceName;
 }
 
 }
