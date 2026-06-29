@@ -29,12 +29,16 @@
 namespace NES
 {
 
-class UdbRecordingLogicalOperator
+class UdbRecordingLogicalOperator : public ManagedByOperator
 {
 public:
-    UdbRecordingLogicalOperator() = default;
+    UdbRecordingLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
 
-    explicit UdbRecordingLogicalOperator(std::optional<std::string> traceName) : traceName(std::move(traceName)) { }
+    explicit UdbRecordingLogicalOperator(WeakLogicalOperator self, std::optional<std::string> traceName)
+        : ManagedByOperator(std::move(self)), traceName(std::move(traceName)) { }
+
+    explicit UdbRecordingLogicalOperator(std::optional<std::string> traceName)
+        : ManagedByOperator(WeakLogicalOperator{}), traceName(std::move(traceName)) { }
 
     [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId id) const;
     [[nodiscard]] static std::string_view getName() noexcept;
@@ -59,15 +63,15 @@ private:
 };
 
 template <>
-struct Reflector<UdbRecordingLogicalOperator>
+struct Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>
 {
-    Reflected operator()(const UdbRecordingLogicalOperator& op) const;
+    Reflected operator()(const TypedLogicalOperator<UdbRecordingLogicalOperator>& op) const;
 };
 
 template <>
-struct Unreflector<UdbRecordingLogicalOperator>
+struct Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>
 {
-    UdbRecordingLogicalOperator operator()(const Reflected& reflected) const;
+    TypedLogicalOperator<UdbRecordingLogicalOperator> operator()(const Reflected& reflected, const ReflectionContext& context) const;
 };
 
 static_assert(LogicalOperatorConcept<UdbRecordingLogicalOperator>);
