@@ -49,10 +49,7 @@ SourceProvider::lower(OriginId originId, BackpressureListener backpressureListen
             ? sourceDescriptor.getFromConfig(SourceDescriptor::MAX_INFLIGHT_BUFFERS)
             : defaultMaxInflightBuffers;
         SourceRuntimeConfiguration runtimeConfig{maxInflightBuffers};
-        NES_DEBUG(
-            "SourceProvider: lowering source type={} originId={}",
-            sourceDescriptor.getSourceType(),
-            originId.getRawValue());
+        NES_DEBUG("SourceProvider: lowering source type={} originId={}", sourceDescriptor.getSourceType(), originId.getRawValue());
         if (sourceDescriptor.getSourceType() == "Replay")
         {
             const auto* replaySource = dynamic_cast<ReplaySource*>(source.value().get());

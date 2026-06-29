@@ -35,10 +35,14 @@ public:
     UdbRecordingLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
 
     explicit UdbRecordingLogicalOperator(WeakLogicalOperator self, std::optional<std::string> traceName)
-        : ManagedByOperator(std::move(self)), traceName(std::move(traceName)) { }
+        : ManagedByOperator(std::move(self)), traceName(std::move(traceName))
+    {
+    }
 
     explicit UdbRecordingLogicalOperator(std::optional<std::string> traceName)
-        : ManagedByOperator(WeakLogicalOperator{}), traceName(std::move(traceName)) { }
+        : ManagedByOperator(WeakLogicalOperator{}), traceName(std::move(traceName))
+    {
+    }
 
     [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId id) const;
     [[nodiscard]] static std::string_view getName() noexcept;

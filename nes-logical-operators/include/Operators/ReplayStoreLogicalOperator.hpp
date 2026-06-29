@@ -39,10 +39,14 @@ public:
     ReplayStoreLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
 
     explicit ReplayStoreLogicalOperator(WeakLogicalOperator self, DescriptorConfig::Config validatedConfig)
-        : ManagedByOperator(std::move(self)), config(std::move(validatedConfig)) { }
+        : ManagedByOperator(std::move(self)), config(std::move(validatedConfig))
+    {
+    }
 
     explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig)
-        : ManagedByOperator(WeakLogicalOperator{}), config(std::move(validatedConfig)) { }
+        : ManagedByOperator(WeakLogicalOperator{}), config(std::move(validatedConfig))
+    {
+    }
 
     [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
     [[nodiscard]] static std::string_view getName() noexcept;
