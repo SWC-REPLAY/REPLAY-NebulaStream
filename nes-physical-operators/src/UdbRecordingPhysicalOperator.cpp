@@ -22,8 +22,8 @@
 #include <sys/prctl.h>
 #include <sys/wait.h>
 
-#include <Nautilus/Interface/Record.hpp>
-#include <Nautilus/Interface/RecordBuffer.hpp>
+#include <Interface/Record.hpp>
+#include <Interface/RecordBuffer.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
