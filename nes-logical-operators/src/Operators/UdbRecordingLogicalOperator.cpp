@@ -105,8 +105,8 @@ Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const T
     return reflect(detail::ReflectedUdbRecordingLogicalOperator{.traceName = op->getTraceName()});
 }
 
-TypedLogicalOperator<UdbRecordingLogicalOperator>
-Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const Reflected& reflected, const ReflectionContext& context) const
+TypedLogicalOperator<UdbRecordingLogicalOperator> Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(
+    const Reflected& reflected, const ReflectionContext& context) const
 {
     auto [traceName] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(reflected);
     return TypedLogicalOperator<UdbRecordingLogicalOperator>{UdbRecordingLogicalOperator(std::move(traceName))};

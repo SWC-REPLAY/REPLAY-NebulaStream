@@ -72,7 +72,7 @@ void spawnUdbProxy(const char* traceName)
     if (child == 0)
     {
         /// Child: write end is O_CLOEXEC — exec closes it. On failure write a byte so parent detects it.
-        // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
+        /// NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
         if (traceName != nullptr)
         {
             ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), "--recording-file", traceFile.c_str(), nullptr);
@@ -81,7 +81,7 @@ void spawnUdbProxy(const char* traceName)
         {
             ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), nullptr);
         }
-        // NOLINTEND(cppcoreguidelines-pro-type-vararg)
+        /// NOLINTEND(cppcoreguidelines-pro-type-vararg)
 
         /// execlp only returns on failure — only async-signal-safe calls allowed here.
         const char errByte = 1;
@@ -107,9 +107,13 @@ void spawnUdbProxy(const char* traceName)
     }
 
     char result = 0;
-    ssize_t n;
-    do { n = ::read(pipeFd[0], &result, 1); } while (n < 0 && errno == EINTR); // retry on SIGCHLD or other interrupts
-    if (n == 1)
+    ssize_t nread = 0;
+    do
+    {
+        nread = ::read(pipeFd[0], &result, 1);
+    } while (nread < 0 && errno == EINTR); /// retry on SIGCHLD or other interrupts
+
+    if (nread == 1)
     {
         NES_ERROR("UdbRecordingPhysicalOperator: execlp failed for binary '{}'", udbBin);
         ::waitpid(child, nullptr, 0);

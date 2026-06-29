@@ -418,8 +418,7 @@ void AntlrSQLQueryPlanCreator::enterIdentifier(AntlrSQLParser::IdentifierContext
     }
     else if (
         helpers.top().isFrom and not helpers.top().isJoinRelation and not helpers.top().isModelInference
-        and AntlrSQLParser::RuleErrorCapturingIdentifier == parentRuleIndex
-        and helpers.top().getSource().empty())
+        and AntlrSQLParser::RuleErrorCapturingIdentifier == parentRuleIndex and helpers.top().getSource().empty())
     {
         /// get main source name
         helpers.top().setSource(bindIdentifier(context));
