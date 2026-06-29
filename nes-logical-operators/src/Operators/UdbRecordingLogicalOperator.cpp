@@ -100,23 +100,26 @@ bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& 
 namespace NES
 {
 
-Reflected Reflector<UdbRecordingLogicalOperator>::operator()(const UdbRecordingLogicalOperator& op) const
+Reflected
+Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const TypedLogicalOperator<UdbRecordingLogicalOperator>& op) const
 {
-    return reflect(detail::ReflectedUdbRecordingLogicalOperator{.traceName = op.getTraceName()});
+    return reflect(detail::ReflectedUdbRecordingLogicalOperator{.traceName = op->getTraceName()});
 }
 
-UdbRecordingLogicalOperator Unreflector<UdbRecordingLogicalOperator>::operator()(const Reflected& reflected) const
+TypedLogicalOperator<UdbRecordingLogicalOperator>
+Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const Reflected& reflected, const ReflectionContext& context) const
 {
-    auto [traceName] = unreflect<detail::ReflectedUdbRecordingLogicalOperator>(reflected);
-    return UdbRecordingLogicalOperator(std::move(traceName));
+    auto [traceName] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(reflected);
+    return TypedLogicalOperator<UdbRecordingLogicalOperator>{UdbRecordingLogicalOperator(std::move(traceName))};
 }
 
+/// NOLINTNEXTLINE(performance-unnecessary-value-param)
 LogicalOperatorRegistryReturnType
 LogicalOperatorGeneratedRegistrar::RegisterUdbRecordingLogicalOperator(LogicalOperatorRegistryArguments arguments)
 {
     if (!arguments.reflected.isEmpty())
     {
-        return unreflect<UdbRecordingLogicalOperator>(arguments.reflected);
+        return ReflectionContext{}.unreflect<TypedLogicalOperator<UdbRecordingLogicalOperator>>(arguments.reflected);
     }
     PRECONDITION(false, "Operator is only built directly via parser or via reflection, not using the registry");
     std::unreachable();
