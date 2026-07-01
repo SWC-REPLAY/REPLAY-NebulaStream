@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <DataTypes/Schema.hpp>
@@ -55,7 +56,7 @@ public:
 
     [[nodiscard]] std::vector<Schema> getInputSchemas() const;
     [[nodiscard]] Schema getOutputSchema() const;
-    [[nodiscard]] UdbRecordingLogicalOperator withInferredSchema(std::vector<Schema> inputSchemas) const;
+    [[nodiscard]] UdbRecordingLogicalOperator withInferredSchema(const std::vector<Schema>&) const;
 
     [[nodiscard]] const std::optional<std::string>& getTraceName() const { return traceName; }
 

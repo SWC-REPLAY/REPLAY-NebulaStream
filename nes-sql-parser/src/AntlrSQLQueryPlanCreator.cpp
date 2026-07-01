@@ -52,7 +52,6 @@
 #include <Functions/LogicalFunction.hpp>
 #include <Functions/LogicalFunctionProvider.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
-#include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
@@ -1132,6 +1131,8 @@ void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* 
     helpers.top().hasUdbClause = true;
     /// if no trace name is provided UDB auto generates one
     if (context->udbTraceName != nullptr)
+    {
         helpers.top().udbTraceName = context->udbTraceName->getText();
+    }
 }
 }

@@ -14,12 +14,18 @@
 
 #include <UdbRecordingPhysicalOperator.hpp>
 
+#include <array>
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <utility>
 #include <fcntl.h>
 #include <unistd.h>
+#include <linux/prctl.h>
 #include <sys/prctl.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 
 #include <Interface/Record.hpp>
@@ -28,8 +34,6 @@
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
-#include <PipelineExecutionContext.hpp>
-#include <function.hpp>
 
 namespace NES
 {
@@ -108,10 +112,14 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
 
     char result = 0;
     ssize_t nread = 0;
-    do
+    for (;;)
     {
         nread = ::read(pipeFd[0], &result, 1);
-    } while (nread < 0 && errno == EINTR); /// retry on SIGCHLD or other interrupts
+        if (nread >= 0 || errno != EINTR)
+        {
+            break;
+        }
+    } /// retry on SIGCHLD or other interrupts
 
     if (nread == 1)
     {

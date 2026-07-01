@@ -84,9 +84,10 @@ Schema UdbRecordingLogicalOperator::getOutputSchema() const
     return children.front().getOutputSchema();
 }
 
-UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withInferredSchema(std::vector<Schema>) const
+UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withInferredSchema(const std::vector<Schema>&) const
 {
-    return *this;
+    auto copy = *this;
+    return copy;
 }
 
 bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& rhs) const
