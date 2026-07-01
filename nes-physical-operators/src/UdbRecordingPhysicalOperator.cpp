@@ -42,7 +42,7 @@ namespace
 /// Prerequisites:
 ///   1. UDB_BINARY_PATH must point to the udb executable, e.g. via direnv:
 ///        export UDB_BINARY_PATH=/path/to/udb
-void spawnUdbProxy(const char* traceName)
+void spawnUdbProxy(const std::optional<std::string>& traceName)
 {
     const char* udbBinEnv = std::getenv("UDB_BINARY_PATH");
     if (udbBinEnv == nullptr)
@@ -55,7 +55,7 @@ void spawnUdbProxy(const char* traceName)
 
     /// Build strings before fork() — malloc is not async-signal-safe in the child.
     const std::string pidStr = std::to_string(static_cast<int>(::getpid()));
-    const std::string traceFile = (traceName != nullptr) ? std::string(traceName) + ".undo" : std::string{};
+    const std::string traceFile = traceName.has_value() ? *traceName + ".undo" : std::string{};
 
     NES_DEBUG("Spawning udb (binary={}, pid={})", udbBin, pidStr);
 
@@ -73,7 +73,7 @@ void spawnUdbProxy(const char* traceName)
     {
         /// Child: write end is O_CLOEXEC — exec closes it. On failure write a byte so parent detects it.
         /// NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
-        if (traceName != nullptr)
+        if (traceName.has_value())
         {
             ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), "--recording-file", traceFile.c_str(), nullptr);
         }
@@ -133,8 +133,7 @@ void UdbRecordingPhysicalOperator::setup(ExecutionContext& executionCtx, Compila
     {
         setupChild(executionCtx, compilationContext);
     }
-    const char* traceNamePtr = traceName.has_value() ? traceName->c_str() : nullptr;
-    spawnUdbProxy(traceNamePtr);
+    spawnUdbProxy(traceName);
 }
 
 void UdbRecordingPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const
