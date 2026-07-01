@@ -57,14 +57,14 @@ void spawnUdbProxy(const char* traceName)
     const std::string pidStr = std::to_string(static_cast<int>(::getpid()));
     const std::string traceFile = (traceName != nullptr) ? std::string(traceName) + ".undo" : std::string{};
 
-    NES_DEBUG("UdbRecordingPhysicalOperator: spawning udb (binary={}, pid={})", udbBin, pidStr);
+    NES_DEBUG("Spawning udb (binary={}, pid={})", udbBin, pidStr);
 
     /// Pipe with O_CLOEXEC on the write end: exec closes it automatically on success.
     /// If execlp fails the child writes a byte so the parent can log the error safely.
     std::array<int, 2> pipeFd{};
     if (::pipe2(pipeFd.data(), O_CLOEXEC) != 0)
     {
-        NES_ERROR("UdbRecordingPhysicalOperator: pipe2 failed");
+        NES_ERROR("Pipe2 failed");
         return;
     }
 
@@ -95,7 +95,7 @@ void spawnUdbProxy(const char* traceName)
 
     if (child < 0)
     {
-        NES_ERROR("UdbRecordingPhysicalOperator: fork failed");
+        NES_ERROR("Fork failed");
         ::close(pipeFd[0]);
         return;
     }
@@ -103,7 +103,7 @@ void spawnUdbProxy(const char* traceName)
     /// Grant ptrace permission to exactly this child; avoids having to lower yama/ptrace_scope to 0 (c.f. man 2 prctl)
     if (::prctl(PR_SET_PTRACER, static_cast<int64_t>(child)) < 0) /// NOLINT(cppcoreguidelines-pro-type-vararg)
     {
-        NES_ERROR("UdbRecordingPhysicalOperator: prctl(PR_SET_PTRACER) failed, errno={}", errno);
+        NES_ERROR("prctl(PR_SET_PTRACER) failed, errno={}", errno);
     }
 
     char result = 0;
@@ -115,7 +115,7 @@ void spawnUdbProxy(const char* traceName)
 
     if (nread == 1)
     {
-        NES_ERROR("UdbRecordingPhysicalOperator: execlp failed for binary '{}'", udbBin);
+        NES_ERROR("execlp failed for binary '{}'", udbBin);
         ::waitpid(child, nullptr, 0);
     }
     ::close(pipeFd[0]);
