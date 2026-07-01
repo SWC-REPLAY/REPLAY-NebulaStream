@@ -135,8 +135,8 @@ Reflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(const Ty
     return reflect(detail::ReflectedStoreLogicalOperator{.config = op->getConfig()});
 }
 
-TypedLogicalOperator<ReplayStoreLogicalOperator>
-Unreflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(const Reflected& reflected, const ReflectionContext& context) const
+TypedLogicalOperator<ReplayStoreLogicalOperator> Unreflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(
+    const Reflected& reflected, const ReflectionContext& context) const
 {
     auto [config] = context.unreflect<detail::ReflectedStoreLogicalOperator>(reflected);
     return TypedLogicalOperator<ReplayStoreLogicalOperator>{ReplayStoreLogicalOperator(std::move(config))};

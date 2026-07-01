@@ -872,8 +872,8 @@ struct SystestBinder::Impl
             auto logicalSource = sourceCatalog->addLogicalSource(storeName, storeSchema);
             INVARIANT(logicalSource.has_value(), "Failed to register store '{}' as a logical source", storeName);
 
-            auto physicalSource
-                = sourceCatalog->addPhysicalSource(*logicalSource, "Replay", Host("localhost"), {{"store_name", storeName}}, {{"type", "CSV"}});
+            auto physicalSource = sourceCatalog->addPhysicalSource(
+                *logicalSource, "Replay", Host("localhost"), {{"store_name", storeName}}, {{"type", "CSV"}});
             INVARIANT(physicalSource.has_value(), "Failed to register Replay physical source for store '{}'", storeName);
 
             /// Create and initialize the store in the StoreRegistry so it is ready for writes
@@ -917,7 +917,8 @@ struct SystestBinder::Impl
                     }
                     std::unordered_map<std::string, std::string> sourceConfig{{"store_name", sourceName}};
                     std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
-                    const InlineSourceLogicalOperator inlineOp{WeakLogicalOperator{}, "Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
+                    const InlineSourceLogicalOperator inlineOp{
+                        WeakLogicalOperator{}, "Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
                     return inlineOp.withChildren(newChildren);
                 }
             }
