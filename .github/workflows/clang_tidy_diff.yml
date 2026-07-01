@@ -8,8 +8,9 @@ on:
   workflow_call:
     inputs:
       dev_image_tag:
-        required: true
+        required: false
         type: string
+        default: ""
         description: "Docker image tag of the development image"
       head_sha:
         type: string
@@ -23,6 +24,10 @@ on:
         type: number
         required: false
         default: -1
+      use_nix:
+        type: boolean
+        required: false
+        default: false
 
 # Read-only: findings are hard errors, not PR comments.
 permissions:
