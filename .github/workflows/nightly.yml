@@ -17,7 +17,7 @@ on:
 
 jobs:
   fetch-current-main-commit:
-    runs-on: [ self-hosted ]
+    runs-on: [ ubuntu-latest ]
     outputs:
       sha: ${{ steps.fetch-sha.outputs.sha }}
     steps:
@@ -31,6 +31,7 @@ jobs:
           echo "sha=$(git rev-parse --verify HEAD)" >> "$GITHUB_OUTPUT"
 
   get-dev-images:
+    if: github.repository == 'nebulastream/nebulastream'
     needs: fetch-current-main-commit
     uses: ./.github/workflows/get_dev_images.yml
     secrets: inherit
@@ -181,7 +182,7 @@ jobs:
       - create-nightly-image
       - quick-start
     runs-on: [ self-hosted ]
-    if: ${{ failure() && !github.event.act }}
+    if: ${{ github.repository == 'nebulastream/nebulastream' && failure() && !github.event.act }}
     steps:
       - name: Notify Zulip
         uses: zulip/github-actions-zulip/send-message@v1
