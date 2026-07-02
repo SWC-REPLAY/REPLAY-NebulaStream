@@ -270,30 +270,6 @@ uint64_t ReplayStoreReader::readSegmentRows(
     return readRows(dest, rowsToRead, tupleSize, schema);
 }
 
-bool ReplayStoreReader::isEof() const
-{
-    return inputFile.eof();
-}
-
-std::streampos ReplayStoreReader::getPosition()
-{
-    return inputFile.tellg();
-}
-
-void ReplayStoreReader::clearErrors()
-{
-    inputFile.clear();
-}
-
-void ReplayStoreReader::seekTo(std::streampos pos)
-{
-    inputFile.seekg(pos);
-}
-
-int ReplayStoreReader::peek()
-{
-    return inputFile.peek();
-}
 
 Schema ReplayStoreReader::readSchemaFromFile(const std::string& filePath)
 {

@@ -17,7 +17,6 @@
 #include <atomic>
 #include <cstdint>
 #include <fstream>
-#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -28,8 +27,7 @@
 namespace NES::StoreManager
 {
 
-/// Reads binary store files produced by the Replay store writer.
-/// Supports both legacy (v1) and segmented (v2+) file formats.
+/// Reads segmented binary store files produced by the Replay store writer.
 class ReplayStoreReader
 {
 public:
@@ -53,22 +51,8 @@ public:
     /// Verify that the given expected schema matches the schema stored in the file header.
     void verifySchema(const Schema& expectedSchema) const;
 
-    /// Read fixed-size rows from the current segment into a destination buffer.
-    /// For v2+ files, reads from the current segment in iteration order.
-    /// Returns the number of complete rows successfully read.
-    uint64_t readRows(char* dest, uint64_t maxRows, uint32_t tupleSize, const Schema& schema);
-
-    /// Check whether all data has been read.
-    [[nodiscard]] bool isEof() const;
-
     /// Get the byte offset where data begins (after the header/segment table).
     [[nodiscard]] uint64_t getDataStartOffset() const { return dataStartOffset; }
-
-    /// Get the minimum timestamp stored in this file (file-level).
-    [[nodiscard]] uint64_t getMinTs() const { return header.minTs; }
-
-    /// Get the maximum timestamp stored in this file (file-level).
-    [[nodiscard]] uint64_t getMaxTs() const { return header.maxTs; }
 
     /// Whether this is a segmented (v2+) file.
     [[nodiscard]] bool isSegmented() const { return header.version >= 2; }
@@ -102,22 +86,13 @@ public:
     /// Get total bytes read so far.
     [[nodiscard]] uint64_t getTotalBytesRead() const { return totalBytesRead.load(); }
 
-    /// Clear stream error flags.
-    void clearErrors();
-
-    /// Seek to a specific position in the file.
-    void seekTo(std::streampos pos);
-
-    /// Peek the next character without consuming it.
-    [[nodiscard]] int peek();
-
-    /// Get current stream position.
-    [[nodiscard]] std::streampos getPosition();
-
     /// Static helper: read schema from a file without keeping it open.
     static Schema readSchemaFromFile(const std::string& filePath);
 
 private:
+    /// Read fixed-size rows from the current file position into a destination buffer.
+    /// Returns the number of complete rows successfully read.
+    uint64_t readRows(char* dest, uint64_t maxRows, uint32_t tupleSize, const Schema& schema);
     std::string filePath;
     std::ifstream inputFile;
     FileHeader header;

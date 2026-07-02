@@ -204,6 +204,13 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
             return nextLevelRead;
         }
     }
+    /// Reset the reader if a previous read fully exhausted it, so a new query can re-read with a different time range.
+    if (reader && readSegmentPos >= readSegmentOrder.size())
+    {
+        reader->close();
+        reader.reset();
+    }
+
     if (!reader)
     {
         if (writerOpened)
@@ -215,44 +222,25 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         reader->open();
         NES_DEBUG("FileStore::read: opened reader for file={}, dataStartOffset={}", filePath, reader->getDataStartOffset());
 
-        if (reader->isSegmented())
+        /// Build segment read order (oldest to newest, filtered by time range)
+        readSegmentOrder = reader->getSegmentReadOrder(range);
+        readSegmentPos = 0;
+        NES_INFO("FileStore::read: {} segments to read out of {}, segmentSize={}, activeIdx={}, wrapCount={}",
+            readSegmentOrder.size(), reader->getSegmentCount(), reader->getSegmentSize(),
+            reader->getActiveSegmentIndex(), reader->getWrapCount());
+        for (uint32_t i = 0; i < reader->getSegmentCount() && i < 5; ++i)
         {
-            /// Build segment read order (oldest to newest, filtered by time range)
-            readSegmentOrder = reader->getSegmentReadOrder(range);
-            readSegmentPos = 0;
-            NES_INFO("FileStore::read: {} segments to read out of {}, segmentSize={}, activeIdx={}, wrapCount={}",
-                readSegmentOrder.size(), reader->getSegmentCount(), reader->getSegmentSize(),
-                reader->getActiveSegmentIndex(), reader->getWrapCount());
-            for (uint32_t i = 0; i < reader->getSegmentCount() && i < 5; ++i)
-            {
-                const auto& seg = reader->getSegments()[i];
-                NES_INFO("FileStore::read: segment[{}] usedBytes={} minTs={} maxTs={}", i, seg.usedBytes, seg.minTs, seg.maxTs);
-            }
-
-            if (readSegmentOrder.empty())
-            {
-                NES_DEBUG("FileStore::read: no segments match time range, skipping file");
-                reader->close();
-                reader.reset();
-                buffer.setLastChunk(true);
-                return 0;
-            }
+            const auto& seg = reader->getSegments()[i];
+            NES_INFO("FileStore::read: segment[{}] usedBytes={} minTs={} maxTs={}", i, seg.usedBytes, seg.minTs, seg.maxTs);
         }
-        else
+
+        if (readSegmentOrder.empty())
         {
-            /// Legacy v1 file: check file-level timestamps
-            if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
-            {
-                NES_DEBUG(
-                    "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)",
-                    filePath,
-                    reader->getMinTs(),
-                    reader->getMaxTs());
-                reader->close();
-                reader.reset();
-                buffer.setLastChunk(true);
-                return 0;
-            }
+            NES_DEBUG("FileStore::read: no segments match time range, skipping file");
+            reader->close();
+            reader.reset();
+            buffer.setLastChunk(true);
+            return 0;
         }
     }
 
@@ -261,73 +249,47 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     const uint64_t capacity = buffer.getBufferSize() / tupleSize;
     char* dest = buffer.getAvailableMemoryArea<char>().data();
 
-    if (reader->isSegmented())
+    /// Accumulate rows from segments in order
+    uint64_t totalTuples = 0;
+    while (readSegmentPos < readSegmentOrder.size())
     {
-        /// Segment-aware reading: read from segments in order
-        while (readSegmentPos < readSegmentOrder.size())
+        const uint32_t segIdx = readSegmentOrder[readSegmentPos];
+        const uint64_t remaining = capacity - totalTuples;
+        uint64_t tuplesRead = reader->readSegmentRows(segIdx, dest + totalTuples * tupleSize, remaining, tupleSize, readSchema);
+
+        NES_INFO(
+            "FileStore::read: segment {}, tuplesRead={}, tupleSize={}, capacity={}", segIdx, tuplesRead, tupleSize, remaining);
+
+        /// Apply row-level filtering if a time range is specified
+        if (!range.isUnbounded() && tuplesRead > 0)
         {
-            const uint32_t segIdx = readSegmentOrder[readSegmentPos];
-            uint64_t tuplesRead = reader->readSegmentRows(segIdx, dest, capacity, tupleSize, readSchema);
-
-            NES_INFO(
-                "FileStore::read: segment {}, tuplesRead={}, tupleSize={}, capacity={}", segIdx, tuplesRead, tupleSize, capacity);
-
-            /// Apply row-level filtering if a time range is specified
-            if (!range.isUnbounded() && tuplesRead > 0)
-            {
-                const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
-                PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
-                tuplesRead = filterBufferRows(dest, tuplesRead, tupleSize, *tsOffset, range);
-            }
-
-            ++readSegmentPos;
-
-            if (tuplesRead > 0)
-            {
-                buffer.setNumberOfTuples(tuplesRead);
-                if (readSegmentPos >= readSegmentOrder.size() && !nextLevel)
-                {
-                    buffer.setLastChunk(true);
-                }
-                return tuplesRead;
-            }
-            /// If this segment yielded no rows after filtering, continue to next segment
+            const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
+            PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
+            tuplesRead = filterBufferRows(dest + totalTuples * tupleSize, tuplesRead, tupleSize, *tsOffset, range);
         }
 
-        /// All segments exhausted
-        NES_DEBUG("FileStore::read: all segments exhausted, file={}", filePath);
-    }
-    else
-    {
-        /// Legacy v1 reading path
-        if (!reader->isEof())
+        totalTuples += tuplesRead;
+        ++readSegmentPos;
+
+        /// If the buffer is full, stop and return what we have so far
+        if (totalTuples >= capacity)
         {
-            uint64_t tuplesRead = reader->readRows(dest, capacity, tupleSize, readSchema);
-            NES_DEBUG(
-                "FileStore::read: tuplesRead={}, tupleSize={}, capacity={}, file={}", tuplesRead, tupleSize, capacity, filePath);
-
-            if (!range.isUnbounded() && tuplesRead > 0)
-            {
-                const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
-                PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
-                tuplesRead = filterBufferRows(dest, tuplesRead, tupleSize, *tsOffset, range);
-            }
-
-            buffer.setNumberOfTuples(tuplesRead);
-
-            if (tuplesRead > 0)
-            {
-                const bool atEof = reader->isEof() || reader->peek() == std::char_traits<char>::eof();
-                if (atEof && !nextLevel)
-                {
-                    buffer.setLastChunk(true);
-                }
-                return tuplesRead;
-            }
+            break;
         }
-
-        NES_DEBUG("FileStore::read: own data exhausted, file={}", filePath);
     }
+
+    if (totalTuples > 0)
+    {
+        buffer.setNumberOfTuples(totalTuples);
+        if (readSegmentPos >= readSegmentOrder.size() && !nextLevel)
+        {
+            buffer.setLastChunk(true);
+        }
+        return totalTuples;
+    }
+
+    /// All segments exhausted with no matching rows
+    NES_DEBUG("FileStore::read: all segments exhausted, file={}", filePath);
 
     /// Own data exhausted — delegate to next level
     if (nextLevel)
@@ -345,14 +307,7 @@ bool FileStore::hasMore() const
     {
         return true; /// Haven't started reading yet, assume data exists
     }
-    if (reader->isSegmented())
-    {
-        if (readSegmentPos < readSegmentOrder.size())
-        {
-            return true;
-        }
-    }
-    else if (!reader->isEof())
+    if (readSegmentPos < readSegmentOrder.size())
     {
         return true;
     }
