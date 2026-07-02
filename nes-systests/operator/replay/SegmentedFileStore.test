@@ -3,8 +3,8 @@
 # groups: [Store]
 
 REPLAYABLE SET(
-    '32MB'      AS REPLAY.FILE_TOTAL_SIZE,
-    '1MB'       AS REPLAY.FILE_SEGMENT_SIZE,
+    '2MB'      AS REPLAY.FILE_TOTAL_SIZE,
+    '64'       AS REPLAY.FILE_SEGMENT_SIZE,
     'FileStore' AS REPLAY.STORE_ORDER
 )
 
