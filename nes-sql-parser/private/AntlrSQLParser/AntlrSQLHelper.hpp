@@ -80,7 +80,9 @@ public:
     std::vector<LogicalFunction> joinKeyRelationHelper;
     std::vector<std::string> joinSourceRenames;
     JoinLogicalOperator::JoinType joinType = JoinLogicalOperator::JoinType::INNER_JOIN;
-    std::optional<std::unordered_map<std::string, std::string>> storeOptions;
+    std::optional<std::string> timeTravelTimestamp;
+    std::optional<std::string> timeTravelEndTimestamp;
+    bool timeTravelAll{false};
 
     /// UDB specific variables
     bool hasUdbClause{false};

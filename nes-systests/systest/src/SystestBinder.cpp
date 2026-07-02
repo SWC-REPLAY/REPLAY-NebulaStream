@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <queue>
 #include <ranges>
 #include <regex>
 #include <sstream>
@@ -40,6 +41,8 @@
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Identifiers/NESStrongType.hpp>
 #include <Operators/LogicalOperator.hpp>
@@ -50,6 +53,7 @@
 #include <Operators/Sources/SourceDescriptorLogicalOperator.hpp>
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
+#include <Plans/LogicalPlanBuilder.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
 #include <SQLQueryParser/StatementBinder.hpp>
 #include <Sinks/SinkCatalog.hpp>
@@ -823,13 +827,151 @@ struct SystestBinder::Impl
         }
     }
 
+    /// Parse a human-readable size string (e.g. "32MB", "1GB", "65536") into bytes.
+    static size_t parseSizeString(const std::string& s)
+    {
+        size_t pos = 0;
+        const auto number = std::stoull(s, &pos);
+        const auto suffix = s.substr(pos);
+        if (suffix.empty() || suffix == "B")
+        {
+            return number;
+        }
+        if (suffix == "KB")
+        {
+            return number * 1024UZ;
+        }
+        if (suffix == "MB")
+        {
+            return number * 1024UZ * 1024UZ;
+        }
+        if (suffix == "GB")
+        {
+            return number * 1024UZ * 1024UZ * 1024UZ;
+        }
+        throw InvalidQuerySyntax("Unknown size suffix '{}' in '{}'", suffix, s);
+    }
+
+    /// Parse a REPLAYABLE line for an optional SET(...) clause.
+    /// Expected format: REPLAYABLE SET('value' AS REPLAY.KEY, ...)
+    /// If no SET clause is found, returns a default (empty) StoreConfig.
+    static StoreManager::StoreConfig extractReplayConfig(const std::string& replayableLine)
+    {
+        StoreManager::StoreConfig config;
+
+        const auto setPos = replayableLine.find("SET(");
+        if (setPos == std::string::npos)
+        {
+            return config;
+        }
+
+        const auto closePos = replayableLine.find(')', setPos);
+        if (closePos == std::string::npos)
+        {
+            throw InvalidQuerySyntax("Unmatched parenthesis in REPLAYABLE SET clause");
+        }
+
+        const auto innerStart = setPos + 4; /// length of "SET("
+        const auto inner = replayableLine.substr(innerStart, closePos - innerStart);
+
+        /// Parse comma-separated entries: 'value' AS REPLAY.KEY
+        std::istringstream stream(inner);
+        std::string segment;
+        while (std::getline(stream, segment, ','))
+        {
+            std::string trimmed{trimWhiteSpaces(segment)};
+            if (trimmed.empty())
+            {
+                continue;
+            }
+
+            const auto asPos = trimmed.find(" AS ");
+            if (asPos == std::string::npos)
+            {
+                throw InvalidQuerySyntax("Expected 'value' AS REPLAY.KEY in SET clause, got '{}'", trimmed);
+            }
+
+            std::string value{trimWhiteSpaces(trimmed.substr(0, asPos))};
+            std::string key{trimWhiteSpaces(trimmed.substr(asPos + 4))};
+
+            /// Strip surrounding quotes from value
+            if (value.size() >= 2 && ((value.front() == '\'' && value.back() == '\'') || (value.front() == '"' && value.back() == '"')))
+            {
+                value = value.substr(1, value.size() - 2);
+            }
+
+            /// Validate REPLAY.* namespace
+            if (!key.starts_with("REPLAY."))
+            {
+                throw InvalidQuerySyntax("SET key '{}' must be in the REPLAY.* namespace", key);
+            }
+            const auto param = key.substr(7); // length of "REPLAY."
+
+            if (param == "MEMORY_BUFFER_SIZE")
+            {
+                config.memoryBufferSize = parseSizeString(value);
+            }
+            else if (param == "STORE_ORDER")
+            {
+                config.storeOrder = value;
+            }
+            else
+            {
+                throw InvalidQuerySyntax("Unknown REPLAY configuration key '{}'", key);
+            }
+        }
+
+        return config;
+    }
+
+    /// Check if the plan already contains a ReplayStoreLogicalOperator.
+    static bool planHasReplayStore(const LogicalPlan& plan)
+    {
+        for (const auto& root : plan.getRootOperators())
+        {
+            for (const auto& child : root.getChildren())
+            {
+                if (child.tryGetAs<ReplayStoreLogicalOperator>().has_value())
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Find the source name from the plan's leaf SourceNameLogicalOperator.
+    static std::string findSourceName(const LogicalPlan& plan)
+    {
+        for (const auto& root : plan.getRootOperators())
+        {
+            std::queue<LogicalOperator> queue;
+            queue.push(root);
+            while (!queue.empty())
+            {
+                auto current = queue.front();
+                queue.pop();
+                if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
+                {
+                    return sourceOp.value()->getLogicalSourceName();
+                }
+                for (const auto& child : current.getChildren())
+                {
+                    queue.push(child);
+                }
+            }
+        }
+        return {};
+    }
+
     /// Pre-register replay stores found in the parsed plan so that subsequent queries can reference them by name.
     /// Must be called AFTER setSinks so that the SinkLogicalOperator has its descriptor (and thus schema) set.
     /// For each ReplayStoreLogicalOperator, registers:
     ///   1. A logical source in the SourceCatalog (so SourceInferenceRule finds it for read queries)
     ///   2. A Replay-typed physical source (so LogicalSourceExpansionRule produces a working SourceDescriptor)
     ///   3. A fully initialized store in the StoreRegistry (MemoryStore -> FileStore hierarchy, ready for writes)
-    static void preRegisterReplaySources(const LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    static void preRegisterReplaySources(
+        const LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog, const StoreManager::StoreConfig& storeConfig)
     {
         for (const auto& root : plan.getRootOperators())
         {
@@ -880,42 +1022,138 @@ struct SystestBinder::Impl
             /// with no setup overhead in ReplayStoreOperatorHandler::open().
             std::stringstream schemaStream;
             schemaStream << storeSchema;
-            StoreManager::StoreRegistry::instance().registerDefaultStore(storeName, storeSchema, schemaStream.str());
+            StoreManager::StoreRegistry::instance().registerConfiguredStore(storeName, storeSchema, schemaStream.str(), storeConfig);
         }
     }
 
     /// Replace SourceNameLogicalOperator nodes that reference a registered store with
     /// InlineSourceLogicalOperator("Replay", ...) so the read path uses the store
     /// without going through SourceInferenceRule (which would add source-name qualification).
-    [[nodiscard]] static LogicalOperator
-    replaceTimeTravelReadSource(const LogicalOperator& current, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    /// Extract a single-quoted value starting at or after position `from`.
+    static std::optional<std::string> extractQuotedValue(const std::string& query, size_t from)
+    {
+        const auto quoteStart = query.find('\'', from);
+        if (quoteStart == std::string::npos)
+        {
+            return std::nullopt;
+        }
+        const auto quoteEnd = query.find('\'', quoteStart + 1);
+        if (quoteEnd == std::string::npos)
+        {
+            return std::nullopt;
+        }
+        return query.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+    }
+
+    /// Extract time-travel range from a FOR EVENT_TIME AS OF TIMESTAMP ... clause.
+    /// All range types are normalized to [start, end) by adjusting bounds:
+    ///   AS OF '<t>'                       → start=t
+    ///   BETWEEN '<a>' AND '<b>'           → start=a, end=b+1  (inclusive both → half-open)
+    ///   FROM '<a>' TO '<b>'               → start=a, end=b    (already half-open)
+    ///   CONTAINED IN ('<a>', '<b>')        → start=a, end=b+1  (inclusive both → half-open)
+    ///   ALL                               → (no start, no end)
+    static std::pair<std::optional<std::string>, std::optional<std::string>> extractTimeTravelRange(const std::string& query)
+    {
+        const auto pos = query.find("AS OF TIMESTAMP");
+        if (pos == std::string::npos)
+        {
+            return {};
+        }
+        const auto after = pos + std::string_view("AS OF TIMESTAMP").size();
+
+        if (query.find("BETWEEN", after) != std::string::npos || query.find("between", after) != std::string::npos)
+        {
+            auto startVal = extractQuotedValue(query, after);
+            const auto afterFirst = query.find('\'', query.find('\'', after) + 1) + 1;
+            auto endVal = extractQuotedValue(query, afterFirst);
+            if (startVal && endVal)
+            {
+                return {std::move(startVal), std::to_string(std::stoull(*endVal) + 1)};
+            }
+            return {};
+        }
+
+        if (query.find("CONTAINED", after) != std::string::npos || query.find("contained", after) != std::string::npos)
+        {
+            auto startVal = extractQuotedValue(query, after);
+            const auto afterFirst = query.find('\'', query.find('\'', after) + 1) + 1;
+            auto endVal = extractQuotedValue(query, afterFirst);
+            if (startVal && endVal)
+            {
+                return {std::move(startVal), std::to_string(std::stoull(*endVal) + 1)};
+            }
+            return {};
+        }
+
+        if (query.find(" FROM ", after) != std::string::npos || query.find(" from ", after) != std::string::npos)
+        {
+            auto startVal = extractQuotedValue(query, after);
+            const auto afterFirst = query.find('\'', query.find('\'', after) + 1) + 1;
+            auto endVal = extractQuotedValue(query, afterFirst);
+            if (startVal && endVal)
+            {
+                return {std::move(startVal), std::move(endVal)};
+            }
+            return {};
+        }
+
+        if (query.find("ALL", after) != std::string::npos || query.find("all", after) != std::string::npos)
+        {
+            return {};
+        }
+
+        /// Plain AS OF TIMESTAMP '<value>'
+        return {extractQuotedValue(query, after), std::nullopt};
+    }
+
+    [[nodiscard]] static LogicalOperator replaceTimeTravelReadSource(
+        const LogicalOperator& current,
+        const std::shared_ptr<SourceCatalog>& sourceCatalog,
+        const std::optional<std::string>& startTimestamp,
+        const std::optional<std::string>& endTimestamp,
+        const std::string_view testFileName)
     {
         std::vector<LogicalOperator> newChildren;
         for (const auto& child : current.getChildren())
         {
-            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog));
+            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog, startTimestamp, endTimestamp, testFileName));
         }
 
         if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
         {
             const auto sourceName = sourceOp.value()->getLogicalSourceName();
-            const auto logicalSource = sourceCatalog->getLogicalSource(sourceName);
-            if (logicalSource.has_value())
+
+            /// Check for a replay store registered under the source name directly or with test-scoped "replay_" prefix
+            const auto scopedName = fmt::format("replay_{}_{}", testFileName, sourceName);
+            for (const auto& candidateName : {sourceName, scopedName})
             {
-                /// Check if this logical source has a Replay physical source attached
+                const auto logicalSource = sourceCatalog->getLogicalSource(candidateName);
+                if (!logicalSource.has_value())
+                {
+                    continue;
+                }
                 const auto physicalSources = sourceCatalog->getPhysicalSources(*logicalSource);
                 const bool isReplaySource = physicalSources.has_value()
                     && std::ranges::any_of(*physicalSources, [](const auto& src) { return src.getSourceType() == "Replay"; });
 
                 if (isReplaySource)
                 {
-                    /// Use the unqualified schema from the logical source
+                    /// Build schema with source-qualified names so it matches the sink schema
+                    /// (e.g. STREAM$ID instead of just ID).
                     Schema schema;
                     for (const auto& field : *logicalSource->getSchema())
                     {
-                        schema.addField(field.getUnqualifiedName(), field.dataType);
+                        schema.addField(sourceName + "$" + field.getUnqualifiedName(), field.dataType);
                     }
-                    std::unordered_map<std::string, std::string> sourceConfig{{"store_name", sourceName}};
+                    std::unordered_map<std::string, std::string> sourceConfig{{"store_name", candidateName}};
+                    if (startTimestamp.has_value())
+                    {
+                        sourceConfig["replay_start_timestamp"] = *startTimestamp;
+                    }
+                    if (endTimestamp.has_value())
+                    {
+                        sourceConfig["replay_end_timestamp"] = *endTimestamp;
+                    }
                     std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
                     const InlineSourceLogicalOperator inlineOp{
                         WeakLogicalOperator{}, "Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
@@ -927,12 +1165,17 @@ struct SystestBinder::Impl
         return current.withChildren(std::move(newChildren));
     }
 
-    static void replaceTimeTravelReadSources(LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog)
+    static void replaceTimeTravelReadSources(
+        LogicalPlan& plan,
+        const std::shared_ptr<SourceCatalog>& sourceCatalog,
+        const std::optional<std::string>& startTimestamp,
+        const std::optional<std::string>& endTimestamp,
+        const std::string_view testFileName)
     {
         std::vector<LogicalOperator> newRoots;
         for (const auto& root : plan.getRootOperators())
         {
-            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog));
+            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog, startTimestamp, endTimestamp, testFileName));
         }
         plan = plan.withRootOperators(newRoots);
     }
@@ -945,8 +1188,11 @@ struct SystestBinder::Impl
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
         const std::vector<ConfigurationOverride>& configOverrides,
-        const bool sequentialExecution) const
+        const bool sequentialExecution,
+        const std::optional<std::string>& replayableConfigLine) const
     {
+        const bool replayable = replayableConfigLine.has_value();
+
         SystestQueryBuilder currentBuilder{currentQueryNumberInTest};
         currentBuilder.setQueryDefinition(query);
         currentBuilder.setConfigurationOverrides(configOverrides);
@@ -956,12 +1202,77 @@ struct SystestBinder::Impl
         }
         try
         {
+            /// Check that FOR EVENT_TIME is only used when REPLAYABLE is active
+            if (query.find("FOR EVENT_TIME") != std::string::npos && !replayable)
+            {
+                throw InvalidQuerySyntax("FOR EVENT_TIME requires REPLAYABLE directive");
+            }
+
+            /// Parse replay store configuration from the REPLAYABLE SET(...) line
+            auto replayConfig
+                = replayableConfigLine.has_value() ? extractReplayConfig(replayableConfigLine.value()) : StoreManager::StoreConfig{};
+
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
 
             setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
             plan.setQueryId(QueryId::createDistributed(DistributedQueryId(fmt::format("{}:{}", testFileName, currentQueryNumberInTest))));
-            preRegisterReplaySources(plan, sourceCatalog);
-            replaceTimeTravelReadSources(plan, sourceCatalog);
+
+            /// When REPLAYABLE is active and this is NOT a time-travel read query,
+            /// inject a replay store between the sink and its children.
+            /// We strip the parser-added sink, add the ReplayStore via the standard builder,
+            /// then re-add the sink on top.
+            const bool isTimeTravelRead = query.find("FOR EVENT_TIME") != std::string::npos;
+            if (replayable && !isTimeTravelRead && !planHasReplayStore(plan))
+            {
+                auto sourceName = findSourceName(plan);
+                if (!sourceName.empty() && !plan.getRootOperators().empty())
+                {
+                    /// Extract and strip the parser-added sink
+                    const auto roots = plan.getRootOperators();
+                    const auto& root = roots.front();
+                    auto sinkOp = root.tryGetAs<SinkLogicalOperator>();
+                    std::string sinkName;
+                    if (sinkOp.has_value())
+                    {
+                        sinkName = sinkOp.value()->getSinkName();
+                    }
+
+                    /// Build: Source → Projection → ReplayStore (stripping the old sink)
+                    std::vector<LogicalOperator> childRoots;
+                    for (const auto& child : root.getChildren())
+                    {
+                        childRoots.emplace_back(child);
+                    }
+                    auto childPlan = plan.withRootOperators(childRoots);
+
+                    const auto storeName = fmt::format("replay_{}_{}", testFileName, sourceName);
+                    auto opts = std::unordered_map<std::string, std::string>{{"store_name", storeName}};
+                    auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
+                    childPlan = LogicalPlanBuilder::addReplayStore(
+                        childPlan, cfg, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
+
+                    /// Re-add the original sink on top: Source → Projection → ReplayStore → Sink
+                    /// We reuse the original root operator (which already has its descriptor set by setSinks)
+                    /// rather than creating a new SinkLogicalOperator via addSink.
+                    if (sinkOp.has_value())
+                    {
+                        plan = promoteOperatorToRoot(childPlan, root);
+                    }
+                    else
+                    {
+                        plan = childPlan;
+                    }
+                }
+            }
+
+            preRegisterReplaySources(plan, sourceCatalog, replayConfig);
+            /// Only replace sources with replay sources for time-travel read queries.
+            /// Write queries must keep their original source (e.g. File) to populate the store.
+            if (isTimeTravelRead)
+            {
+                const auto [startTimestamp, endTimestamp] = extractTimeTravelRange(query);
+                replaceTimeTravelReadSources(plan, sourceCatalog, startTimestamp, endTimestamp, testFileName);
+            }
             setInlineSources(plan);
             currentBuilder.setBoundPlan(std::move(plan));
         }
@@ -1073,7 +1384,10 @@ struct SystestBinder::Impl
 
         SystestQueryId lastParsedQueryId = INVALID_SYSTEST_QUERY_ID;
         parser.registerOnQueryCallback(
-            [&](const std::string& query, SystestQueryId currentQueryNumberInTest, bool sequentialExecution)
+            [&](const std::string& query,
+                SystestQueryId currentQueryNumberInTest,
+                bool sequentialExecution,
+                const std::optional<std::string>& replayableConfigLine)
             {
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
@@ -1086,7 +1400,8 @@ struct SystestBinder::Impl
                     query,
                     currentQueryNumberInTest,
                     mergedConfigOverrides,
-                    sequentialExecution);
+                    sequentialExecution,
+                    replayableConfigLine);
                 configOverrides = {ConfigurationOverride{}};
             });
 

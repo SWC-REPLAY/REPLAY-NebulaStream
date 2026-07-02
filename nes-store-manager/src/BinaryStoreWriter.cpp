@@ -129,4 +129,22 @@ void BinaryStoreWriter::append(const uint8_t* data, size_t len)
     }
 }
 
+void BinaryStoreWriter::updateTimestamps(uint64_t minTs, uint64_t maxTs) const
+{
+    if (fd < 0)
+    {
+        return;
+    }
+    ssize_t written = ::pwrite(fd, &minTs, sizeof(uint64_t), static_cast<off_t>(OFFSET_MIN_TS));
+    if (written < 0 || static_cast<size_t>(written) != sizeof(uint64_t))
+    {
+        throw CannotOpenSink("Failed to update minTs in header: errno={} {}", errno, std::strerror(errno));
+    }
+    written = ::pwrite(fd, &maxTs, sizeof(uint64_t), static_cast<off_t>(OFFSET_MAX_TS));
+    if (written < 0 || static_cast<size_t>(written) != sizeof(uint64_t))
+    {
+        throw CannotOpenSink("Failed to update maxTs in header: errno={} {}", errno, std::strerror(errno));
+    }
+}
+
 }

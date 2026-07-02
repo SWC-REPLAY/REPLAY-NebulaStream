@@ -19,7 +19,7 @@
 
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
-#include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Store.hpp>
 
@@ -39,13 +39,12 @@ void ReplayStoreOperatorHandler::start(PipelineExecutionContext&, uint32_t)
 void ReplayStoreOperatorHandler::stop(QueryTerminationType, PipelineExecutionContext&)
 {
     store.flush();
-    store.close();
 }
 
-void ReplayStoreOperatorHandler::writeBuffer(TupleBuffer buffer)
+void ReplayStoreOperatorHandler::writeRecord(const uint8_t* data, uint32_t size, Timestamp ts)
 {
-    NES_DEBUG("ReplayStoreOperatorHandler::writeBuffer: {} tuples, store={}", buffer.getNumberOfTuples(), config.storeName);
-    store.write(std::move(buffer), config.schema);
+    NES_DEBUG("ReplayStoreOperatorHandler::writeRecord: size={}, ts={}, store={}", size, ts, config.storeName);
+    store.writeRecord(data, size, ts, config.schema);
 }
 
 }

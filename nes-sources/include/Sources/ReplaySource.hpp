@@ -30,6 +30,7 @@
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Store.hpp>
+#include <TimeRange.hpp>
 
 namespace NES::StoreManager
 {
@@ -68,6 +69,8 @@ private:
     std::optional<StoreManager::Store> store;
     std::unique_ptr<StoreManager::ReplayStoreReader> reader;
     Schema schema;
+    TimeRange timeRange;
+    bool readComplete{false};
 };
 
 }

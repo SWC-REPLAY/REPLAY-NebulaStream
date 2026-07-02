@@ -14,8 +14,12 @@
 
 #include <MemoryToFileTransformation.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <utility>
+#include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <FileStore.hpp>
 #include <MemoryStore.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
@@ -28,14 +32,43 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
     auto typedSource = source.getAs<MemoryStore>();
     auto& memStore = typedSource.getMutable();
     auto schema = memStore.getSchema();
+    const uint32_t rowWidth = FileStore::calculateRowWidth(schema);
 
     auto buffers = memStore.drain();
     NES_DEBUG("MemoryToFileTransformation: drained {} buffers from MemoryStore", buffers.size());
-    for (auto& buffer : buffers)
+
+    /// Scan min/max timestamps across all drained buffers
+    Timestamp overallMin(Timestamp::INVALID_VALUE);
+    Timestamp overallMax(Timestamp::INITIAL_VALUE);
+    for (const auto& timedBuf : buffers)
     {
-        NES_DEBUG("MemoryToFileTransformation: writing buffer with {} tuples", buffer.getNumberOfTuples());
-        dest.write(std::move(buffer), schema);
+        if (timedBuf.minTs < overallMin)
+        {
+            overallMin = timedBuf.minTs;
+        }
+        if (timedBuf.maxTs > overallMax)
+        {
+            overallMax = timedBuf.maxTs;
+        }
     }
+
+    /// Write all buffer data to the FileStore using bulk append
+    auto typedDest = dest.getAs<FileStore>();
+    auto& fileStore = typedDest.getMutable();
+    for (auto& timedBuf : buffers)
+    {
+        const uint64_t numTuples = timedBuf.buffer.getNumberOfTuples();
+        if (numTuples == 0)
+        {
+            continue;
+        }
+        auto srcSpan = timedBuf.buffer.getAvailableMemoryArea<uint8_t>();
+        NES_DEBUG("MemoryToFileTransformation: writing {} tuples, {} bytes", numTuples, static_cast<size_t>(numTuples) * rowWidth);
+        fileStore.appendRawBytes(srcSpan.data(), static_cast<size_t>(numTuples) * rowWidth);
+    }
+
+    /// Update the file header with the scanned overall min/max timestamps
+    fileStore.updateFileTimestamps(overallMin, overallMax);
 }
 
 }

@@ -14,10 +14,12 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 
 #include <DataTypes/Schema.hpp>
+#include <Runtime/BufferManager.hpp>
 #include <Util/Registry.hpp>
 #include <Store.hpp>
 
@@ -30,6 +32,7 @@ struct StoreTypeRegistryArguments
 {
     Schema schema;
     std::unordered_map<std::string, std::string> config;
+    std::shared_ptr<BufferManager> bufferManager;
 };
 
 class StoreTypeRegistry : public BaseRegistry<StoreTypeRegistry, std::string, StoreTypeRegistryReturnType, StoreTypeRegistryArguments>
