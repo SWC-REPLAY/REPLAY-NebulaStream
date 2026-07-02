@@ -1110,20 +1110,22 @@ struct SystestBinder::Impl
         const LogicalOperator& current,
         const std::shared_ptr<SourceCatalog>& sourceCatalog,
         const std::optional<std::string>& startTimestamp,
-        const std::optional<std::string>& endTimestamp)
+        const std::optional<std::string>& endTimestamp,
+        const std::string_view testFileName)
     {
         std::vector<LogicalOperator> newChildren;
         for (const auto& child : current.getChildren())
         {
-            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog, startTimestamp, endTimestamp));
+            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog, startTimestamp, endTimestamp, testFileName));
         }
 
         if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
         {
             const auto sourceName = sourceOp.value()->getLogicalSourceName();
 
-            /// Check for a replay store registered under the source name directly or with "replay_" prefix
-            for (const auto& candidateName : {sourceName, "replay_" + sourceName, "REPLAY_" + sourceName})
+            /// Check for a replay store registered under the source name directly or with test-scoped "replay_" prefix
+            const auto scopedName = fmt::format("replay_{}_{}", testFileName, sourceName);
+            for (const auto& candidateName : {sourceName, scopedName})
             {
                 const auto logicalSource = sourceCatalog->getLogicalSource(candidateName);
                 if (!logicalSource.has_value())
@@ -1167,12 +1169,13 @@ struct SystestBinder::Impl
         LogicalPlan& plan,
         const std::shared_ptr<SourceCatalog>& sourceCatalog,
         const std::optional<std::string>& startTimestamp,
-        const std::optional<std::string>& endTimestamp)
+        const std::optional<std::string>& endTimestamp,
+        const std::string_view testFileName)
     {
         std::vector<LogicalOperator> newRoots;
         for (const auto& root : plan.getRootOperators())
         {
-            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog, startTimestamp, endTimestamp));
+            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog, startTimestamp, endTimestamp, testFileName));
         }
         plan = plan.withRootOperators(newRoots);
     }
@@ -1242,7 +1245,7 @@ struct SystestBinder::Impl
                     }
                     auto childPlan = plan.withRootOperators(childRoots);
 
-                    const auto storeName = "replay_" + sourceName;
+                    const auto storeName = fmt::format("replay_{}_{}", testFileName, sourceName);
                     auto opts = std::unordered_map<std::string, std::string>{{"store_name", storeName}};
                     auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
                     childPlan = LogicalPlanBuilder::addReplayStore(
@@ -1268,7 +1271,7 @@ struct SystestBinder::Impl
             if (isTimeTravelRead)
             {
                 const auto [startTimestamp, endTimestamp] = extractTimeTravelRange(query);
-                replaceTimeTravelReadSources(plan, sourceCatalog, startTimestamp, endTimestamp);
+                replaceTimeTravelReadSources(plan, sourceCatalog, startTimestamp, endTimestamp, testFileName);
             }
             setInlineSources(plan);
             currentBuilder.setBoundPlan(std::move(plan));
