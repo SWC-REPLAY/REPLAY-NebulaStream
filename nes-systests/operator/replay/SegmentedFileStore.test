@@ -1,0 +1,35 @@
+# name: operator/replay/SegmentedFileStore.test
+# description: Demonstrates file store segmentation configurability
+# groups: [Store]
+
+REPLAYABLE SET(
+    '32MB'      AS REPLAY.FILE_TOTAL_SIZE,
+    '1MB'       AS REPLAY.FILE_SEGMENT_SIZE,
+    'FileStore' AS REPLAY.STORE_ORDER
+)
+
+SEQUENTIAL_EXECUTION
+
+CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, ts UINT64);
+CREATE PHYSICAL SOURCE FOR stream TYPE File;
+ATTACH INLINE
+1,1,1000
+2,1,1001
+3,1,1002
+4,2,2000
+
+CREATE SINK sinkStore(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkRead(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+
+SELECT id, value, ts FROM stream INTO sinkStore;
+----
+1,1,1000
+2,1,1001
+3,1,1002
+4,2,2000
+
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP '1001' INTO sinkRead;
+----
+2,1,1001
+3,1,1002
+4,2,2000

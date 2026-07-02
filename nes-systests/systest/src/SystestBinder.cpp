@@ -915,6 +915,14 @@ struct SystestBinder::Impl
             {
                 config.storeOrder = value;
             }
+            else if (param == "FILE_TOTAL_SIZE")
+            {
+                config.fileTotalSize = parseSizeString(value);
+            }
+            else if (param == "FILE_SEGMENT_SIZE")
+            {
+                config.fileSegmentSize = parseSizeString(value);
+            }
             else
             {
                 throw InvalidQuerySyntax("Unknown REPLAY configuration key '{}'", key);
