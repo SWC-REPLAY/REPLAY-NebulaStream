@@ -332,7 +332,13 @@ inlineSink
     : type=identifier '(' parameters=namedConfigExpressionSeq ')'
     ;
 
-timeTravelReadClause: FOR EVENT_TIME AS OF TIMESTAMP_KW timestampValue=STRING;
+timeTravelReadClause
+    : FOR EVENT_TIME AS OF TIMESTAMP_KW timestampValue=STRING
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW BETWEEN startBetween=STRING AND endBetween=STRING
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW FROM startFrom=STRING TO endFrom=STRING
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW CONTAINED IN '(' startContained=STRING ',' endContained=STRING ')'
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW ALL
+    ;
 
 udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
 
@@ -434,6 +440,7 @@ AT: 'AT';
 BETWEEN: 'BETWEEN' | 'between';
 BY: 'BY' | 'by';
 COMMENT: 'COMMENT';
+CONTAINED: 'CONTAINED' | 'contained';
 CUBE: 'CUBE';
 DELETE: 'DELETE';
 DESC: 'DESC' | 'desc';

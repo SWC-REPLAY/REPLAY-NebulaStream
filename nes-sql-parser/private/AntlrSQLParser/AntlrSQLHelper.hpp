@@ -81,6 +81,8 @@ public:
     std::vector<std::string> joinSourceRenames;
     JoinLogicalOperator::JoinType joinType = JoinLogicalOperator::JoinType::INNER_JOIN;
     std::optional<std::string> timeTravelTimestamp;
+    std::optional<std::string> timeTravelEndTimestamp;
+    bool timeTravelAll{false};
 
     /// UDB specific variables
     bool hasUdbClause{false};

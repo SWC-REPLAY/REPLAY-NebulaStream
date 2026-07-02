@@ -69,7 +69,8 @@ private:
     std::optional<StoreManager::Store> store;
     std::unique_ptr<StoreManager::ReplayStoreReader> reader;
     Schema schema;
-    StoreManager::TimeRange timeRange;
+    TimeRange timeRange;
+    bool readComplete{false};
 };
 
 }

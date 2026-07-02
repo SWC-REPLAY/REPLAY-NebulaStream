@@ -1110,13 +1110,43 @@ void AntlrSQLQueryPlanCreator::exitModelInferenceRelation(AntlrSQLParser::ModelI
 
 void AntlrSQLQueryPlanCreator::enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context)
 {
-    auto tsText = context->timestampValue->getText();
-    /// Strip surrounding quotes from the STRING token (e.g. '1001' -> 1001)
-    if (tsText.size() >= 2 && (tsText.front() == '\'' || tsText.front() == '"'))
+    auto stripQuotes = [](std::string text) -> std::string
     {
-        tsText = tsText.substr(1, tsText.size() - 2);
+        if (text.size() >= 2 && (text.front() == '\'' || text.front() == '"'))
+        {
+            text = text.substr(1, text.size() - 2);
+        }
+        return text;
+    };
+
+    if (context->timestampValue)
+    {
+        /// AS OF TIMESTAMP '<value>'
+        helpers.top().timeTravelTimestamp = stripQuotes(context->timestampValue->getText());
     }
-    helpers.top().timeTravelTimestamp = std::move(tsText);
+    else if (context->startBetween)
+    {
+        /// BETWEEN '<start>' AND '<end>'
+        helpers.top().timeTravelTimestamp = stripQuotes(context->startBetween->getText());
+        helpers.top().timeTravelEndTimestamp = stripQuotes(context->endBetween->getText());
+    }
+    else if (context->startFrom)
+    {
+        /// FROM '<start>' TO '<end>'
+        helpers.top().timeTravelTimestamp = stripQuotes(context->startFrom->getText());
+        helpers.top().timeTravelEndTimestamp = stripQuotes(context->endFrom->getText());
+    }
+    else if (context->startContained)
+    {
+        /// CONTAINED IN ('<start>', '<end>')
+        helpers.top().timeTravelTimestamp = stripQuotes(context->startContained->getText());
+        helpers.top().timeTravelEndTimestamp = stripQuotes(context->endContained->getText());
+    }
+    else
+    {
+        /// ALL
+        helpers.top().timeTravelAll = true;
+    }
 }
 
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)

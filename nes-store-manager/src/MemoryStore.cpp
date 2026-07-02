@@ -218,42 +218,43 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
         }
     }
     NES_DEBUG("Read from memory store into buffer");
-    const std::unique_lock lock(mutex);
+    const std::shared_lock lock(mutex);
 
-    while (!buffers.empty())
+    const uint32_t rowWidth = readSchema.getSizeOfSchemaInBytes();
+    auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
+    const uint64_t maxDestTuples = destSpan.size() / rowWidth;
+    uint64_t destTuples = 0;
+
+    for (const auto& timedBuf : buffers)
     {
-        auto& front = buffers.front();
+        if (destTuples >= maxDestTuples)
+        {
+            break;
+        }
 
         /// Skip entire buffer if its timestamp range falls outside the query range
-        if (!range.isUnbounded() && !range.overlaps(front.minTs, front.maxTs))
+        if (!range.isUnbounded() && !range.overlaps(timedBuf.minTs, timedBuf.maxTs))
         {
-            currentSize -= front.buffer.getBufferSize();
-            buffers.pop_front();
             continue;
         }
 
-        const uint64_t numTuples = front.buffer.getNumberOfTuples();
-        auto srcSpan = front.buffer.getAvailableMemoryArea<uint8_t>();
-        auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
+        const uint64_t numTuples = timedBuf.buffer.getNumberOfTuples();
+        auto srcSpan = timedBuf.buffer.getAvailableMemoryArea<uint8_t>();
 
-        /// If the entire buffer is within range, copy it wholesale
-        if (range.isUnbounded() || (front.minTs >= range.start && front.maxTs < range.end))
+        /// If the entire buffer is within range, copy all its tuples
+        if (range.isUnbounded() || (timedBuf.minTs >= range.start && timedBuf.maxTs < range.end))
         {
-            const size_t bytesToCopy = std::min(srcSpan.size(), destSpan.size());
-            std::memcpy(destSpan.data(), srcSpan.data(), bytesToCopy);
-            buffer.setNumberOfTuples(numTuples);
-            currentSize -= front.buffer.getBufferSize();
-            buffers.pop_front();
-            return numTuples;
+            const uint64_t tuplesToCopy = std::min(numTuples, maxDestTuples - destTuples);
+            std::memcpy(destSpan.data() + (destTuples * rowWidth), srcSpan.data(), tuplesToCopy * rowWidth);
+            destTuples += tuplesToCopy;
+            continue;
         }
 
         /// Partially overlapping buffer: row-level filtering
         const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
         PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
 
-        const uint32_t rowWidth = readSchema.getSizeOfSchemaInBytes();
-        uint64_t destTuples = 0;
-        for (uint64_t i = 0; i < numTuples; ++i)
+        for (uint64_t i = 0; i < numTuples && destTuples < maxDestTuples; ++i)
         {
             const uint8_t* rowPtr = srcSpan.data() + (i * rowWidth);
             uint64_t tsValue = 0;
@@ -265,17 +266,13 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
                 ++destTuples;
             }
         }
-        currentSize -= front.buffer.getBufferSize();
-        buffers.pop_front();
-
-        if (destTuples > 0)
-        {
-            buffer.setNumberOfTuples(destTuples);
-            return destTuples;
-        }
-        /// All rows filtered out — try next buffer
     }
-    return 0;
+
+    if (destTuples > 0)
+    {
+        buffer.setNumberOfTuples(destTuples);
+    }
+    return destTuples;
 }
 
 bool MemoryStore::hasMore() const

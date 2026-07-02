@@ -30,32 +30,34 @@ SELECT id, value, ts FROM stream INTO sink;
 2,1,1001
 4,2,2000
 
-# AS OF ... is inclusive from ... to end
+# AS OF [t, inf)
 SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP '1001' INTO sinkAsOf;
 ----
 2,1,1001
 3,1,1002
 4,2,2000
 
-# inclusive start exclusive end
-#SELECT id, value, ts FROM stream FOR EVENT_TIME BETWEEN '1001' AND '1002';
-#----
-#3,1,1002
+# BETWEEN [a, b] inclusive both
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP BETWEEN '1001' AND '1002' INTO sinkBetween;
+----
+2,1,1001
+3,1,1002
 
-# exclusive both edges
-#SELECT id, value, ts FROM stream FOR EVENT_TIME FROM '1002' TO '2000';        # closed-open
-#----
-#4,2,2000
+# FROM TO [a, b) half-open
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP FROM '1002' TO '2000' INTO sinkFromTo;
+----
+3,1,1002
 
-# inclusive both edges
-#SELECT id, value, ts FROM stream FOR EVENT_TIME CONTAINED IN ('1002', '2000');
-#----
-#3,1,1002
-#4,2,2000
+# CONTAINED IN [a, b] inclusive both
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP CONTAINED IN ('1002', '2000') INTO sinkContainedIn;
+----
+3,1,1002
+4,2,2000
 
-#SELECT id, value, ts FROM stream FOR EVENT_TIME ALL;
-#----
-#1,1,1000
-#2,1,1001
-#3,1,1002
-#4,2,2000
+# ALL returns everything
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP ALL INTO sinkAll;
+----
+1,1,1000
+2,1,1001
+3,1,1002
+4,2,2000

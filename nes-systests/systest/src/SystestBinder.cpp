@@ -1029,16 +1029,10 @@ struct SystestBinder::Impl
     /// Replace SourceNameLogicalOperator nodes that reference a registered store with
     /// InlineSourceLogicalOperator("Replay", ...) so the read path uses the store
     /// without going through SourceInferenceRule (which would add source-name qualification).
-    /// Extract timestamp from a FOR EVENT_TIME AS OF TIMESTAMP '<ts>' clause in the query string.
-    static std::optional<std::string> extractEventTimeTimestamp(const std::string& query)
+    /// Extract a single-quoted value starting at or after position `from`.
+    static std::optional<std::string> extractQuotedValue(const std::string& query, size_t from)
     {
-        const auto pos = query.find("AS OF TIMESTAMP");
-        if (pos == std::string::npos)
-        {
-            return std::nullopt;
-        }
-        /// Find the quoted value after TIMESTAMP
-        const auto quoteStart = query.find('\'', pos);
+        const auto quoteStart = query.find('\'', from);
         if (quoteStart == std::string::npos)
         {
             return std::nullopt;
@@ -1051,15 +1045,77 @@ struct SystestBinder::Impl
         return query.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
     }
 
+    /// Extract time-travel range from a FOR EVENT_TIME AS OF TIMESTAMP ... clause.
+    /// All range types are normalized to [start, end) by adjusting bounds:
+    ///   AS OF '<t>'                       → start=t
+    ///   BETWEEN '<a>' AND '<b>'           → start=a, end=b+1  (inclusive both → half-open)
+    ///   FROM '<a>' TO '<b>'               → start=a, end=b    (already half-open)
+    ///   CONTAINED IN ('<a>', '<b>')        → start=a, end=b+1  (inclusive both → half-open)
+    ///   ALL                               → (no start, no end)
+    static std::pair<std::optional<std::string>, std::optional<std::string>> extractTimeTravelRange(const std::string& query)
+    {
+        const auto pos = query.find("AS OF TIMESTAMP");
+        if (pos == std::string::npos)
+        {
+            return {};
+        }
+        const auto after = pos + std::string_view("AS OF TIMESTAMP").size();
+
+        if (query.find("BETWEEN", after) != std::string::npos || query.find("between", after) != std::string::npos)
+        {
+            auto startVal = extractQuotedValue(query, after);
+            const auto afterFirst = query.find('\'', query.find('\'', after) + 1) + 1;
+            auto endVal = extractQuotedValue(query, afterFirst);
+            if (startVal && endVal)
+            {
+                return {std::move(startVal), std::to_string(std::stoull(*endVal) + 1)};
+            }
+            return {};
+        }
+
+        if (query.find("CONTAINED", after) != std::string::npos || query.find("contained", after) != std::string::npos)
+        {
+            auto startVal = extractQuotedValue(query, after);
+            const auto afterFirst = query.find('\'', query.find('\'', after) + 1) + 1;
+            auto endVal = extractQuotedValue(query, afterFirst);
+            if (startVal && endVal)
+            {
+                return {std::move(startVal), std::to_string(std::stoull(*endVal) + 1)};
+            }
+            return {};
+        }
+
+        if (query.find(" FROM ", after) != std::string::npos || query.find(" from ", after) != std::string::npos)
+        {
+            auto startVal = extractQuotedValue(query, after);
+            const auto afterFirst = query.find('\'', query.find('\'', after) + 1) + 1;
+            auto endVal = extractQuotedValue(query, afterFirst);
+            if (startVal && endVal)
+            {
+                return {std::move(startVal), std::move(endVal)};
+            }
+            return {};
+        }
+
+        if (query.find("ALL", after) != std::string::npos || query.find("all", after) != std::string::npos)
+        {
+            return {};
+        }
+
+        /// Plain AS OF TIMESTAMP '<value>'
+        return {extractQuotedValue(query, after), std::nullopt};
+    }
+
     [[nodiscard]] static LogicalOperator replaceTimeTravelReadSource(
         const LogicalOperator& current,
         const std::shared_ptr<SourceCatalog>& sourceCatalog,
-        const std::optional<std::string>& startTimestamp)
+        const std::optional<std::string>& startTimestamp,
+        const std::optional<std::string>& endTimestamp)
     {
         std::vector<LogicalOperator> newChildren;
         for (const auto& child : current.getChildren())
         {
-            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog, startTimestamp));
+            newChildren.emplace_back(replaceTimeTravelReadSource(child, sourceCatalog, startTimestamp, endTimestamp));
         }
 
         if (const auto sourceOp = current.tryGetAs<SourceNameLogicalOperator>())
@@ -1092,6 +1148,10 @@ struct SystestBinder::Impl
                     {
                         sourceConfig["replay_start_timestamp"] = *startTimestamp;
                     }
+                    if (endTimestamp.has_value())
+                    {
+                        sourceConfig["replay_end_timestamp"] = *endTimestamp;
+                    }
                     std::unordered_map<std::string, std::string> parserConfig{{"type", "NATIVE"}};
                     const InlineSourceLogicalOperator inlineOp{
                         WeakLogicalOperator{}, "Replay", schema, std::move(sourceConfig), std::move(parserConfig)};
@@ -1104,12 +1164,15 @@ struct SystestBinder::Impl
     }
 
     static void replaceTimeTravelReadSources(
-        LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog, const std::optional<std::string>& startTimestamp)
+        LogicalPlan& plan,
+        const std::shared_ptr<SourceCatalog>& sourceCatalog,
+        const std::optional<std::string>& startTimestamp,
+        const std::optional<std::string>& endTimestamp)
     {
         std::vector<LogicalOperator> newRoots;
         for (const auto& root : plan.getRootOperators())
         {
-            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog, startTimestamp));
+            newRoots.emplace_back(replaceTimeTravelReadSource(root, sourceCatalog, startTimestamp, endTimestamp));
         }
         plan = plan.withRootOperators(newRoots);
     }
@@ -1204,8 +1267,8 @@ struct SystestBinder::Impl
             /// Write queries must keep their original source (e.g. File) to populate the store.
             if (isTimeTravelRead)
             {
-                const auto startTimestamp = extractEventTimeTimestamp(query);
-                replaceTimeTravelReadSources(plan, sourceCatalog, startTimestamp);
+                const auto [startTimestamp, endTimestamp] = extractTimeTravelRange(query);
+                replaceTimeTravelReadSources(plan, sourceCatalog, startTimestamp, endTimestamp);
             }
             setInlineSources(plan);
             currentBuilder.setBoundPlan(std::move(plan));

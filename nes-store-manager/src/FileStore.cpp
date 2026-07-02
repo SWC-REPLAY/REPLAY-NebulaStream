@@ -220,63 +220,51 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         reader = std::make_unique<ReplayStoreReader>(filePath);
         reader->open();
         NES_DEBUG("FileStore::read: opened reader for file={}, dataStartOffset={}", filePath, reader->getDataStartOffset());
-
-        /// Skip entire file if its timestamp range falls outside the query range
-        if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
-        {
-            NES_DEBUG(
-                "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)",
-                filePath,
-                reader->getMinTs(),
-                reader->getMaxTs());
-            reader->close();
-            reader.reset();
-            buffer.setLastChunk(true);
-            return 0;
-        }
+    }
+    else
+    {
+        /// Reset reader to beginning of data so repeated reads are independent
+        reader->clearErrors();
+        reader->seekTo(static_cast<std::streampos>(reader->getDataStartOffset()));
     }
 
-    if (!reader->isEof())
+    /// Skip entire file if its timestamp range falls outside the query range
+    if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
     {
-        const uint32_t tupleSize = calculateRowWidth(readSchema);
-        PRECONDITION(tupleSize > 0, "Schema must have at least one field to compute row width");
-        const uint64_t capacity = buffer.getBufferSize() / tupleSize;
-        char* dest = buffer.getAvailableMemoryArea<char>().data();
+        NES_DEBUG(
+            "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)", filePath, reader->getMinTs(), reader->getMaxTs());
+        return 0;
+    }
 
-        uint64_t tuplesRead = reader->readRows(dest, capacity, tupleSize, readSchema);
+    const uint32_t tupleSize = calculateRowWidth(readSchema);
+    PRECONDITION(tupleSize > 0, "Schema must have at least one field to compute row width");
+    const uint64_t capacity = buffer.getBufferSize() / tupleSize;
+    char* dest = buffer.getAvailableMemoryArea<char>().data();
+    uint64_t totalTuples = 0;
+
+    while (!reader->isEof() && totalTuples < capacity)
+    {
+        uint64_t tuplesRead = reader->readRows(dest + (totalTuples * tupleSize), capacity - totalTuples, tupleSize, readSchema);
         NES_DEBUG("FileStore::read: tuplesRead={}, tupleSize={}, capacity={}, file={}", tuplesRead, tupleSize, capacity, filePath);
 
+        if (tuplesRead == 0)
+        {
+            break;
+        }
+
         /// Apply row-level filtering if a time range is specified
-        if (!range.isUnbounded() && tuplesRead > 0)
+        if (!range.isUnbounded())
         {
             const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
             PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
-            tuplesRead = filterBufferRows(dest, tuplesRead, tupleSize, *tsOffset, range);
+            tuplesRead = filterBufferRows(dest + (totalTuples * tupleSize), tuplesRead, tupleSize, *tsOffset, range);
         }
 
-        buffer.setNumberOfTuples(tuplesRead);
-
-        if (tuplesRead > 0)
-        {
-            const bool atEof = reader->isEof() || reader->peek() == std::char_traits<char>::eof();
-            if (atEof && !nextLevel)
-            {
-                buffer.setLastChunk(true);
-            }
-            return tuplesRead;
-        }
+        totalTuples += tuplesRead;
     }
 
-    NES_DEBUG("FileStore::read: own data exhausted, file={}", filePath);
-
-    /// Own data exhausted — delegate to next level
-    if (nextLevel)
-    {
-        return nextLevel->read(buffer, readSchema, range);
-    }
-
-    buffer.setLastChunk(true);
-    return 0;
+    buffer.setNumberOfTuples(totalTuples);
+    return totalTuples;
 }
 
 bool FileStore::hasMore() const

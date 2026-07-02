@@ -55,7 +55,14 @@ ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor)
     if (config.contains("replay_start_timestamp"))
     {
         const auto startTs = std::stoull(std::get<std::string>(config.at("replay_start_timestamp")));
-        timeRange = StoreManager::TimeRange{.fieldName = "TS", .start = Timestamp(startTs)};
+        timeRange.fieldName = "TS";
+        timeRange.start = Timestamp(startTs);
+    }
+    if (config.contains("replay_end_timestamp"))
+    {
+        const auto endTs = std::stoull(std::get<std::string>(config.at("replay_end_timestamp")));
+        timeRange.fieldName = "TS";
+        timeRange.end = Timestamp(endTs);
     }
 }
 
@@ -97,11 +104,12 @@ void ReplaySource::close()
 Source::FillTupleBufferResult ReplaySource::fillTupleBuffer(TupleBuffer& tupleBuffer, const std::stop_token&)
 {
     PRECONDITION(store.has_value(), "Replay source requires underlying store type!");
-    if (!store->hasMore())
+    if (readComplete)
     {
         return FillTupleBufferResult::eos();
     }
     const uint64_t tuplesWritten = store->read(tupleBuffer, schema, timeRange);
+    readComplete = true;
     if (tuplesWritten == 0)
     {
         return FillTupleBufferResult::eos();
@@ -150,6 +158,10 @@ DescriptorConfig::Config ReplaySource::validateAndFormat(std::unordered_map<std:
     if (config.contains("replay_start_timestamp"))
     {
         validated.emplace("replay_start_timestamp", DescriptorConfig::ConfigType(config.at("replay_start_timestamp")));
+    }
+    if (config.contains("replay_end_timestamp"))
+    {
+        validated.emplace("replay_end_timestamp", DescriptorConfig::ConfigType(config.at("replay_end_timestamp")));
     }
     validated.emplace("number_of_buffers_in_local_pool", DescriptorConfig::ConfigType(static_cast<int64_t>(-1)));
     validated.emplace("max_inflight_buffers", DescriptorConfig::ConfigType(SourceDescriptor::INVALID_MAX_INFLIGHT_BUFFERS));
