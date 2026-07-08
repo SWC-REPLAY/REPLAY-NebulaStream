@@ -1177,12 +1177,18 @@ struct SystestBinder::Impl
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
         const std::vector<ConfigurationOverride>& configOverrides,
-        const bool sequentialExecution) const
+        const bool sequentialExecution,
+        const std::optional<SystestQueryId>& afterQueryId) const
     {
         SystestQueryBuilder currentBuilder{currentQueryNumberInTest};
         currentBuilder.setQueryDefinition(query);
         currentBuilder.setConfigurationOverrides(configOverrides);
-        if (sequentialExecution)
+        if (afterQueryId.has_value())
+        {
+            /// AFTER #N takes precedence over SEQUENTIAL_EXECUTION
+            currentBuilder.setRunAfter(std::make_pair(TestName(testFileName), afterQueryId.value()));
+        }
+        else if (sequentialExecution)
         {
             currentBuilder.setRunAfter(std::make_pair(TestName(testFileName), SystestQueryId{currentQueryNumberInTest.getRawValue() - 1}));
         }
@@ -1325,7 +1331,8 @@ struct SystestBinder::Impl
         parser.registerOnQueryCallback(
             [&](const std::string& query,
                 SystestQueryId currentQueryNumberInTest,
-                bool sequentialExecution)
+                bool sequentialExecution,
+                std::optional<SystestQueryId> afterQueryId)
             {
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
@@ -1338,7 +1345,8 @@ struct SystestBinder::Impl
                     query,
                     currentQueryNumberInTest,
                     mergedConfigOverrides,
-                    sequentialExecution);
+                    sequentialExecution,
+                    afterQueryId);
                 configOverrides = {ConfigurationOverride{}};
             });
 

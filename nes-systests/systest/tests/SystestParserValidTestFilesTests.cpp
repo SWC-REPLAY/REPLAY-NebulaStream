@@ -61,7 +61,7 @@ TEST_F(SystestParserValidTestFileTest, ValidTestFile)
 
     SystestParser parser{};
     std::unordered_map<SystestQueryId, std::vector<std::string>> queryResultMap;
-    parser.registerOnQueryCallback([&](const std::string&, SystestQueryId, bool, const std::optional<std::string>&)
+    parser.registerOnQueryCallback([&](const std::string&, SystestQueryId, bool, std::optional<SystestQueryId>)
                                    { queryCallbackCalled = true; });
     parser.registerOnCreateCallback(
         [&](const std::string&, const std::optional<std::pair<TestDataIngestionType, std::vector<std::string>>>&)
@@ -175,7 +175,7 @@ TEST_F(SystestParserValidTestFileTest, Nullable1TestFile)
 
     parser.registerOnQueryCallback(
         [&queryCallbackCalled,
-         &expectedQueries](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, const std::optional<std::string>&)
+         &expectedQueries](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, std::optional<SystestQueryId>)
         {
             queryCallbackCalled = true;
             /// Query numbers start at QueryId::INITIAL, which is 1
@@ -290,7 +290,7 @@ TEST_F(SystestParserValidTestFileTest, Comments1TestFile)
 
     parser.registerOnQueryCallback(
         [&queryCallbackCalled,
-         &expectedQueries](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, const std::optional<std::string>&)
+         &expectedQueries](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, std::optional<SystestQueryId>)
         {
             queryCallbackCalled = true;
             /// Query numbers start at QueryId::INITIAL, which is 1
@@ -410,7 +410,7 @@ TEST_F(SystestParserValidTestFileTest, FilterTestFile)
 
 
     parser.registerOnQueryCallback(
-        [&](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, const std::optional<std::string>&)
+        [&](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, std::optional<SystestQueryId>)
         {
             queryCallbackCalled = true;
             /// Query numbers start at QueryId::INITIAL, which is 1
@@ -445,7 +445,7 @@ TEST_F(SystestParserValidTestFileTest, ErrorExpectationTest)
 
     SystestParser parser{};
     parser.registerOnQueryCallback(
-        [&queryCallbackCalled, &expectQuery](const std::string& query, SystestQueryId, bool, const std::optional<std::string>&)
+        [&queryCallbackCalled, &expectQuery](const std::string& query, SystestQueryId, bool, std::optional<SystestQueryId>)
         {
             ASSERT_EQ(query, expectQuery);
             queryCallbackCalled = true;
@@ -521,7 +521,7 @@ TEST_F(SystestParserValidTestFileTest, CreateStatementFormat)
 
 
     parser.registerOnQueryCallback(
-        [&](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, const std::optional<std::string>&)
+        [&](const std::string& query, const SystestQueryId currentQueryIdInTest, bool, std::optional<SystestQueryId>)
         {
             queryCallbackCalled = true;
             /// Query numbers start at QueryId::INITIAL, which is 1

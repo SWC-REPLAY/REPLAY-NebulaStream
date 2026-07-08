@@ -56,7 +56,7 @@ TEST_F(SystestParserInvalidTestFilesTest, InvalidErrorCodeTest)
     const auto* const expectQuery = R"(SELECT * FROM window WHERE value == UINT64(1) INTO sinkWindow;)";
 
     SystestParser parser{};
-    parser.registerOnQueryCallback([&](const std::string& query, const SystestQueryId, bool, const std::optional<std::string>&)
+    parser.registerOnQueryCallback([&](const std::string& query, const SystestQueryId, bool, std::optional<SystestQueryId>)
                                    { ASSERT_EQ(query, expectQuery); });
 
     parser.registerOnErrorExpectationCallback(
@@ -76,7 +76,7 @@ TEST_F(SystestParserInvalidTestFilesTest, InvalidErrorMessageTest)
     const auto* const expectQuery = R"(SELECT * FROM window WHERE value == UINT64(1) INTO sinkWindow;)";
 
     SystestParser parser{};
-    parser.registerOnQueryCallback([&](const std::string& query, SystestQueryId, bool, const std::optional<std::string>&)
+    parser.registerOnQueryCallback([&](const std::string& query, SystestQueryId, bool, std::optional<SystestQueryId>)
                                    { ASSERT_EQ(query, expectQuery); });
 
     parser.registerOnErrorExpectationCallback(
@@ -95,7 +95,7 @@ TEST_F(SystestParserInvalidTestFilesTest, InvalidTokenTest)
 
     SystestParser parser{};
     parser.registerOnQueryCallback(
-        [&](const std::string&, SystestQueryId, bool, const std::optional<std::string>&) { /* nop, ensure parsing*/ });
+        [&](const std::string&, SystestQueryId, bool, std::optional<SystestQueryId>) { /* nop, ensure parsing*/ });
     parser.registerOnCreateCallback(
         [&](const std::string&, const std::optional<std::pair<TestDataIngestionType, std::vector<std::string>>>&) { });
 
@@ -112,7 +112,7 @@ TEST_F(SystestParserInvalidTestFilesTest, InvalidDifferentialTest)
         [&](const std::string&,
             const std::optional<std::pair<TestDataIngestionType, std::vector<std::string>>>&) { /* nop, ensure parsing*/ });
     parser.registerOnQueryCallback(
-        [&](const std::string&, SystestQueryId, bool, const std::optional<std::string>&) { /* nop, ensure parsing*/ });
+        [&](const std::string&, SystestQueryId, bool, std::optional<SystestQueryId>) { /* nop, ensure parsing*/ });
     parser.registerOnDifferentialQueryBlockCallback(
         [](std::string, std::string, SystestQueryId, SystestQueryId) { /* nop, ensure parsing*/ });
 
