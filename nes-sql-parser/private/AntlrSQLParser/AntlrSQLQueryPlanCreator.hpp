@@ -86,6 +86,7 @@ public:
     void enterInlineSource(AntlrSQLParser::InlineSourceContext* context) override;
     void enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context) override;
     void enterUdbClause(AntlrSQLParser::UdbClauseContext* context) override;
+    void enterReplayableClause(AntlrSQLParser::ReplayableClauseContext* context) override;
 };
 
 }

@@ -152,9 +152,8 @@ public:
         bool operator==(const ErrorExpectation& other) const = default;
     };
 
-    /// replayableConfigLine: nullopt if REPLAYABLE is off; otherwise the REPLAYABLE line content (may contain SET(...)).
     using QueryCallback
-        = std::function<void(std::string, SystestQueryId, bool sequentialExecution, std::optional<std::string> replayableConfigLine)>;
+        = std::function<void(std::string, SystestQueryId, bool sequentialExecution)>;
     using ResultTuplesCallback = std::function<void(std::vector<std::string>&&, SystestQueryId correspondingQueryId)>;
     using ErrorExpectationCallback = std::function<void(const ErrorExpectation&, SystestQueryId correspondingQueryId)>;
     using DifferentialQueryBlockCallback

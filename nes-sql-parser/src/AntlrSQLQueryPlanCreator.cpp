@@ -51,6 +51,7 @@
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
 #include <Functions/LogicalFunctionProvider.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
@@ -541,6 +542,19 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     if (helpers.top().hasUdbClause)
     {
         queryPlan = LogicalPlanBuilder::addUdbRecording(helpers.top().udbTraceName, queryPlan);
+    }
+    /// inject replay store operator into the plan if REPLAYABLE WITH HISTORY OF was provided
+    if (helpers.top().hasReplayableClause)
+    {
+        std::unordered_map<std::string, std::string> configMap;
+        configMap["memory_buffer_size"] = helpers.top().replayableStorageSize;
+        if (!helpers.top().getSource().empty())
+        {
+            configMap["store_name"] = fmt::format("replay_{}", helpers.top().getSource());
+        }
+        auto config = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(configMap));
+        queryPlan = LogicalPlanBuilder::addReplayStore(
+            queryPlan, config, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
     }
     helpers.pop();
     if (helpers.empty())
@@ -1156,6 +1170,30 @@ void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* 
     if (context->udbTraceName != nullptr)
     {
         helpers.top().udbTraceName = context->udbTraceName->getText();
+    }
+}
+
+void AntlrSQLQueryPlanCreator::enterReplayableClause(AntlrSQLParser::ReplayableClauseContext* context)
+{
+    helpers.top().hasReplayableClause = true;
+
+    auto stripQuotes = [](std::string text) -> std::string
+    {
+        if (text.size() >= 2 && (text.front() == '\'' || text.front() == '"'))
+        {
+            text = text.substr(1, text.size() - 2);
+        }
+        return text;
+    };
+
+    const auto* historyLimit = context->historyLimit();
+    if (historyLimit->storageSize != nullptr)
+    {
+        helpers.top().replayableStorageSize = stripQuotes(historyLimit->storageSize->getText());
+    }
+    else
+    {
+        throw InvalidQuerySyntax("Only storage-based history limits (e.g., '10GB') are currently supported");
     }
 }
 }

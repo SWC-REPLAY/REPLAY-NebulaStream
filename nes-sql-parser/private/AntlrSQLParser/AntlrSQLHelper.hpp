@@ -88,6 +88,10 @@ public:
     bool hasUdbClause{false};
     std::optional<std::string> udbTraceName;
 
+    /// Replayable specific variables
+    bool hasReplayableClause{false};
+    std::string replayableStorageSize;
+
     /// Utility variables to keep state between enter/exit parser function calls.
     size_t opBoolean{}; ///anonymous token enum in AntlrSQLLexer.h
     std::string opValue;

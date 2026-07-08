@@ -131,7 +131,7 @@ queryPrimary
     | '(' query ')'                                                         #subquery
     ;
 /// new layout to be closer to traditional SQL
-querySpecification: selectClause fromClause timeTravelReadClause? whereClause? windowedAggregationClause? havingClause? sinkClause? udbClause?;
+querySpecification: selectClause fromClause timeTravelReadClause? whereClause? windowedAggregationClause? havingClause? sinkClause? udbClause? replayableClause?;
 
 
 fromClause: FROM relation (',' relation)*;
@@ -342,6 +342,14 @@ timeTravelReadClause
 
 udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
 
+replayableClause: REPLAYABLE WITH HISTORY OF historyLimit optionsClause?;
+
+historyLimit
+    : storageSize=STRING                        // '10GB', '512MB'
+    | tupleCount=INTEGER_VALUE TUPLES           // 1000 TUPLES — future
+    | timeValue=INTEGER_VALUE timeUnit          // 1 HOUR — future
+    ;
+
 nullNotnull
     : NOT? NULLTOKEN
     ;
@@ -530,6 +538,9 @@ TEXT: 'TEXT';
 EVENT_TIME: 'EVENT_TIME' | 'event_time';
 TIMESTAMP_KW: 'TIMESTAMP';
 TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
+REPLAYABLE: 'REPLAYABLE' | 'replayable';
+HISTORY: 'HISTORY' | 'history';
+TUPLES: 'TUPLES' | 'tuples';
 EXPLAIN: 'EXPLAIN' | 'explain';
 MODEL: 'MODEL';
 MODELS: 'MODELS';

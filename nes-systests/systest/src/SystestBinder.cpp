@@ -852,78 +852,6 @@ struct SystestBinder::Impl
         throw InvalidQuerySyntax("Unknown size suffix '{}' in '{}'", suffix, s);
     }
 
-    /// Parse a REPLAYABLE line for an optional SET(...) clause.
-    /// Expected format: REPLAYABLE SET('value' AS REPLAY.KEY, ...)
-    /// If no SET clause is found, returns a default (empty) StoreConfig.
-    static StoreManager::StoreConfig extractReplayConfig(const std::string& replayableLine)
-    {
-        StoreManager::StoreConfig config;
-
-        const auto setPos = replayableLine.find("SET(");
-        if (setPos == std::string::npos)
-        {
-            return config;
-        }
-
-        const auto closePos = replayableLine.find(')', setPos);
-        if (closePos == std::string::npos)
-        {
-            throw InvalidQuerySyntax("Unmatched parenthesis in REPLAYABLE SET clause");
-        }
-
-        const auto innerStart = setPos + 4; /// length of "SET("
-        const auto inner = replayableLine.substr(innerStart, closePos - innerStart);
-
-        /// Parse comma-separated entries: 'value' AS REPLAY.KEY
-        std::istringstream stream(inner);
-        std::string segment;
-        while (std::getline(stream, segment, ','))
-        {
-            std::string trimmed{trimWhiteSpaces(segment)};
-            if (trimmed.empty())
-            {
-                continue;
-            }
-
-            const auto asPos = trimmed.find(" AS ");
-            if (asPos == std::string::npos)
-            {
-                throw InvalidQuerySyntax("Expected 'value' AS REPLAY.KEY in SET clause, got '{}'", trimmed);
-            }
-
-            std::string value{trimWhiteSpaces(trimmed.substr(0, asPos))};
-            std::string key{trimWhiteSpaces(trimmed.substr(asPos + 4))};
-
-            /// Strip surrounding quotes from value
-            if (value.size() >= 2 && ((value.front() == '\'' && value.back() == '\'') || (value.front() == '"' && value.back() == '"')))
-            {
-                value = value.substr(1, value.size() - 2);
-            }
-
-            /// Validate REPLAY.* namespace
-            if (!key.starts_with("REPLAY."))
-            {
-                throw InvalidQuerySyntax("SET key '{}' must be in the REPLAY.* namespace", key);
-            }
-            const auto param = key.substr(7); // length of "REPLAY."
-
-            if (param == "MEMORY_BUFFER_SIZE")
-            {
-                config.memoryBufferSize = parseSizeString(value);
-            }
-            else if (param == "STORE_ORDER")
-            {
-                config.storeOrder = value;
-            }
-            else
-            {
-                throw InvalidQuerySyntax("Unknown REPLAY configuration key '{}'", key);
-            }
-        }
-
-        return config;
-    }
-
     /// Check if the plan already contains a ReplayStoreLogicalOperator.
     static bool planHasReplayStore(const LogicalPlan& plan)
     {
@@ -964,6 +892,48 @@ struct SystestBinder::Impl
         return {};
     }
 
+    /// Update store_name on all ReplayStoreLogicalOperator nodes in the plan.
+    /// This is needed in systests to prefix the store name with the test file name for uniqueness.
+    /// Rebuilds the affected plan subtree since operators are immutable.
+    static void updateReplayStoreNames(LogicalPlan& plan, const std::string& storeName)
+    {
+        for (const auto& root : plan.getRootOperators())
+        {
+            const auto children = root.getChildren();
+            if (children.empty())
+            {
+                continue;
+            }
+            auto storeOp = children.front().tryGetAs<ReplayStoreLogicalOperator>();
+            if (!storeOp.has_value())
+            {
+                continue;
+            }
+
+            /// Extract existing config values
+            const auto& existingConfig = storeOp.value()->getConfig();
+            std::unordered_map<std::string, std::string> configMap{{"store_name", storeName}};
+            if (existingConfig.count("memory_buffer_size"))
+            {
+                configMap["memory_buffer_size"] = std::get<std::string>(existingConfig.at("memory_buffer_size"));
+            }
+            if (existingConfig.count("store_order"))
+            {
+                configMap["store_order"] = std::get<std::string>(existingConfig.at("store_order"));
+            }
+
+            /// Build new operator with updated config and same children
+            auto newConfig = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(configMap));
+            auto updatedOp = storeOp.value()->withConfig(std::move(newConfig));
+            auto updatedOpWithChildren = updatedOp.withChildren(storeOp.value()->getChildren());
+
+            /// Rebuild plan: Sink → UpdatedReplayStore → (original children)
+            LogicalOperator newStoreNode(updatedOpWithChildren);
+            auto newRoot = root.withChildren({newStoreNode});
+            plan = plan.withRootOperators({newRoot});
+        }
+    }
+
     /// Pre-register replay stores found in the parsed plan so that subsequent queries can reference them by name.
     /// Must be called AFTER setSinks so that the SinkLogicalOperator has its descriptor (and thus schema) set.
     /// For each ReplayStoreLogicalOperator, registers:
@@ -971,7 +941,7 @@ struct SystestBinder::Impl
     ///   2. A Replay-typed physical source (so LogicalSourceExpansionRule produces a working SourceDescriptor)
     ///   3. A fully initialized store in the StoreRegistry (MemoryStore -> FileStore hierarchy, ready for writes)
     static void preRegisterReplaySources(
-        const LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog, const StoreManager::StoreConfig& storeConfig)
+        const LogicalPlan& plan, const std::shared_ptr<SourceCatalog>& sourceCatalog)
     {
         for (const auto& root : plan.getRootOperators())
         {
@@ -1017,6 +987,25 @@ struct SystestBinder::Impl
             auto physicalSource = sourceCatalog->addPhysicalSource(
                 *logicalSource, "Replay", Host("localhost"), {{"store_name", storeName}}, {{"type", "CSV"}});
             INVARIANT(physicalSource.has_value(), "Failed to register Replay physical source for store '{}'", storeName);
+
+            /// Build StoreConfig from the operator's config parameters.
+            StoreManager::StoreConfig storeConfig;
+            if (config.count("memory_buffer_size"))
+            {
+                const auto& sizeStr = std::get<std::string>(config.at("memory_buffer_size"));
+                if (!sizeStr.empty())
+                {
+                    storeConfig.memoryBufferSize = parseSizeString(sizeStr);
+                }
+            }
+            if (config.count("store_order"))
+            {
+                const auto& orderStr = std::get<std::string>(config.at("store_order"));
+                if (!orderStr.empty())
+                {
+                    storeConfig.storeOrder = orderStr;
+                }
+            }
 
             /// Create and initialize the store in the StoreRegistry so it is ready for writes
             /// with no setup overhead in ReplayStoreOperatorHandler::open().
@@ -1188,11 +1177,8 @@ struct SystestBinder::Impl
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
         const std::vector<ConfigurationOverride>& configOverrides,
-        const bool sequentialExecution,
-        const std::optional<std::string>& replayableConfigLine) const
+        const bool sequentialExecution) const
     {
-        const bool replayable = replayableConfigLine.has_value();
-
         SystestQueryBuilder currentBuilder{currentQueryNumberInTest};
         currentBuilder.setQueryDefinition(query);
         currentBuilder.setConfigurationOverrides(configOverrides);
@@ -1202,72 +1188,25 @@ struct SystestBinder::Impl
         }
         try
         {
-            /// Check that FOR EVENT_TIME is only used when REPLAYABLE is active
-            if (query.find("FOR EVENT_TIME") != std::string::npos && !replayable)
-            {
-                throw InvalidQuerySyntax("FOR EVENT_TIME requires REPLAYABLE directive");
-            }
-
-            /// Parse replay store configuration from the REPLAYABLE SET(...) line
-            auto replayConfig
-                = replayableConfigLine.has_value() ? extractReplayConfig(replayableConfigLine.value()) : StoreManager::StoreConfig{};
-
             auto plan = AntlrSQLQueryParser::createLogicalQueryPlanFromSQLString(query);
 
             setSinks(plan, currentBuilder, testFileName, sltSinkProvider, currentQueryNumberInTest);
             plan.setQueryId(QueryId::createDistributed(DistributedQueryId(fmt::format("{}:{}", testFileName, currentQueryNumberInTest))));
 
-            /// When REPLAYABLE is active and this is NOT a time-travel read query,
-            /// inject a replay store between the sink and its children.
-            /// We strip the parser-added sink, add the ReplayStore via the standard builder,
-            /// then re-add the sink on top.
-            const bool isTimeTravelRead = query.find("FOR EVENT_TIME") != std::string::npos;
-            if (replayable && !isTimeTravelRead && !planHasReplayStore(plan))
+            /// When the SQL parser injected a ReplayStoreLogicalOperator (via REPLAYABLE WITH HISTORY OF),
+            /// update its store_name to include the test file name for uniqueness across systests,
+            /// and extract the store config from the operator.
+            if (planHasReplayStore(plan))
             {
                 auto sourceName = findSourceName(plan);
-                if (!sourceName.empty() && !plan.getRootOperators().empty())
-                {
-                    /// Extract and strip the parser-added sink
-                    const auto roots = plan.getRootOperators();
-                    const auto& root = roots.front();
-                    auto sinkOp = root.tryGetAs<SinkLogicalOperator>();
-                    std::string sinkName;
-                    if (sinkOp.has_value())
-                    {
-                        sinkName = sinkOp.value()->getSinkName();
-                    }
-
-                    /// Build: Source → Projection → ReplayStore (stripping the old sink)
-                    std::vector<LogicalOperator> childRoots;
-                    for (const auto& child : root.getChildren())
-                    {
-                        childRoots.emplace_back(child);
-                    }
-                    auto childPlan = plan.withRootOperators(childRoots);
-
-                    const auto storeName = fmt::format("replay_{}_{}", testFileName, sourceName);
-                    auto opts = std::unordered_map<std::string, std::string>{{"store_name", storeName}};
-                    auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-                    childPlan = LogicalPlanBuilder::addReplayStore(
-                        childPlan, cfg, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
-
-                    /// Re-add the original sink on top: Source → Projection → ReplayStore → Sink
-                    /// We reuse the original root operator (which already has its descriptor set by setSinks)
-                    /// rather than creating a new SinkLogicalOperator via addSink.
-                    if (sinkOp.has_value())
-                    {
-                        plan = promoteOperatorToRoot(childPlan, root);
-                    }
-                    else
-                    {
-                        plan = childPlan;
-                    }
-                }
+                const auto storeName = fmt::format("replay_{}_{}", testFileName, sourceName);
+                updateReplayStoreNames(plan, storeName);
             }
 
-            preRegisterReplaySources(plan, sourceCatalog, replayConfig);
+            preRegisterReplaySources(plan, sourceCatalog);
             /// Only replace sources with replay sources for time-travel read queries.
             /// Write queries must keep their original source (e.g. File) to populate the store.
+            const bool isTimeTravelRead = query.find("FOR EVENT_TIME") != std::string::npos;
             if (isTimeTravelRead)
             {
                 const auto [startTimestamp, endTimestamp] = extractTimeTravelRange(query);
@@ -1386,8 +1325,7 @@ struct SystestBinder::Impl
         parser.registerOnQueryCallback(
             [&](const std::string& query,
                 SystestQueryId currentQueryNumberInTest,
-                bool sequentialExecution,
-                const std::optional<std::string>& replayableConfigLine)
+                bool sequentialExecution)
             {
                 lastParsedQueryId = currentQueryNumberInTest;
                 auto mergedConfigOverrides = mergeConfigurations(configOverrides, globalConfigOverrides);
@@ -1400,8 +1338,7 @@ struct SystestBinder::Impl
                     query,
                     currentQueryNumberInTest,
                     mergedConfigOverrides,
-                    sequentialExecution,
-                    replayableConfigLine);
+                    sequentialExecution);
                 configOverrides = {ConfigurationOverride{}};
             });
 

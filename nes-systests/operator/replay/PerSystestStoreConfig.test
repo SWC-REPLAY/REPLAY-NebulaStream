@@ -1,11 +1,6 @@
 # name: operator/replay/PerSystestStoreConfig.test
-# description: Demonstrates per-systest store configuration via REPLAYABLE SET(...)
+# description: Demonstrates per-query store configuration via REPLAYABLE WITH HISTORY OF ... SET(...)
 # groups: [Store, Read]
-
-REPLAYABLE SET(
-    '32MB' AS REPLAY.MEMORY_BUFFER_SIZE,
-    'MemoryStore->FileStore'   AS REPLAY.STORE_ORDER
-)
 
 SEQUENTIAL_EXECUTION
 
@@ -21,7 +16,9 @@ CREATE SINK sinkStore(stream.id UINT64, stream.value UINT64, stream.ts UINT64) T
 CREATE SINK sinkRead(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
 
 # 1: store rows using the configured store
-SELECT id, value, ts FROM stream INTO sinkStore;
+SELECT id, value, ts FROM stream INTO sinkStore REPLAYABLE WITH HISTORY OF '32MB' SET(
+    'MemoryStore->FileStore' AS REPLAY.STORE_ORDER
+);
 ----
 1,1,1000
 2,1,1001

@@ -74,8 +74,19 @@ public:
             std::nullopt,
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_NAME, cfg); }};
 
+        static inline const DescriptorConfig::ConfigParameter<std::string> MEMORY_BUFFER_SIZE{
+            "memory_buffer_size",
+            std::string{"64MB"},
+            [](const std::unordered_map<std::string, std::string>& cfg)
+            { return DescriptorConfig::tryGet(MEMORY_BUFFER_SIZE, cfg); }};
+
+        static inline const DescriptorConfig::ConfigParameter<std::string> STORE_ORDER{
+            "store_order",
+            std::string{"MemoryStore->FileStore"},
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_ORDER, cfg); }};
+
         static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME);
+            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME, MEMORY_BUFFER_SIZE, STORE_ORDER);
     };
 
     static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);
