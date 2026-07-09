@@ -85,8 +85,14 @@ public:
             std::string{"MemoryStore->FileStore"},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_ORDER, cfg); }};
 
+        static inline const DescriptorConfig::ConfigParameter<uint64_t> MAX_BUFFER_COUNT{
+            "max_buffer_count",
+            uint64_t{128}, /// NOLINT(readability-magic-numbers)
+            [](const std::unordered_map<std::string, std::string>& cfg)
+            { return DescriptorConfig::tryGet(MAX_BUFFER_COUNT, cfg); }};
+
         static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME, MEMORY_BUFFER_SIZE, STORE_ORDER);
+            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME, MEMORY_BUFFER_SIZE, STORE_ORDER, MAX_BUFFER_COUNT);
     };
 
     static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);

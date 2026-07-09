@@ -106,17 +106,24 @@ void StoreRegistry::registerConfiguredStore(
             = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
 
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
+        const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
         const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
 
-        auto headStore
-            = makeStore<MemoryStore>(schema, MemoryStore::Config{.maxBufferSize = bufferSize}, bufferManager, std::move(fileStore), policy);
+        auto headStore = makeStore<MemoryStore>(
+            schema,
+            MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
+            bufferManager,
+            std::move(fileStore),
+            policy);
 
         stores.emplace(storeName, headStore);
     }
     else if (hasMemoryStore)
     {
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
-        auto headStore = makeStore<MemoryStore>(schema, MemoryStore::Config{.maxBufferSize = bufferSize}, bufferManager);
+        const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
+        auto headStore = makeStore<MemoryStore>(
+            schema, MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount}, bufferManager);
         stores.emplace(storeName, headStore);
     }
     else if (hasFileStore)

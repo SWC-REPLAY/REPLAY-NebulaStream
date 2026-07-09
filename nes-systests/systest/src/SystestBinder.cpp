@@ -1006,6 +1006,10 @@ struct SystestBinder::Impl
                     storeConfig.storeOrder = orderStr;
                 }
             }
+            if (config.count("max_buffer_count"))
+            {
+                storeConfig.maxBufferCount = std::get<uint64_t>(config.at("max_buffer_count"));
+            }
 
             /// Create and initialize the store in the StoreRegistry so it is ready for writes
             /// with no setup overhead in ReplayStoreOperatorHandler::open().

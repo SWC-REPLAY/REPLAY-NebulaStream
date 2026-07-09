@@ -51,6 +51,7 @@ public:
     struct Config
     {
         size_t maxBufferSize = 64UZ * 1024UZ * 1024UZ; /// 64 MB default /// NOLINT(readability-magic-numbers)
+        size_t maxBufferCount = 128UZ; /// Maximum sealed buffers before wraparound evicts oldest. /// NOLINT(readability-magic-numbers)
     };
 
     /// Standalone constructor (no chaining).

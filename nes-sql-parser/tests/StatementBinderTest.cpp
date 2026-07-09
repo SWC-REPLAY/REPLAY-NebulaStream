@@ -26,6 +26,7 @@
 #include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/SelectionLogicalOperator.hpp>
 #include <Operators/Sinks/InlineSinkLogicalOperator.hpp>
 #include <Operators/Sources/InlineSourceLogicalOperator.hpp>
@@ -697,6 +698,56 @@ TEST_F(StatementBinderTest, CreateWorkerStatementTest)
     ASSERT_TRUE(std::holds_alternative<CreateWorkerStatement>(*statement));
     ASSERT_EQ(std::get<CreateWorkerStatement>(*statement).host, "localhost:8080");
     ASSERT_EQ(std::get<CreateWorkerStatement>(*statement).dataAddress, "localhost:9090");
+}
+
+TEST_F(StatementBinderTest, BindReplayableQuery)
+{
+    const std::string queryString = "SELECT a FROM inputStream INTO outputStream REPLAYABLE WITH HISTORY OF '64MB'";
+    const auto statement = binder->parseAndBindSingle(queryString);
+    ASSERT_TRUE(statement.has_value()) << statement.error();
+    ASSERT_TRUE(std::holds_alternative<QueryStatement>(*statement));
+
+    const auto plan = std::get<QueryStatement>(*statement).plan;
+    const auto replayOps = getOperatorByType<ReplayStoreLogicalOperator>(plan);
+    ASSERT_EQ(replayOps.size(), 1);
+    ASSERT_EQ(std::get<std::string>(replayOps.front()->getConfig().at("memory_buffer_size")), "64MB");
+}
+
+TEST_F(StatementBinderTest, BindReplayableQueryDifferentSize)
+{
+    const std::string queryString = "SELECT a FROM inputStream INTO outputStream REPLAYABLE WITH HISTORY OF '128MB'";
+    const auto statement = binder->parseAndBindSingle(queryString);
+    ASSERT_TRUE(statement.has_value()) << statement.error();
+    ASSERT_TRUE(std::holds_alternative<QueryStatement>(*statement));
+
+    const auto plan = std::get<QueryStatement>(*statement).plan;
+    const auto replayOps = getOperatorByType<ReplayStoreLogicalOperator>(plan);
+    ASSERT_EQ(replayOps.size(), 1);
+    ASSERT_EQ(std::get<std::string>(replayOps.front()->getConfig().at("memory_buffer_size")), "128MB");
+}
+
+TEST_F(StatementBinderTest, BindTimeTravelReadAllQuery)
+{
+    const std::string queryString = "SELECT a FROM inputStream FOR EVENT_TIME AS OF TIMESTAMP ALL INTO outputStream";
+    const auto statement = binder->parseAndBindSingle(queryString);
+    ASSERT_TRUE(statement.has_value()) << statement.error();
+    ASSERT_TRUE(std::holds_alternative<QueryStatement>(*statement));
+}
+
+TEST_F(StatementBinderTest, BindTimeTravelReadTimestampQuery)
+{
+    const std::string queryString = "SELECT a FROM inputStream FOR EVENT_TIME AS OF TIMESTAMP '1000' INTO outputStream";
+    const auto statement = binder->parseAndBindSingle(queryString);
+    ASSERT_TRUE(statement.has_value()) << statement.error();
+    ASSERT_TRUE(std::holds_alternative<QueryStatement>(*statement));
+}
+
+TEST_F(StatementBinderTest, BindTimeTravelReadBetweenQuery)
+{
+    const std::string queryString = "SELECT a FROM inputStream FOR EVENT_TIME AS OF TIMESTAMP BETWEEN '1000' AND '2000' INTO outputStream";
+    const auto statement = binder->parseAndBindSingle(queryString);
+    ASSERT_TRUE(statement.has_value()) << statement.error();
+    ASSERT_TRUE(std::holds_alternative<QueryStatement>(*statement));
 }
 
 ///NOLINTEND(bugprone-unchecked-optional-access)

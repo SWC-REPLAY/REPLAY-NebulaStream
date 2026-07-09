@@ -31,6 +31,7 @@ namespace NES::StoreManager
 struct StoreConfig
 {
     std::optional<size_t> memoryBufferSize;
+    std::optional<size_t> maxBufferCount;
     std::optional<std::string> storeOrder;
 };
 

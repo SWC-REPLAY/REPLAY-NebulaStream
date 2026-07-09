@@ -156,6 +156,24 @@ void MemoryStore::writeRecord(
         active.buffer.setNumberOfTuples(activeWriteOffset / recordSize);
         currentSize += bufferSize;
         buffers.push_back(std::move(active));
+
+        /// Wraparound: evict oldest buffers when the ring is full
+        while (buffers.size() > config.maxBufferCount)
+        {
+            if (nextLevel && transformation)
+            {
+                /// Flush all buffers to the next level before evicting
+                lock.unlock();
+                flush(self);
+                lock.lock();
+            }
+            else
+            {
+                currentSize -= buffers.front().buffer.getBufferSize();
+                buffers.pop_front();
+            }
+        }
+
         allocateActiveBuffer();
     }
 
