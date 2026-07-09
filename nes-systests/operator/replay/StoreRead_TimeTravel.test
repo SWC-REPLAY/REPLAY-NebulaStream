@@ -1,6 +1,6 @@
 # name: operator/store-read/StoreRead_TimeTravel.test
 # description: Store stream to binary via REPLAYABLE and read back with time travel
-# groups: [Store, Read]
+# groups: [Replay]
 
 SEQUENTIAL_EXECUTION
 

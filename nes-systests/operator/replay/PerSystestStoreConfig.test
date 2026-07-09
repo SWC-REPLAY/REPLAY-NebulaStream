@@ -1,6 +1,6 @@
 # name: operator/replay/PerSystestStoreConfig.test
 # description: Demonstrates per-query store configuration via REPLAYABLE WITH HISTORY OF ... SET(...)
-# groups: [Store, Read]
+# groups: [Replay]
 
 SEQUENTIAL_EXECUTION
 

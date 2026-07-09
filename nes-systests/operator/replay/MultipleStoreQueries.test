@@ -1,6 +1,6 @@
 # name: operator/replay/MultipleStoreQueries.test
 # description: Tests that multiple store queries work
-# groups: [Store, Read]
+# groups: [Replay]
 
 SEQUENTIAL_EXECUTION
 
