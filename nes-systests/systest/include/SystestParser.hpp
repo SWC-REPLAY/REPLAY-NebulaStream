@@ -46,7 +46,6 @@ enum class TokenType : uint8_t
     GLOBAL_CONFIGURATION,
     DIFFERENTIAL,
     SEQUENTIAL_EXECUTION,
-    REPLAYABLE,
     AFTER,
 };
 

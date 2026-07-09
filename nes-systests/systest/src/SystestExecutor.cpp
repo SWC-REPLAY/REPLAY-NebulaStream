@@ -51,7 +51,6 @@
 #include <ErrorHandling.hpp>
 #include <QuerySubmitter.hpp>
 #include <SingleNodeWorkerConfiguration.hpp>
-#include <StoreRegistry.hpp>
 #include <SystestBinder.hpp>
 #include <SystestConfiguration.hpp>
 #include <SystestProgressTracker.hpp>
@@ -421,7 +420,6 @@ SystestExecutorResult SystestExecutor::executeSystests()
                 .outputMessage = outputMessage.str(),
                 .errorCode = ErrorCode::QueryStatusFailed};
         }
-        StoreManager::StoreRegistry::instance().clearAndDeleteFiles();
         std::stringstream outputMessage;
         outputMessage << '\n' << "All queries passed.";
         return {.returnType = SystestExecutorResult::ReturnType::SUCCESS, .outputMessage = outputMessage.str()};

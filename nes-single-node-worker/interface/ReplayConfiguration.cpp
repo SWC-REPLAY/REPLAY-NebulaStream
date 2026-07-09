@@ -12,12 +12,12 @@
     limitations under the License.
 */
 
-#include <SingleNodeWorkerConfiguration.hpp>
+#include <ReplayConfiguration.hpp>
 
 #include <vector>
 #include <Configurations/BaseOption.hpp>
 
-std::vector<NES::BaseOption*> NES::SingleNodeWorkerConfiguration::getOptions()
+std::vector<NES::BaseOption*> NES::ReplayConfiguration::getOptions()
 {
-    return {&workerConfiguration, &replayConfiguration, &grpcAddressUri, &dataAddress, &enableGoogleEventTrace};
+    return {&memoryBufferSize, &maxBufferCount, &storeOrder};
 }

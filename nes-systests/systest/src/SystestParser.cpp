@@ -136,7 +136,6 @@ static constexpr std::string_view DifferentialToken = "===="sv;
 static constexpr std::string_view ConfigurationToken = "CONFIGURATION"sv;
 static constexpr std::string_view GlobalConfigurationToken = "GLOBALCONFIGURATION"sv;
 static constexpr std::string_view SequentialExecutionToken = "SEQUENTIAL_EXECUTION"sv;
-static constexpr std::string_view ReplayableToken = "REPLAYABLE"sv;
 static constexpr std::string_view AfterToken = "AFTER"sv;
 
 static const std::array stringToToken = std::to_array<std::pair<std::string_view, TokenType>>(
@@ -148,7 +147,6 @@ static const std::array stringToToken = std::to_array<std::pair<std::string_view
      {GlobalConfigurationToken, TokenType::GLOBAL_CONFIGURATION},
      {DifferentialToken, TokenType::DIFFERENTIAL},
      {SequentialExecutionToken, TokenType::SEQUENTIAL_EXECUTION},
-     {ReplayableToken, TokenType::REPLAYABLE},
      {AfterToken, TokenType::AFTER}});
 
 void SystestParser::registerSubstitutionRule(const SubstitutionRule& rule)
@@ -319,11 +317,6 @@ void SystestParser::parse()
             }
             case TokenType::SEQUENTIAL_EXECUTION: {
                 sequentialExecution = not sequentialExecution;
-                break;
-            }
-            case TokenType::REPLAYABLE: {
-                /// REPLAYABLE directive is deprecated — replay is now configured via SQL syntax
-                /// (REPLAYABLE WITH HISTORY OF '...'). Ignore the token for backward compatibility.
                 break;
             }
             case TokenType::AFTER: {
