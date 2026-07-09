@@ -29,3 +29,5 @@ if (NES_ENABLE_PRECOMPILED_HEADERS)
 endif ()
 
 create_registries_for_component(StoreType StoreTransformation)
+
+add_tests_if_enabled(tests)
