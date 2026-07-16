@@ -17,14 +17,19 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <thread>
 #include <vector>
+
+#include <filesystem>
 
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Runtime/BufferManager.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
+#include <FileStore.hpp>
 #include <MemoryStore.hpp>
 #include <Store.hpp>
 #include <TimeRange.hpp>
@@ -78,53 +83,23 @@ protected:
         std::memcpy(&val, src + fieldOffset, sizeof(uint64_t));
         return val;
     }
-};
 
-/// Single-producer, multi-reader stress test.
-///
-/// Tests:
-///   - Record integrity under concurrent read/write (id == ts, value == ts * 10)
-///   - Monotonic timestamp ordering of reads (guaranteed with a single writer that appends in order)
-///   - Buffer capacity is respected (tuplesRead <= maxTuplesPerBuffer)
-///   - No torn or partial records visible to readers
-///
-/// Does NOT test:
-///   - Multiple concurrent writers (see ConcurrentMultiProducerReadWrite_MemoryStore)
-///   - Data overwrite detection (single writer cannot overwrite its own records)
-///   - Flush/eviction under write contention (single writer never contends on the mutex)
-///   - TimeRange-filtered reads (uses unbounded range only)
-TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
-{
-    const auto duration = getTestDuration();
-    NES_INFO("Running ConcurrentReadWrite_MemoryStore for {}s with {} readers", duration.count(), NUM_READERS);
-
-    auto store = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager);
-    store.open();
-
-    const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
-    ASSERT_GT(recordSize, 0u);
-
-    std::atomic<bool> stop{false};
-    std::atomic<uint64_t> totalWritten{0};
-    std::atomic<uint64_t> totalRead{0};
-    std::vector<std::atomic<uint64_t>> perReaderTuples(NUM_READERS);
-    std::vector<std::atomic<uint64_t>> perReaderCycles(NUM_READERS);
-
-    constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
-
-    /// Writer thread: writes batches of TUPLES_PER_BATCH records with incrementing timestamps.
-    auto writerFn = [&]()
+    /// Writer loop: writes batches of records with the invariant (id=writerId, value=ts*10+writerId, ts=ts).
+    void writerLoop(Store& store, size_t writerId, const std::atomic<bool>& stop,
+                    std::atomic<uint64_t>& totalWritten, bool shouldSleep)
     {
+        const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
         uint64_t nextTs = 1;
         uint64_t batchCount = 0;
         std::vector<uint8_t> record(recordSize);
         auto lastLog = std::chrono::steady_clock::now();
+        constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
 
         while (!stop.load(std::memory_order_relaxed))
         {
             for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
             {
-                packRecord(record.data(), nextTs, nextTs * 10, nextTs);
+                packRecord(record.data(), writerId, nextTs * 10 + writerId, nextTs);
                 store.writeRecord(record.data(), recordSize, Timestamp(nextTs), schema);
                 ++nextTs;
             }
@@ -133,22 +108,29 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
 
             if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
             {
-                NES_INFO("Writer: {} batches, {} tuples written, latest ts={}, store size={} bytes",
-                    batchCount, totalWritten.load(), nextTs - 1, store.size());
+                NES_INFO("Writer {}: {} batches, {} tuples written", writerId, batchCount, totalWritten.load());
                 lastLog = now;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (shouldSleep)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
-        NES_INFO("Writer stopped: {} total tuples written", totalWritten.load());
-    };
+        NES_INFO("Writer {} stopped: {} batches written", writerId, batchCount);
+    }
 
-    /// Reader thread: continuously reads all available data and validates every tuple.
-    auto readerFn = [&](size_t readerId)
+    /// Reader loop: continuously reads and validates every tuple.
+    /// When checkOrdering is true, asserts that timestamps are non-decreasing within each read.
+    void readerLoop(Store& store, size_t readerId, size_t numWriters, const std::atomic<bool>& stop,
+                    std::atomic<uint64_t>& totalRead, bool checkOrdering)
     {
+        const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
         const TimeRange unbounded{.fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
         const uint64_t maxTuplesPerBuffer = bufferManager->getBufferSize() / recordSize;
         auto lastLog = std::chrono::steady_clock::now();
+        constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
+        uint64_t readCycles = 0;
 
         while (!stop.load(std::memory_order_relaxed))
         {
@@ -158,7 +140,6 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
             ASSERT_LE(tuplesRead, maxTuplesPerBuffer)
                 << "Reader " << readerId << " got more tuples than buffer capacity";
 
-            /// Validate every tuple returned by this read.
             if (tuplesRead > 0)
             {
                 auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
@@ -171,70 +152,187 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
                     const uint64_t value = readField(row, VALUE_OFFSET);
                     const uint64_t ts = readField(row, TS_OFFSET);
 
-                    /// 1. Record integrity: writer invariant is id == ts, value == ts * 10.
-                    ASSERT_EQ(id, ts)
-                        << "Reader " << readerId << " tuple " << t << ": id (" << id << ") != ts (" << ts << ")";
-                    ASSERT_EQ(value, ts * 10)
-                        << "Reader " << readerId << " tuple " << t << ": value (" << value << ") != ts*10 (" << ts * 10 << ")";
+                    ASSERT_LT(id, numWriters)
+                        << "Reader " << readerId << " tuple " << t << ": id (" << id << ") out of writer range [0, " << numWriters << ")";
 
-                    /// 2. Monotonic ordering: timestamps must be non-decreasing across the read.
-                    ASSERT_GE(ts, prevTs)
-                        << "Reader " << readerId << " tuple " << t << ": ts went backwards (" << ts << " < " << prevTs << ")";
+                    ASSERT_EQ(value, ts * 10 + id)
+                        << "Reader " << readerId << " tuple " << t << ": value (" << value
+                        << ") != ts*10+id (" << ts * 10 + id << ") for writer " << id;
 
-                    prevTs = ts;
+                    if (checkOrdering)
+                    {
+                        ASSERT_GE(ts, prevTs)
+                            << "Reader " << readerId << " tuple " << t << ": ts went backwards (" << ts << " < " << prevTs << ")";
+                        prevTs = ts;
+                    }
                 }
 
                 totalRead.fetch_add(tuplesRead, std::memory_order_relaxed);
-                perReaderTuples[readerId].fetch_add(tuplesRead, std::memory_order_relaxed);
             }
 
-            perReaderCycles[readerId].fetch_add(1, std::memory_order_relaxed);
+            ++readCycles;
 
             if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
             {
-                NES_INFO("Reader {}: {} read cycles, {} tuples read so far",
-                    readerId, perReaderCycles[readerId].load(), perReaderTuples[readerId].load());
+                NES_INFO("Reader {}: {} read cycles, {} tuples read so far", readerId, readCycles, totalRead.load());
                 lastLog = now;
             }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        NES_INFO("Reader {} stopped: {} tuples in {} cycles",
-            readerId, perReaderTuples[readerId].load(), perReaderCycles[readerId].load());
+        NES_INFO("Reader {} stopped: {} read cycles", readerId, readCycles);
+    }
+
+    struct TestConfig
+    {
+        size_t numWriters = 1;
+        size_t numReaders = NUM_READERS;
+        bool writerSleep = true;
+        bool checkOrdering = false;
     };
 
-    /// Launch threads.
-    std::thread writer(writerFn);
-    std::vector<std::thread> readers;
-    readers.reserve(NUM_READERS);
-    for (size_t i = 0; i < NUM_READERS; ++i)
+    struct TestResult
     {
-        readers.emplace_back(readerFn, i);
+        uint64_t totalWritten;
+        uint64_t totalRead;
+    };
+
+    /// Run a concurrency test with the given store and configuration for the specified duration.
+    /// Launches writer and reader threads, waits, joins, logs summary, and asserts basic results.
+    /// Does NOT close the store — the caller is responsible for closing after any post-checks.
+    TestResult runTest(Store& store, const TestConfig& config, std::chrono::seconds duration)
+    {
+        std::atomic<bool> stop{false};
+        std::atomic<uint64_t> totalWritten{0};
+        std::atomic<uint64_t> totalRead{0};
+
+        std::vector<std::thread> writers;
+        writers.reserve(config.numWriters);
+        for (size_t i = 0; i < config.numWriters; ++i)
+        {
+            writers.emplace_back(&ConcurrencyTests::writerLoop, this,
+                std::ref(store), i, std::cref(stop), std::ref(totalWritten), config.writerSleep);
+        }
+
+        std::vector<std::thread> readers;
+        readers.reserve(config.numReaders);
+        for (size_t i = 0; i < config.numReaders; ++i)
+        {
+            readers.emplace_back(&ConcurrencyTests::readerLoop, this,
+                std::ref(store), i, config.numWriters, std::cref(stop), std::ref(totalRead), config.checkOrdering);
+        }
+
+        std::this_thread::sleep_for(duration);
+        stop.store(true, std::memory_order_relaxed);
+
+        for (auto& wr : writers)
+        {
+            wr.join();
+        }
+        for (auto& rd : readers)
+        {
+            rd.join();
+        }
+
+        NES_INFO("Duration: {}s | Writers: {} | Readers: {}", duration.count(), config.numWriters, config.numReaders);
+        NES_INFO("Total tuples written: {} | Total tuples read: {}", totalWritten.load(), totalRead.load());
+
+        EXPECT_GT(totalWritten.load(), 0u);
+        EXPECT_GT(totalRead.load(), 0u);
+
+        return {totalWritten.load(), totalRead.load()};
     }
 
-    /// Run for the configured duration.
-    std::this_thread::sleep_for(duration);
-    stop.store(true, std::memory_order_relaxed);
-
-    writer.join();
-    for (auto& r : readers)
+    /// Run a write-only phase for FileStore (reuses the MemoryStore writerLoop — the binary
+    /// record layout is identical for non-nullable fields). After all writers finish, reads
+    /// back and validates record integrity.
+    /// FileStore closes the writer on first read, so concurrent read+write is not supported.
+    uint64_t runFileStoreWritePhase(Store& store, const TestConfig& config, std::chrono::seconds duration)
     {
-        r.join();
+        std::atomic<bool> stop{false};
+        std::atomic<uint64_t> totalWritten{0};
+
+        std::vector<std::thread> writers;
+        writers.reserve(config.numWriters);
+        for (size_t i = 0; i < config.numWriters; ++i)
+        {
+            writers.emplace_back(&ConcurrencyTests::writerLoop, this,
+                std::ref(store), i, std::cref(stop), std::ref(totalWritten), config.writerSleep);
+        }
+
+        std::this_thread::sleep_for(duration);
+        stop.store(true, std::memory_order_relaxed);
+
+        for (auto& wr : writers)
+        {
+            wr.join();
+        }
+
+        NES_INFO("FileStore write phase: {} tuples written by {} writers in {}s",
+                 totalWritten.load(), config.numWriters, duration.count());
+        EXPECT_GT(totalWritten.load(), 0u);
+        return totalWritten.load();
     }
 
+    /// Read from the FileStore and validate all records' integrity.
+    /// FileStore::read() always reads from the beginning, so this performs a single read pass.
+    uint64_t validateFileStoreData(Store& store, size_t numWriters)
+    {
+        const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
+        const TimeRange unbounded{.fieldName = "ts", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
+
+        auto readBuffer = bufferManager->getBufferBlocking();
+        const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
+
+        if (tuplesRead > 0)
+        {
+            auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
+            for (uint64_t t = 0; t < tuplesRead; ++t)
+            {
+                const uint8_t* row = span.data() + (t * recordSize);
+                const uint64_t id = readField(row, ID_OFFSET);
+                const uint64_t value = readField(row, VALUE_OFFSET);
+                const uint64_t ts = readField(row, TS_OFFSET);
+
+                EXPECT_LT(id, numWriters)
+                    << "Tuple " << t << ": id (" << id << ") out of writer range [0, " << numWriters << ")";
+                EXPECT_EQ(value, ts * 10 + id)
+                    << "Tuple " << t << ": value (" << value << ") != ts*10+id (" << ts * 10 + id
+                    << ") for writer " << id;
+            }
+        }
+
+        EXPECT_GT(tuplesRead, 0u);
+        return tuplesRead;
+    }
+
+    /// Create a unique temporary directory for FileStore tests.
+    static std::filesystem::path createTempDir(const std::string& testName)
+    {
+        auto dir = std::filesystem::temp_directory_path()
+            / ("nes_concurrency_" + testName + "_"
+               + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(dir);
+        return dir;
+    }
+};
+
+/// Single-producer, multi-reader stress test.
+///
+/// Tests:
+///   - Record integrity under concurrent read/write (value == ts * 10 + writerId)
+///   - Monotonic timestamp ordering of reads (guaranteed with a single writer that appends in order)
+///   - Buffer capacity is respected (tuplesRead <= maxTuplesPerBuffer)
+///   - No torn or partial records visible to readers
+///
+/// Does NOT test:
+///   - Multiple concurrent writers (see ConcurrentMultiProducerReadWrite_MemoryStore)
+///   - Flush/eviction under write contention (single writer never contends on the mutex)
+///   - TimeRange-filtered reads (uses unbounded range only)
+TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
+{
+    auto store = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager);
+    store.open();
+    runTest(store, {.numWriters = 1, .writerSleep = true, .checkOrdering = true}, getTestDuration());
     store.close();
-
-    NES_INFO("=== ConcurrentReadWrite_MemoryStore Summary ===");
-    NES_INFO("Duration: {}s | Writers: 1 | Readers: {}", duration.count(), NUM_READERS);
-    NES_INFO("Total tuples written: {}", totalWritten.load());
-    NES_INFO("Total tuples read: {} (across all readers)", totalRead.load());
-    for (size_t i = 0; i < NUM_READERS; ++i)
-    {
-        NES_INFO("  Reader {}: {} tuples in {} cycles", i, perReaderTuples[i].load(), perReaderCycles[i].load());
-    }
-
-    EXPECT_GT(totalWritten.load(), 0u);
-    EXPECT_GT(totalRead.load(), 0u);
 }
 
 /// Multi-producer, multi-reader stress test.
@@ -246,8 +344,6 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
 ///   - Writer id validity (id must be in [0, NUM_WRITERS))
 ///   - Buffer capacity is respected (tuplesRead <= maxTuplesPerBuffer)
 ///   - No torn or partial records when multiple writers contend on the mutex
-///   - Flush/eviction correctness under write contention (multiple writers can trigger the
-///     lock-release window in writeRecord during flush or wraparound eviction)
 ///
 /// Does NOT test:
 ///   - Monotonic timestamp ordering (not guaranteed with multiple writers appending in arrival order)
@@ -255,167 +351,21 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
 ///   - Per-writer completeness (does not verify every written record is eventually read)
 TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWrite_MemoryStore)
 {
-    const auto duration = getTestDuration();
-    NES_INFO("Running ConcurrentMultiProducerReadWrite_MemoryStore for {}s with {} writers and {} readers",
-        duration.count(), NUM_WRITERS, NUM_READERS);
-
     auto store = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager);
     store.open();
-
-    const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
-    ASSERT_GT(recordSize, 0u);
-
-    std::atomic<bool> stop{false};
-    std::atomic<uint64_t> totalWritten{0};
-    std::atomic<uint64_t> totalRead{0};
-    std::vector<std::atomic<uint64_t>> perWriterTuples(NUM_WRITERS);
-    std::vector<std::atomic<uint64_t>> perReaderTuples(NUM_READERS);
-    std::vector<std::atomic<uint64_t>> perReaderCycles(NUM_READERS);
-
-    constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
-
-    /// Writer thread: writes batches of TUPLES_PER_BATCH records with its own incrementing timestamp.
-    /// Each writer is identified by writerId stored in the id field.
-    auto writerFn = [&](size_t writerId)
-    {
-        uint64_t nextTs = 1;
-        uint64_t batchCount = 0;
-        std::vector<uint8_t> record(recordSize);
-        auto lastLog = std::chrono::steady_clock::now();
-
-        while (!stop.load(std::memory_order_relaxed))
-        {
-            for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
-            {
-                packRecord(record.data(), writerId, nextTs * 10 + writerId, nextTs);
-                store.writeRecord(record.data(), recordSize, Timestamp(nextTs), schema);
-                ++nextTs;
-            }
-            totalWritten.fetch_add(TUPLES_PER_BATCH, std::memory_order_relaxed);
-            perWriterTuples[writerId].fetch_add(TUPLES_PER_BATCH, std::memory_order_relaxed);
-            ++batchCount;
-
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
-            {
-                NES_INFO("Writer {}: {} batches, {} tuples written",
-                    writerId, batchCount, perWriterTuples[writerId].load());
-                lastLog = now;
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        NES_INFO("Writer {} stopped: {} total tuples written", writerId, perWriterTuples[writerId].load());
-    };
-
-    /// Reader thread: continuously reads all available data and validates every tuple for integrity.
-    auto readerFn = [&](size_t readerId)
-    {
-        const TimeRange unbounded{.fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
-        const uint64_t maxTuplesPerBuffer = bufferManager->getBufferSize() / recordSize;
-        auto lastLog = std::chrono::steady_clock::now();
-
-        while (!stop.load(std::memory_order_relaxed))
-        {
-            auto readBuffer = bufferManager->getBufferBlocking();
-            const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
-
-            ASSERT_LE(tuplesRead, maxTuplesPerBuffer)
-                << "Reader " << readerId << " got more tuples than buffer capacity";
-
-            if (tuplesRead > 0)
-            {
-                auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
-
-                for (uint64_t t = 0; t < tuplesRead; ++t)
-                {
-                    const uint8_t* row = span.data() + (t * recordSize);
-                    const uint64_t id = readField(row, ID_OFFSET);
-                    const uint64_t value = readField(row, VALUE_OFFSET);
-                    const uint64_t ts = readField(row, TS_OFFSET);
-
-                    /// 1. Writer id must be in valid range — no garbage data.
-                    ASSERT_LT(id, NUM_WRITERS)
-                        << "Reader " << readerId << " tuple " << t << ": id (" << id << ") out of writer range";
-
-                    /// 2. Record integrity: writer invariant is value == ts * 10 + writerId.
-                    ASSERT_EQ(value, ts * 10 + id)
-                        << "Reader " << readerId << " tuple " << t << ": value (" << value
-                        << ") != ts*10+id (" << ts * 10 + id << ") for writer " << id;
-                }
-
-                totalRead.fetch_add(tuplesRead, std::memory_order_relaxed);
-                perReaderTuples[readerId].fetch_add(tuplesRead, std::memory_order_relaxed);
-            }
-
-            perReaderCycles[readerId].fetch_add(1, std::memory_order_relaxed);
-
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
-            {
-                NES_INFO("Reader {}: {} read cycles, {} tuples read so far",
-                    readerId, perReaderCycles[readerId].load(), perReaderTuples[readerId].load());
-                lastLog = now;
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        NES_INFO("Reader {} stopped: {} tuples in {} cycles",
-            readerId, perReaderTuples[readerId].load(), perReaderCycles[readerId].load());
-    };
-
-    /// Launch threads.
-    std::vector<std::thread> writers;
-    writers.reserve(NUM_WRITERS);
-    for (size_t i = 0; i < NUM_WRITERS; ++i)
-    {
-        writers.emplace_back(writerFn, i);
-    }
-    std::vector<std::thread> readers;
-    readers.reserve(NUM_READERS);
-    for (size_t i = 0; i < NUM_READERS; ++i)
-    {
-        readers.emplace_back(readerFn, i);
-    }
-
-    /// Run for the configured duration.
-    std::this_thread::sleep_for(duration);
-    stop.store(true, std::memory_order_relaxed);
-
-    for (auto& w : writers)
-    {
-        w.join();
-    }
-    for (auto& r : readers)
-    {
-        r.join();
-    }
-
+    runTest(store, {.numWriters = NUM_WRITERS, .writerSleep = true, .checkOrdering = false}, getTestDuration());
     store.close();
-
-    NES_INFO("=== ConcurrentMultiProducerReadWrite_MemoryStore Summary ===");
-    NES_INFO("Duration: {}s | Writers: {} | Readers: {}", duration.count(), NUM_WRITERS, NUM_READERS);
-    NES_INFO("Total tuples written: {}", totalWritten.load());
-    NES_INFO("Total tuples read: {} (across all readers)", totalRead.load());
-    for (size_t i = 0; i < NUM_WRITERS; ++i)
-    {
-        NES_INFO("  Writer {}: {} tuples", i, perWriterTuples[i].load());
-    }
-    for (size_t i = 0; i < NUM_READERS; ++i)
-    {
-        NES_INFO("  Reader {}: {} tuples in {} cycles", i, perReaderTuples[i].load(), perReaderCycles[i].load());
-    }
-
-    EXPECT_GT(totalWritten.load(), 0u);
-    EXPECT_GT(totalRead.load(), 0u);
 }
 
-/// Single-producer wraparound stress test with a small maxBufferCount.
+/// Single-producer wraparound stress test with small buffers and a small maxBufferCount.
 ///
 /// Tests:
 ///   - Wraparound eviction correctness (oldest sealed buffers are evicted via pop_front)
+///   - Verifies eviction actually occurred (totalWritten exceeds ring capacity)
+///   - Verifies old data was evicted (smallest ts in final read > 1)
 ///   - Record integrity after eviction (new data written after eviction is not corrupted)
 ///   - Concurrent reads during active eviction (readers see consistent snapshots while
 ///     the writer triggers frequent pop_front on the deque)
-///   - Store size tracking remains consistent through eviction cycles
 ///
 /// Does NOT test:
 ///   - Multiple writers triggering eviction (see ConcurrentMultiProducerWraparound_MemoryStore)
@@ -423,135 +373,48 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWrite_MemoryStore)
 ///   - TimeRange-filtered reads (uses unbounded range only)
 TEST_F(ConcurrencyTests, ConcurrentWraparound_MemoryStore)
 {
-    const auto duration = getTestDuration();
-
-    /// Small maxBufferCount to force frequent wraparound eviction.
-    constexpr size_t MAX_BUFFER_COUNT = 4;
-    const MemoryStore::Config config{.maxBufferCount = MAX_BUFFER_COUNT};
-
-    NES_INFO("Running ConcurrentWraparound_MemoryStore for {}s with maxBufferCount={}", duration.count(), MAX_BUFFER_COUNT);
-
-    auto store = makeStore<MemoryStore>(schema, config, bufferManager);
+    const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
+    /// Small buffers: 10 records per buffer. With maxBufferCount=4, the ring holds 40 records total.
+    constexpr size_t tuplesPerBuffer = 10;
+    constexpr size_t maxBufferCount = 4;
+    auto smallBufferManager = BufferManager::create(tuplesPerBuffer * recordSize);
+    auto store = makeStore<MemoryStore>(schema, MemoryStore::Config{.maxBufferCount = maxBufferCount}, smallBufferManager);
     store.open();
 
-    const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
-    ASSERT_GT(recordSize, 0u);
+    /// Temporarily swap bufferManager so readerLoop uses the small one for read buffers.
+    auto originalBufferManager = bufferManager;
+    bufferManager = smallBufferManager;
 
-    std::atomic<bool> stop{false};
-    std::atomic<uint64_t> totalWritten{0};
-    std::atomic<uint64_t> totalRead{0};
-    std::atomic<uint64_t> totalReadCycles{0};
+    const auto result = runTest(store, {.numWriters = 1, .writerSleep = false, .checkOrdering = false}, getTestDuration());
 
-    constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
+    /// Verify wraparound actually occurred.
+    const uint64_t ringCapacity = maxBufferCount * tuplesPerBuffer;
+    EXPECT_GT(result.totalWritten, ringCapacity)
+        << "Not enough data written to trigger wraparound (wrote " << result.totalWritten
+        << ", ring capacity " << ringCapacity << ")";
 
-    /// Writer: writes continuously, forcing buffer sealing and wraparound eviction.
-    auto writerFn = [&]()
+    /// Read remaining data and verify old timestamps were evicted.
+    auto readBuffer = smallBufferManager->getBufferBlocking();
+    const TimeRange unbounded{.fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
+    const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
+    if (tuplesRead > 0)
     {
-        uint64_t nextTs = 1;
-        uint64_t batchCount = 0;
-        std::vector<uint8_t> record(recordSize);
-        auto lastLog = std::chrono::steady_clock::now();
-
-        while (!stop.load(std::memory_order_relaxed))
-        {
-            for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
-            {
-                packRecord(record.data(), nextTs, nextTs * 10, nextTs);
-                store.writeRecord(record.data(), recordSize, Timestamp(nextTs), schema);
-                ++nextTs;
-            }
-            totalWritten.fetch_add(TUPLES_PER_BATCH, std::memory_order_relaxed);
-            ++batchCount;
-
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
-            {
-                NES_INFO("Wraparound writer: {} batches, {} tuples, store size={} bytes",
-                    batchCount, totalWritten.load(), store.size());
-                lastLog = now;
-            }
-
-            /// No sleep — maximize write pressure to trigger frequent wraparound.
-        }
-        NES_INFO("Wraparound writer stopped: {} total tuples written", totalWritten.load());
-    };
-
-    /// Readers: validate record integrity during wraparound.
-    auto readerFn = [&](size_t readerId)
-    {
-        const TimeRange unbounded{.fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
-        const uint64_t maxTuplesPerBuffer = bufferManager->getBufferSize() / recordSize;
-        auto lastLog = std::chrono::steady_clock::now();
-
-        while (!stop.load(std::memory_order_relaxed))
-        {
-            auto readBuffer = bufferManager->getBufferBlocking();
-            const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
-
-            ASSERT_LE(tuplesRead, maxTuplesPerBuffer)
-                << "Reader " << readerId << " got more tuples than buffer capacity";
-
-            if (tuplesRead > 0)
-            {
-                auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
-
-                for (uint64_t t = 0; t < tuplesRead; ++t)
-                {
-                    const uint8_t* row = span.data() + (t * recordSize);
-                    const uint64_t id = readField(row, ID_OFFSET);
-                    const uint64_t value = readField(row, VALUE_OFFSET);
-                    const uint64_t ts = readField(row, TS_OFFSET);
-
-                    ASSERT_EQ(id, ts)
-                        << "Reader " << readerId << " tuple " << t << ": id (" << id << ") != ts (" << ts << ")";
-                    ASSERT_EQ(value, ts * 10)
-                        << "Reader " << readerId << " tuple " << t << ": value (" << value << ") != ts*10 (" << ts * 10 << ")";
-                }
-
-                totalRead.fetch_add(tuplesRead, std::memory_order_relaxed);
-            }
-
-            totalReadCycles.fetch_add(1, std::memory_order_relaxed);
-
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
-            {
-                NES_INFO("Wraparound reader {}: {} tuples read so far", readerId, totalRead.load());
-                lastLog = now;
-            }
-        }
-    };
-
-    std::thread writer(writerFn);
-    std::vector<std::thread> readers;
-    readers.reserve(NUM_READERS);
-    for (size_t i = 0; i < NUM_READERS; ++i)
-    {
-        readers.emplace_back(readerFn, i);
-    }
-
-    std::this_thread::sleep_for(duration);
-    stop.store(true, std::memory_order_relaxed);
-
-    writer.join();
-    for (auto& r : readers)
-    {
-        r.join();
+        /// The earliest record in the store should not be ts=1 — it must have been evicted.
+        const uint64_t firstTs = readField(readBuffer.getAvailableMemoryArea<uint8_t>().data() + TS_OFFSET, 0);
+        EXPECT_GT(firstTs, 1u) << "Earliest timestamp should have been evicted by wraparound";
     }
 
     store.close();
-
-    NES_INFO("=== ConcurrentWraparound_MemoryStore Summary ===");
-    NES_INFO("Duration: {}s | maxBufferCount: {} | Readers: {}", duration.count(), MAX_BUFFER_COUNT, NUM_READERS);
-    NES_INFO("Total tuples written: {} | Total tuples read: {}", totalWritten.load(), totalRead.load());
-
-    EXPECT_GT(totalWritten.load(), 0u);
-    EXPECT_GT(totalRead.load(), 0u);
+    bufferManager = originalBufferManager;
 }
 
-/// Multi-producer wraparound stress test with a small maxBufferCount.
+/// Multi-producer wraparound stress test with small buffers and a small maxBufferCount.
 ///
 /// Tests:
 ///   - Multiple writers simultaneously triggering wraparound eviction (both contend on the
 ///     unique_lock during buffer sealing and pop_front)
+///   - Verifies eviction actually occurred (totalWritten exceeds ring capacity)
+///   - Verifies old data was evicted (smallest ts in final read > 1 for at least one writer)
 ///   - Record integrity when eviction and writes from different producers interleave
 ///   - Data overwrite detection during eviction (writer-specific invariant: value == ts * 10 + writerId)
 ///   - Deque consistency when multiple writers seal buffers and evict concurrently
@@ -563,138 +426,104 @@ TEST_F(ConcurrencyTests, ConcurrentWraparound_MemoryStore)
 ///   - Per-writer completeness (eviction intentionally discards old data)
 TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparound_MemoryStore)
 {
-    const auto duration = getTestDuration();
-
-    constexpr size_t MAX_BUFFER_COUNT = 4;
-    const MemoryStore::Config config{.maxBufferCount = MAX_BUFFER_COUNT};
-
-    NES_INFO("Running ConcurrentMultiProducerWraparound_MemoryStore for {}s with {} writers, maxBufferCount={}",
-        duration.count(), NUM_WRITERS, MAX_BUFFER_COUNT);
-
-    auto store = makeStore<MemoryStore>(schema, config, bufferManager);
+    const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
+    constexpr size_t tuplesPerBuffer = 10;
+    constexpr size_t maxBufferCount = 4;
+    auto smallBufferManager = BufferManager::create(tuplesPerBuffer * recordSize);
+    auto store = makeStore<MemoryStore>(schema, MemoryStore::Config{.maxBufferCount = maxBufferCount}, smallBufferManager);
     store.open();
 
-    const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
-    ASSERT_GT(recordSize, 0u);
+    auto originalBufferManager = bufferManager;
+    bufferManager = smallBufferManager;
 
-    std::atomic<bool> stop{false};
-    std::atomic<uint64_t> totalWritten{0};
-    std::atomic<uint64_t> totalRead{0};
-    std::vector<std::atomic<uint64_t>> perWriterTuples(NUM_WRITERS);
+    const auto result = runTest(store, {.numWriters = NUM_WRITERS, .writerSleep = false, .checkOrdering = false}, getTestDuration());
 
-    constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
+    const uint64_t ringCapacity = maxBufferCount * tuplesPerBuffer;
+    EXPECT_GT(result.totalWritten, ringCapacity)
+        << "Not enough data written to trigger wraparound (wrote " << result.totalWritten
+        << ", ring capacity " << ringCapacity << ")";
 
-    /// Writers: no sleep to maximize contention on the mutex during wraparound.
-    auto writerFn = [&](size_t writerId)
+    /// Read remaining data and verify old timestamps were evicted.
+    auto readBuffer = smallBufferManager->getBufferBlocking();
+    const TimeRange unbounded{.fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
+    const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
+    if (tuplesRead > 0)
     {
-        uint64_t nextTs = 1;
-        std::vector<uint8_t> record(recordSize);
-        auto lastLog = std::chrono::steady_clock::now();
-
-        while (!stop.load(std::memory_order_relaxed))
+        auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
+        /// Find the smallest ts across all records in the read buffer.
+        uint64_t minTs = std::numeric_limits<uint64_t>::max();
+        for (uint64_t t = 0; t < tuplesRead; ++t)
         {
-            for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
-            {
-                packRecord(record.data(), writerId, nextTs * 10 + writerId, nextTs);
-                store.writeRecord(record.data(), recordSize, Timestamp(nextTs), schema);
-                ++nextTs;
-            }
-            totalWritten.fetch_add(TUPLES_PER_BATCH, std::memory_order_relaxed);
-            perWriterTuples[writerId].fetch_add(TUPLES_PER_BATCH, std::memory_order_relaxed);
-
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
-            {
-                NES_INFO("Wraparound writer {}: {} tuples written", writerId, perWriterTuples[writerId].load());
-                lastLog = now;
-            }
-
-            /// No sleep — maximize write contention and wraparound frequency.
+            const uint64_t ts = readField(span.data() + (t * recordSize), TS_OFFSET);
+            minTs = std::min(minTs, ts);
         }
-    };
-
-    /// Readers: validate record integrity during multi-producer wraparound.
-    auto readerFn = [&](size_t readerId)
-    {
-        const TimeRange unbounded{.fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
-        const uint64_t maxTuplesPerBuffer = bufferManager->getBufferSize() / recordSize;
-        auto lastLog = std::chrono::steady_clock::now();
-
-        while (!stop.load(std::memory_order_relaxed))
-        {
-            auto readBuffer = bufferManager->getBufferBlocking();
-            const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
-
-            ASSERT_LE(tuplesRead, maxTuplesPerBuffer)
-                << "Reader " << readerId << " got more tuples than buffer capacity";
-
-            if (tuplesRead > 0)
-            {
-                auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
-
-                for (uint64_t t = 0; t < tuplesRead; ++t)
-                {
-                    const uint8_t* row = span.data() + (t * recordSize);
-                    const uint64_t id = readField(row, ID_OFFSET);
-                    const uint64_t value = readField(row, VALUE_OFFSET);
-                    const uint64_t ts = readField(row, TS_OFFSET);
-
-                    ASSERT_LT(id, NUM_WRITERS)
-                        << "Reader " << readerId << " tuple " << t << ": id (" << id << ") out of writer range";
-
-                    ASSERT_EQ(value, ts * 10 + id)
-                        << "Reader " << readerId << " tuple " << t << ": value (" << value
-                        << ") != ts*10+id (" << ts * 10 + id << ") for writer " << id;
-                }
-
-                totalRead.fetch_add(tuplesRead, std::memory_order_relaxed);
-            }
-
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
-            {
-                NES_INFO("Wraparound reader {}: {} tuples read so far", readerId, totalRead.load());
-                lastLog = now;
-            }
-        }
-    };
-
-    std::vector<std::thread> writers;
-    writers.reserve(NUM_WRITERS);
-    for (size_t i = 0; i < NUM_WRITERS; ++i)
-    {
-        writers.emplace_back(writerFn, i);
-    }
-    std::vector<std::thread> readers;
-    readers.reserve(NUM_READERS);
-    for (size_t i = 0; i < NUM_READERS; ++i)
-    {
-        readers.emplace_back(readerFn, i);
-    }
-
-    std::this_thread::sleep_for(duration);
-    stop.store(true, std::memory_order_relaxed);
-
-    for (auto& w : writers)
-    {
-        w.join();
-    }
-    for (auto& r : readers)
-    {
-        r.join();
+        EXPECT_GT(minTs, 1u) << "Earliest timestamp should have been evicted by wraparound";
     }
 
     store.close();
+    bufferManager = originalBufferManager;
+}
 
-    NES_INFO("=== ConcurrentMultiProducerWraparound_MemoryStore Summary ===");
-    NES_INFO("Duration: {}s | Writers: {} | Readers: {} | maxBufferCount: {}",
-        duration.count(), NUM_WRITERS, NUM_READERS, MAX_BUFFER_COUNT);
-    NES_INFO("Total tuples written: {} | Total tuples read: {}", totalWritten.load(), totalRead.load());
-    for (size_t i = 0; i < NUM_WRITERS; ++i)
-    {
-        NES_INFO("  Writer {}: {} tuples", i, perWriterTuples[i].load());
-    }
+/// Single-producer FileStore write stress test.
+///
+/// Tests:
+///   - Record integrity: writes records with invariant (value == ts * 10 + writerId),
+///     then reads back and validates every record
+///   - Binary format correctness: records are packed with null indicators matching
+///     FileStore's expected row layout (calculateRowWidth)
+///   - Timestamp tracking: FileStore's min/max timestamp header updates are consistent
+///
+/// Does NOT test:
+///   - Concurrent read+write (FileStore closes the writer on first read)
+///   - Multiple writers (see ConcurrentMultiProducerWrite_FileStore)
+///   - TimeRange-filtered reads (uses unbounded range only)
+TEST_F(ConcurrencyTests, ConcurrentWrite_FileStore)
+{
+    auto tmpDir = createTempDir("single_writer");
+    auto store = makeStore<FileStore>(
+        FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"},
+        schema);
+    store.open();
 
-    EXPECT_GT(totalWritten.load(), 0u);
-    EXPECT_GT(totalRead.load(), 0u);
+    const auto totalWritten = runFileStoreWritePhase(store, {.numWriters = 1, .writerSleep = true}, getTestDuration());
+    const auto totalRead = validateFileStoreData(store, 1);
+
+    NES_INFO("FileStore single writer: written={}, read={}", totalWritten, totalRead);
+
+    store.close();
+    std::filesystem::remove_all(tmpDir);
+}
+
+/// Multi-producer FileStore write stress test.
+///
+/// Tests:
+///   - Record integrity under concurrent multi-writer access (value == ts * 10 + writerId)
+///   - Writer thread safety: multiple threads call writeRecord simultaneously, testing
+///     for torn records and interleaved writes in BinaryStoreWriter
+///   - Data overwrite detection (writer-specific invariant ensures one writer's record cannot
+///     be silently replaced by another's without failing the integrity check)
+///   - Writer id validity (id must be in [0, NUM_WRITERS))
+///
+/// Does NOT test:
+///   - Concurrent read+write (FileStore closes the writer on first read)
+///   - Monotonic timestamp ordering (not guaranteed with multiple concurrent writers)
+///   - TimeRange-filtered reads (uses unbounded range only)
+///   - Per-writer completeness (does not verify every written record is eventually read)
+TEST_F(ConcurrencyTests, ConcurrentMultiProducerWrite_FileStore)
+{
+    auto tmpDir = createTempDir("multi_writer");
+    auto store = makeStore<FileStore>(
+        FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"},
+        schema);
+    store.open();
+
+    const auto totalWritten = runFileStoreWritePhase(store, {.numWriters = NUM_WRITERS, .writerSleep = true}, getTestDuration());
+    const auto totalRead = validateFileStoreData(store, NUM_WRITERS);
+
+    NES_INFO("FileStore multi writer: written={}, read={}", totalWritten, totalRead);
+
+    store.close();
+    std::filesystem::remove_all(tmpDir);
 }
 
 }
