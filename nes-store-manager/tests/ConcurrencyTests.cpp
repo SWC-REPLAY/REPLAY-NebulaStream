@@ -241,69 +241,6 @@ protected:
         return {totalWritten.load(), totalRead.load()};
     }
 
-    /// Run a write-only phase for FileStore (reuses the MemoryStore writerLoop — the binary
-    /// record layout is identical for non-nullable fields). After all writers finish, reads
-    /// back and validates record integrity.
-    /// FileStore closes the writer on first read, so concurrent read+write is not supported.
-    uint64_t runFileStoreWritePhase(Store& store, const TestConfig& config, std::chrono::seconds duration)
-    {
-        std::atomic<bool> stop{false};
-        std::atomic<uint64_t> totalWritten{0};
-
-        std::vector<std::thread> writers;
-        writers.reserve(config.numWriters);
-        for (size_t i = 0; i < config.numWriters; ++i)
-        {
-            writers.emplace_back(&ConcurrencyTests::writerLoop, this,
-                std::ref(store), i, std::cref(stop), std::ref(totalWritten), config.writerSleep);
-        }
-
-        std::this_thread::sleep_for(duration);
-        stop.store(true, std::memory_order_relaxed);
-
-        for (auto& wr : writers)
-        {
-            wr.join();
-        }
-
-        NES_INFO("FileStore write phase: {} tuples written by {} writers in {}s",
-                 totalWritten.load(), config.numWriters, duration.count());
-        EXPECT_GT(totalWritten.load(), 0u);
-        return totalWritten.load();
-    }
-
-    /// Read from the FileStore and validate all records' integrity.
-    /// FileStore::read() always reads from the beginning, so this performs a single read pass.
-    uint64_t validateFileStoreData(Store& store, size_t numWriters)
-    {
-        const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
-        const TimeRange unbounded{.fieldName = "ts", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
-
-        auto readBuffer = bufferManager->getBufferBlocking();
-        const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
-
-        if (tuplesRead > 0)
-        {
-            auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
-            for (uint64_t t = 0; t < tuplesRead; ++t)
-            {
-                const uint8_t* row = span.data() + (t * recordSize);
-                const uint64_t id = readField(row, ID_OFFSET);
-                const uint64_t value = readField(row, VALUE_OFFSET);
-                const uint64_t ts = readField(row, TS_OFFSET);
-
-                EXPECT_LT(id, numWriters)
-                    << "Tuple " << t << ": id (" << id << ") out of writer range [0, " << numWriters << ")";
-                EXPECT_EQ(value, ts * 10 + id)
-                    << "Tuple " << t << ": value (" << value << ") != ts*10+id (" << ts * 10 + id
-                    << ") for writer " << id;
-            }
-        }
-
-        EXPECT_GT(tuplesRead, 0u);
-        return tuplesRead;
-    }
-
     /// Create a unique temporary directory for FileStore tests.
     static std::filesystem::path createTempDir(const std::string& testName)
     {
@@ -464,64 +401,53 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparound_MemoryStore)
     bufferManager = originalBufferManager;
 }
 
-/// Single-producer FileStore write stress test.
+/// Single-producer, multi-reader FileStore stress test.
 ///
 /// Tests:
-///   - Record integrity: writes records with invariant (value == ts * 10 + writerId),
-///     then reads back and validates every record
-///   - Binary format correctness: records are packed with null indicators matching
-///     FileStore's expected row layout (calculateRowWidth)
-///   - Timestamp tracking: FileStore's min/max timestamp header updates are consistent
+///   - Record integrity under concurrent read/write (value == ts * 10 + writerId)
+///   - pread-based reading is thread-safe alongside pwrite-based writing
+///   - Buffer capacity is respected (tuplesRead <= maxTuplesPerBuffer)
+///   - No torn or partial records visible to readers
 ///
 /// Does NOT test:
-///   - Concurrent read+write (FileStore closes the writer on first read)
-///   - Multiple writers (see ConcurrentMultiProducerWrite_FileStore)
+///   - Multiple concurrent writers (see ConcurrentMultiProducerReadWrite_FileStore)
+///   - Monotonic timestamp ordering (FileStore row order depends on atomic tail reservation)
 ///   - TimeRange-filtered reads (uses unbounded range only)
-TEST_F(ConcurrencyTests, ConcurrentWrite_FileStore)
+TEST_F(ConcurrencyTests, ConcurrentReadWrite_FileStore)
 {
-    auto tmpDir = createTempDir("single_writer");
+    auto tmpDir = createTempDir("concurrent_rw");
     auto store = makeStore<FileStore>(
         FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"},
         schema);
     store.open();
-
-    const auto totalWritten = runFileStoreWritePhase(store, {.numWriters = 1, .writerSleep = true}, getTestDuration());
-    const auto totalRead = validateFileStoreData(store, 1);
-
-    NES_INFO("FileStore single writer: written={}, read={}", totalWritten, totalRead);
-
+    runTest(store, {.numWriters = 1, .writerSleep = true, .checkOrdering = false}, getTestDuration());
     store.close();
     std::filesystem::remove_all(tmpDir);
 }
 
-/// Multi-producer FileStore write stress test.
+/// Multi-producer, multi-reader FileStore stress test.
 ///
 /// Tests:
 ///   - Record integrity under concurrent multi-writer access (value == ts * 10 + writerId)
 ///   - Writer thread safety: multiple threads call writeRecord simultaneously, testing
-///     for torn records and interleaved writes in BinaryStoreWriter
+///     for torn records and interleaved writes via atomic tail + pwrite
 ///   - Data overwrite detection (writer-specific invariant ensures one writer's record cannot
 ///     be silently replaced by another's without failing the integrity check)
 ///   - Writer id validity (id must be in [0, NUM_WRITERS))
+///   - pread-based reading is thread-safe alongside concurrent pwrite-based writing
 ///
 /// Does NOT test:
-///   - Concurrent read+write (FileStore closes the writer on first read)
-///   - Monotonic timestamp ordering (not guaranteed with multiple concurrent writers)
+///   - Monotonic timestamp ordering (not guaranteed with multiple writers)
 ///   - TimeRange-filtered reads (uses unbounded range only)
 ///   - Per-writer completeness (does not verify every written record is eventually read)
-TEST_F(ConcurrencyTests, ConcurrentMultiProducerWrite_FileStore)
+TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWrite_FileStore)
 {
-    auto tmpDir = createTempDir("multi_writer");
+    auto tmpDir = createTempDir("concurrent_mp_rw");
     auto store = makeStore<FileStore>(
         FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"},
         schema);
     store.open();
-
-    const auto totalWritten = runFileStoreWritePhase(store, {.numWriters = NUM_WRITERS, .writerSleep = true}, getTestDuration());
-    const auto totalRead = validateFileStoreData(store, NUM_WRITERS);
-
-    NES_INFO("FileStore multi writer: written={}, read={}", totalWritten, totalRead);
-
+    runTest(store, {.numWriters = NUM_WRITERS, .writerSleep = true, .checkOrdering = false}, getTestDuration());
     store.close();
     std::filesystem::remove_all(tmpDir);
 }

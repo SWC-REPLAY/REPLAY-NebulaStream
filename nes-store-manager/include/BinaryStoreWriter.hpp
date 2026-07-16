@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unistd.h>
 
 namespace NES::StoreManager
 {
@@ -57,6 +58,9 @@ public:
 
     /// Update the min/max timestamps in the file header using pwrite to fixed offsets.
     void updateTimestamps(uint64_t minTs, uint64_t maxTs) const;
+
+    /// Read up to `len` bytes from file offset `offset` into `dest` using pread (thread-safe).
+    ssize_t readAt(void* dest, size_t len, uint64_t offset) const;
 
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }
 

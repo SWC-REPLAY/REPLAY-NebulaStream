@@ -14,13 +14,16 @@
 
 #include <FileStore.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <iomanip>
-#include <memory>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
+#include <span>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -28,9 +31,10 @@
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <sys/types.h>
 #include <ErrorHandling.hpp>
 #include <FlushPolicy.hpp>
-#include <ReplayStoreReader.hpp>
+#include <ReplayStoreFormat.hpp>
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
 #include <StoreTypeRegistry.hpp>
@@ -75,11 +79,14 @@ FileStore::~FileStore() = default;
 
 void FileStore::open()
 {
+    std::unique_lock lock(mutex);
     fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
     fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
     writer.open();
     writer.ensureHeader();
+    dataStartOffset = HEADER_FIXED_BYTES + sizeof(uint32_t) + config.schemaText.size();
     writerOpened = true;
+    lock.unlock();
     if (nextLevel)
     {
         nextLevel->open();
@@ -88,15 +95,13 @@ void FileStore::open()
 
 void FileStore::close([[maybe_unused]] Store& self)
 {
-    if (writerOpened)
     {
-        writer.close();
-        writerOpened = false;
-    }
-    if (reader)
-    {
-        reader->close();
-        reader.reset();
+        const std::unique_lock lock(mutex);
+        if (writerOpened)
+        {
+            writer.close();
+            writerOpened = false;
+        }
     }
     if (nextLevel)
     {
@@ -117,23 +122,31 @@ void FileStore::flush([[maybe_unused]] Store& self)
 void FileStore::writeRecord(
     const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, [[maybe_unused]] Store& self)
 {
-    PRECONDITION(writerOpened, "FileStore must be opened before writing");
-    PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
-    /// Update schema from the write-time schema which has resolved types
-    if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
+    Timestamp currentMin{Timestamp(Timestamp::INVALID_VALUE)};
+    Timestamp currentMax{Timestamp(Timestamp::INITIAL_VALUE)};
     {
-        schema = writeSchema;
-    }
+        const std::unique_lock lock(mutex);
+        PRECONDITION(writerOpened, "FileStore must be opened before writing");
+        PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
+        /// Update schema from the write-time schema which has resolved types
+        if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
+        {
+            schema = writeSchema;
+        }
 
-    if (ts < fileMinTs)
-    {
-        fileMinTs = ts;
+        if (ts < fileMinTs)
+        {
+            fileMinTs = ts;
+        }
+        if (ts > fileMaxTs)
+        {
+            fileMaxTs = ts;
+        }
+        currentMin = fileMinTs;
+        currentMax = fileMaxTs;
     }
-    if (ts > fileMaxTs)
-    {
-        fileMaxTs = ts;
-    }
-    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
+    /// These calls are thread-safe (atomic tail + pwrite).
+    writer.updateTimestamps(currentMin.getRawValue(), currentMax.getRawValue());
 
     NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
     writer.append(recordData, recordSize);
@@ -161,8 +174,10 @@ void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxT
     writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
 }
 
+namespace
+{
 /// Compute the byte offset of a field within a row, using the packed binary layout.
-static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string& fieldName)
+std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string& fieldName)
 {
     uint32_t offset = 0;
     for (size_t i = 0; i < schema.getNumberOfFields(); ++i)
@@ -179,25 +194,28 @@ static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::
 
 /// Filter rows in a buffer in-place, keeping only rows whose timestamp field falls within the range.
 /// Returns the number of rows remaining.
-static uint64_t filterBufferRows(char* data, uint64_t numRows, uint32_t rowWidth, uint32_t tsFieldOffset, const TimeRange& range)
+uint64_t filterBufferRows(const std::span<char> data, uint64_t numRows, uint32_t rowWidth, uint32_t tsFieldOffset, const TimeRange& range)
 {
     uint64_t kept = 0;
     for (uint64_t i = 0; i < numRows; ++i)
     {
-        const char* rowPtr = data + (i * rowWidth);
+        const auto row = data.subspan(i * rowWidth, rowWidth);
         uint64_t tsValue = 0;
         /// Skip the 1-byte null indicator before the actual value
-        std::memcpy(&tsValue, rowPtr + tsFieldOffset + 1, sizeof(uint64_t));
+        const auto tsBytes = row.subspan(tsFieldOffset + 1, sizeof(uint64_t));
+        std::memcpy(&tsValue, tsBytes.data(), tsBytes.size());
         if (range.contains(Timestamp(tsValue)))
         {
             if (kept != i)
             {
-                std::memmove(data + (kept * rowWidth), rowPtr, rowWidth);
+                std::memmove(data.subspan(kept * rowWidth, rowWidth).data(), row.data(), rowWidth);
             }
             ++kept;
         }
     }
     return kept;
+}
+
 }
 
 uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
@@ -210,57 +228,57 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
             return nextLevelRead;
         }
     }
-    if (!reader)
-    {
-        if (writerOpened)
-        {
-            writer.close();
-            writerOpened = false;
-        }
-        reader = std::make_unique<ReplayStoreReader>(filePath);
-        reader->open();
-        NES_DEBUG("FileStore::read: opened reader for file={}, dataStartOffset={}", filePath, reader->getDataStartOffset());
-    }
-    else
-    {
-        /// Reset reader to beginning of data so repeated reads are independent
-        reader->clearErrors();
-        reader->seekTo(static_cast<std::streampos>(reader->getDataStartOffset()));
-    }
 
     /// Skip entire file if its timestamp range falls outside the query range
-    if (!range.isUnbounded() && !range.overlaps(Timestamp(reader->getMinTs()), Timestamp(reader->getMaxTs())))
+    if (!range.isUnbounded())
     {
-        NES_DEBUG(
-            "FileStore::read: skipping file {} (ts range [{}, {}] outside query range)", filePath, reader->getMinTs(), reader->getMaxTs());
-        return 0;
+        const std::shared_lock lock(mutex);
+        if (!range.overlaps(fileMinTs, fileMaxTs))
+        {
+            NES_DEBUG("FileStore::read: skipping file {} (ts range outside query range)", filePath);
+            return 0;
+        }
     }
 
     const uint32_t tupleSize = calculateRowWidth(readSchema);
     PRECONDITION(tupleSize > 0, "Schema must have at least one field to compute row width");
-    const uint64_t capacity = buffer.getBufferSize() / tupleSize;
-    char* dest = buffer.getAvailableMemoryArea<char>().data();
-    uint64_t totalTuples = 0;
 
-    while (!reader->isEof() && totalTuples < capacity)
+    /// Read the current write frontier (atomic) and compute how many complete rows exist.
+    const uint64_t currentTail = writer.size();
+    if (currentTail <= dataStartOffset)
     {
-        uint64_t tuplesRead = reader->readRows(dest + (totalTuples * tupleSize), capacity - totalTuples, tupleSize, readSchema);
-        NES_DEBUG("FileStore::read: tuplesRead={}, tupleSize={}, capacity={}, file={}", tuplesRead, tupleSize, capacity, filePath);
+        return 0;
+    }
 
-        if (tuplesRead == 0)
-        {
-            break;
-        }
+    const uint64_t availableBytes = currentTail - dataStartOffset;
+    const uint64_t completeRows = availableBytes / tupleSize;
+    const uint64_t capacity = buffer.getBufferSize() / tupleSize;
+    const uint64_t rowsToRead = std::min(completeRows, capacity);
 
-        /// Apply row-level filtering if a time range is specified
-        if (!range.isUnbounded())
-        {
-            const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
-            PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
-            tuplesRead = filterBufferRows(dest + (totalTuples * tupleSize), tuplesRead, tupleSize, *tsOffset, range);
-        }
+    if (rowsToRead == 0)
+    {
+        return 0;
+    }
 
-        totalTuples += tuplesRead;
+    const uint64_t bytesToRead = rowsToRead * tupleSize;
+    const auto dest = buffer.getAvailableMemoryArea<char>();
+
+    /// pread is position-independent and thread-safe — no lock needed.
+    const ssize_t bytesRead = writer.readAt(dest.data(), bytesToRead, dataStartOffset);
+    if (bytesRead <= 0)
+    {
+        return 0;
+    }
+
+    uint64_t totalTuples = static_cast<uint64_t>(bytesRead) / tupleSize;
+    NES_DEBUG("FileStore::read: totalTuples={}, tupleSize={}, capacity={}, file={}", totalTuples, tupleSize, capacity, filePath);
+
+    /// Apply row-level filtering if a time range is specified
+    if (!range.isUnbounded())
+    {
+        const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
+        PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
+        totalTuples = filterBufferRows(dest, totalTuples, tupleSize, *tsOffset, range);
     }
 
     buffer.setNumberOfTuples(totalTuples);
@@ -269,15 +287,13 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
 
 bool FileStore::hasMore() const
 {
-    if (!reader)
     {
-        return true; /// Haven't started reading yet, assume data exists
+        const std::shared_lock lock(mutex);
+        if (writerOpened && writer.size() > dataStartOffset)
+        {
+            return true;
+        }
     }
-    if (!reader->isEof())
-    {
-        return true;
-    }
-    /// Own data exhausted — check next level
     if (nextLevel)
     {
         return nextLevel->hasMore();
@@ -287,6 +303,7 @@ bool FileStore::hasMore() const
 
 Schema FileStore::getSchema() const
 {
+    const std::shared_lock lock(mutex);
     return schema;
 }
 

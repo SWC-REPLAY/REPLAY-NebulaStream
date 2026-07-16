@@ -47,7 +47,7 @@ BinaryStoreWriter::~BinaryStoreWriter()
 
 void BinaryStoreWriter::open()
 {
-    constexpr int flags = O_CREAT | O_WRONLY;
+    constexpr int flags = O_CREAT | O_RDWR;
     const std::string& filePath = config.filePath;
     fd = ::open(filePath.c_str(), flags, 0644);
     if (fd < 0)
@@ -135,16 +135,22 @@ void BinaryStoreWriter::updateTimestamps(uint64_t minTs, uint64_t maxTs) const
     {
         return;
     }
-    ssize_t written = ::pwrite(fd, &minTs, sizeof(uint64_t), static_cast<off_t>(OFFSET_MIN_TS));
-    if (written < 0 || static_cast<size_t>(written) != sizeof(uint64_t))
+    /// Write both timestamps in a single pwrite to avoid torn reads of the min/max pair.
+    const uint64_t ts[2] = {minTs, maxTs};
+    const ssize_t written = ::pwrite(fd, ts, sizeof(ts), static_cast<off_t>(OFFSET_MIN_TS));
+    if (written < 0 || static_cast<size_t>(written) != sizeof(ts))
     {
-        throw CannotOpenSink("Failed to update minTs in header: errno={} {}", errno, std::strerror(errno));
+        throw CannotOpenSink("Failed to update timestamps in header: errno={} {}", errno, std::strerror(errno));
     }
-    written = ::pwrite(fd, &maxTs, sizeof(uint64_t), static_cast<off_t>(OFFSET_MAX_TS));
-    if (written < 0 || static_cast<size_t>(written) != sizeof(uint64_t))
+}
+
+ssize_t BinaryStoreWriter::readAt(void* dest, size_t len, uint64_t offset) const
+{
+    if (fd < 0)
     {
-        throw CannotOpenSink("Failed to update maxTs in header: errno={} {}", errno, std::strerror(errno));
+        return -1;
     }
+    return ::pread(fd, dest, len, static_cast<off_t>(offset));
 }
 
 }

@@ -16,8 +16,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 
@@ -32,8 +32,6 @@
 
 namespace NES::StoreManager
 {
-
-class ReplayStoreReader;
 
 /// File-backed store wrapping BinaryStoreWriter/ReplayStoreReader. Satisfies StoreConcept.
 /// Optionally chains to a next-level store with a flush policy and transformation.
@@ -93,8 +91,9 @@ private:
     Timestamp fileMinTs{Timestamp(Timestamp::INVALID_VALUE)};
     Timestamp fileMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
     BinaryStoreWriter writer;
-    std::unique_ptr<ReplayStoreReader> reader;
+    uint64_t dataStartOffset{0};
     bool writerOpened{false};
+    mutable std::shared_mutex mutex;
 
     /// Chaining support (all optional — empty for standalone/tail stores).
     std::optional<Store> nextLevel;
