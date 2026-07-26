@@ -546,6 +546,7 @@
 
         # Nixpkgs ships an unversioned `clang-format`; format.sh prefers the
         # `clang-format-<version>` name, which otherwise resolves to a leaked system
+        # `clang-format-19` name, which otherwise resolves to a leaked system
         # binary. A plain symlink breaks the nixpkgs wrapper (it dispatches on
         # argv0's basename), so wrap it explicitly to force the nix toolchain.
         clangFormatVersioned = pkgs.writeShellScriptBin "clang-format-${llvmToolchainVersion}" ''
@@ -566,6 +567,7 @@
               pkgs.python3
               rustToolchain
               pkgs.util-linux
+              pkgs.rustfmt
               clangFormatVersioned
             ]
             ++ llvmTools;
