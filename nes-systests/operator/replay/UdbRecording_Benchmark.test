@@ -1,0 +1,73 @@
+# name: operator/replay/UdbRecording_Benchmark.test
+# description: Selection over a 1M-tuple generator stream, with and without TIME_TRAVEL_UDB, for recording-overhead benchmarking
+# groups: [UdbRecordingBenchmark]
+
+# Run each query in its own process; overrides must go on the command line, since -b ignores
+# GlobalConfiguration. Take the median of several repetitions.
+#   systest -b --show-query-performance --workingDir=<unique> -t <this file>:01 \
+#     -- --worker.default_query_execution.execution_mode=COMPILER \
+#        --worker.default_query_execution.operator_buffer_size=1048576 \
+#        --worker.number_of_buffers_in_global_buffer_manager=1024 \
+#        --worker.query_engine.number_of_worker_threads=4
+#
+# One query per process, because the recorder attaches to the systest process itself and -b
+# iterates in reverse: both queries together would run the baseline under the recorder.
+#
+# The 1 MiB buffer override is required for a fair number, not a refinement. fillTupleBuffer pads
+# each call out to FLUSH_INTERVAL_MS and truncates its own work to whole milliseconds, so a call
+# doing sub-millisecond work sleeps the full interval. At the default 4096-byte buffers only the
+# baseline falls below that threshold, inflating it by ~1ms per buffer. The buffer-count override
+# caps memory: 32768 default buffers at 1 MiB would reserve 32 GB.
+#
+# Only elapsed time is meaningful; throughput needs an input file size, so it prints nan here. Note
+# elapsed is stop-minus-running, which excludes attach but *includes* the trace save that dominates
+# it -- separating those needs phase timing inside the operator.
+
+SEQUENTIAL_EXECUTION
+
+GlobalConfiguration worker.default_query_execution.execution_mode: INTERPRETER
+
+# Emit rate far above what the machine can produce, so the flush interval is the only ceiling. The
+# tuple count is fixed by the SEQUENCE end value, so recording stretches the runtime but not the
+# result.
+CREATE LOGICAL SOURCE udbBenchBaseline(id UINT64 NOT NULL, value UINT64 NOT NULL, timestamp UINT64 NOT NULL);
+CREATE PHYSICAL SOURCE FOR udbBenchBaseline TYPE Generator SET(
+       'ALL' as `SOURCE`.STOP_GENERATOR_WHEN_SEQUENCE_FINISHES,
+       1 AS `SOURCE`.SEED,
+       'FIXED' AS `SOURCE`.GENERATOR_RATE_TYPE,
+       'emit_rate 1000000000' AS `SOURCE`.GENERATOR_RATE_CONFIG,
+       1 AS `SOURCE`.FLUSH_INTERVAL_MS,
+       'SEQUENCE UINT64 0 1000000 1, NORMAL_DISTRIBUTION UINT64 100 0.5, SEQUENCE UINT64 0 1000000 1'
+       AS `SOURCE`.GENERATOR_SCHEMA
+);
+
+CREATE LOGICAL SOURCE udbBenchRecorded(id UINT64 NOT NULL, value UINT64 NOT NULL, timestamp UINT64 NOT NULL);
+CREATE PHYSICAL SOURCE FOR udbBenchRecorded TYPE Generator SET(
+       'ALL' as `SOURCE`.STOP_GENERATOR_WHEN_SEQUENCE_FINISHES,
+       1 AS `SOURCE`.SEED,
+       'FIXED' AS `SOURCE`.GENERATOR_RATE_TYPE,
+       'emit_rate 1000000000' AS `SOURCE`.GENERATOR_RATE_CONFIG,
+       1 AS `SOURCE`.FLUSH_INTERVAL_MS,
+       'SEQUENCE UINT64 0 1000000 1, NORMAL_DISTRIBUTION UINT64 100 0.5, SEQUENCE UINT64 0 1000000 1'
+       AS `SOURCE`.GENERATOR_SCHEMA
+);
+
+# Checksum instead of File: order-independent under multi-threaded execution, and collapses ~460k
+# rows to one line.
+CREATE SINK udbBenchBaselineChecksum(udbBenchBaseline.id UINT64 NOT NULL, udbBenchBaseline.value UINT64 NOT NULL, udbBenchBaseline.timestamp UINT64 NOT NULL) TYPE Checksum;
+CREATE SINK udbBenchRecordedChecksum(udbBenchRecorded.id UINT64 NOT NULL, udbBenchRecorded.value UINT64 NOT NULL, udbBenchRecorded.timestamp UINT64 NOT NULL) TYPE Checksum;
+
+# `value` is binomial(100, 0.5), so `< 50` passes a little under half the tuples. Both queries share
+# SEED 1 and must agree exactly; disagreement means something is non-deterministic and the
+# benchmark is invalid.
+SELECT id, value, timestamp FROM udbBenchBaseline
+WHERE value < UINT64(50)
+INTO udbBenchBaselineChecksum;
+----
+460259,378981852
+
+SELECT id, value, timestamp FROM udbBenchRecorded
+WHERE value < UINT64(50)
+INTO udbBenchRecordedChecksum TIME_TRAVEL_UDB benchRecording;
+----
+460259,378981852

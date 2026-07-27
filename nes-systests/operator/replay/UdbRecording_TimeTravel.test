@@ -1,6 +1,11 @@
 # name: operator/replay/UdbRecording_TimeTravel.test
 # description: Run a query with TIME_TRAVEL_UDB and verify the query produces the expected output
 # groups: [UdbRecording]
+#
+# Run this file with --sequential: LiveRecorder records the whole process, so only one recording
+# can be in flight at a time.
+
+GlobalConfiguration worker.default_query_execution.execution_mode: INTERPRETER
 
 CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, timestamp UINT64);
 CREATE PHYSICAL SOURCE FOR stream TYPE File;
@@ -12,7 +17,7 @@ ATTACH INLINE
 
 CREATE SINK sink(stream.id UINT64, stream.value UINT64, stream.timestamp UINT64) TYPE File;
 
-SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB recording;
+SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB recordingG TRACE_SIZE 2GB;
 ----
 1,1,1000
 2,1,1001

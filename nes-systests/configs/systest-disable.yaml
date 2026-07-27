@@ -6,5 +6,9 @@
 #   - <group name>
 #
 # - large scale tests are always skipped below
+# - UdbRecordingBenchmark attaches udb to the systest process itself, which would then record
+#   every test that follows it in the same process. Run it on demand via -t or
+#   --groups UdbRecordingBenchmark.
 exclude_groups:
   - large
+  - UdbRecordingBenchmark
