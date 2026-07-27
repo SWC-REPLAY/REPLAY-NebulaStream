@@ -14,11 +14,14 @@
 
 #include <UdbRecordingPhysicalOperator.hpp>
 
+#include <chrono>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include <Interface/Record.hpp>
 #include <Interface/RecordBuffer.hpp>
+#include <Util/Logger/Logger.hpp>
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
@@ -26,6 +29,22 @@
 
 namespace NES
 {
+
+namespace
+{
+/// Benchmark instrumentation. Emitted at WARNING because RelWithDebInfo compiles out everything
+/// below it, and the two phases bracketed here are exactly what the systest's stop-minus-running
+/// metric cannot show: attach happens before the query reaches Running, and the save is buried
+/// inside the reported elapsed time.
+template <typename F>
+void logPhase(const std::string_view phase, F&& phaseFn)
+{
+    const auto begin = std::chrono::steady_clock::now();
+    std::forward<F>(phaseFn)();
+    const auto elapsed = std::chrono::steady_clock::now() - begin;
+    NES_WARNING("UDBBENCH phase={} ms={}", phase, std::chrono::duration<double, std::milli>(elapsed).count());
+}
+}
 
 UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(UdbRecorder::Options options) : options(std::move(options))
 {
@@ -39,7 +58,7 @@ void UdbRecordingPhysicalOperator::setup(ExecutionContext& executionCtx, Compila
     {
         setupChild(executionCtx, compilationContext);
     }
-    UdbRecorder::instance().start(options);
+    logPhase("attach", [this] { UdbRecorder::instance().start(options); });
 }
 
 void UdbRecordingPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const
@@ -72,7 +91,7 @@ void UdbRecordingPhysicalOperator::terminate(ExecutionContext& executionCtx) con
     {
         terminateChild(executionCtx);
     }
-    UdbRecorder::instance().saveAndStop();
+    logPhase("save", [] { UdbRecorder::instance().saveAndStop(); });
 }
 
 std::optional<PhysicalOperator> UdbRecordingPhysicalOperator::getChild() const
