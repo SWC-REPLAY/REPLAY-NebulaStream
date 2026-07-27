@@ -16,10 +16,13 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <fcntl.h>
@@ -42,18 +45,20 @@ namespace NES
 namespace
 {
 
-/// Spawns udb attached to the current NES PID. udb detaches itself after attaching so no reaping needed.
+/// Spawns udb attached to the current NES PID. The returned pid is the udb (live-record) controller
+/// process itself in --pid (attach) mode; it must be explicitly stopped and reaped by the caller
+/// (see UdbRecordingPhysicalOperator::terminate).
 ///
 /// Prerequisites:
 ///   1. UDB_BINARY_PATH must point to the udb executable, e.g. via direnv:
 ///        export UDB_BINARY_PATH=/path/to/udb
-void spawnUdbProxy(const UdbRecordingPhysicalOperator::Config& config)
+std::optional<pid_t> spawnUdbProxy(const UdbRecordingPhysicalOperator::Config& config)
 {
     const char* udbBinEnv = std::getenv("UDB_BINARY_PATH");
     if (udbBinEnv == nullptr)
     {
         NES_ERROR("UDB_BINARY_PATH is not set — skipping udb recording");
-        return;
+        return std::nullopt;
     }
     /// Copy immediately so a concurrent setenv/unsetenv cannot invalidate the pointer.
     const std::string udbBin = udbBinEnv;
@@ -84,7 +89,7 @@ void spawnUdbProxy(const UdbRecordingPhysicalOperator::Config& config)
     if (::pipe2(pipeFd.data(), O_CLOEXEC) != 0)
     {
         NES_ERROR("Pipe2 failed");
-        return;
+        return std::nullopt;
     }
 
     const pid_t child = ::fork();
@@ -107,7 +112,7 @@ void spawnUdbProxy(const UdbRecordingPhysicalOperator::Config& config)
     {
         NES_ERROR("Fork failed");
         ::close(pipeFd[0]);
-        return;
+        return std::nullopt;
     }
 
     /// Grant ptrace permission to exactly this child; avoids having to lower yama/ptrace_scope to 0 (c.f. man 2 prctl)
@@ -131,13 +136,21 @@ void spawnUdbProxy(const UdbRecordingPhysicalOperator::Config& config)
     {
         NES_ERROR("execv failed for binary '{}'", udbBin);
         ::waitpid(child, nullptr, 0);
+        ::close(pipeFd[0]);
+        return std::nullopt;
     }
     ::close(pipeFd[0]);
+    return child;
 }
 
 }
 
 UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(Config config) : config(std::move(config))
+{
+}
+
+UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(const UdbRecordingPhysicalOperator& other)
+    : config(other.config), child(other.child)
 {
 }
 
@@ -147,7 +160,7 @@ void UdbRecordingPhysicalOperator::setup(ExecutionContext& executionCtx, Compila
     {
         setupChild(executionCtx, compilationContext);
     }
-    spawnUdbProxy(config);
+    udbPid = spawnUdbProxy(config).value_or(-1);
 }
 
 void UdbRecordingPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const
@@ -179,6 +192,49 @@ void UdbRecordingPhysicalOperator::terminate(ExecutionContext& executionCtx) con
     if (child.has_value())
     {
         terminateChild(executionCtx);
+    }
+
+    const pid_t pid = udbPid.exchange(-1);
+    if (pid <= 0)
+    {
+        return;
+    }
+    if (::kill(pid, SIGUSR1) != 0)
+    {
+        NES_ERROR("Failed to signal udb process {} to stop recording, errno={}", pid, errno);
+        ::waitpid(pid, nullptr, WNOHANG);
+        return;
+    }
+    /// Block until udb has saved the recording and exited, so the recording is guaranteed
+    /// finalized by the time terminate() returns. Bounded, because a wedged udb would otherwise
+    /// hang query teardown for good.
+    constexpr auto saveTimeout = std::chrono::seconds(60);
+    const auto deadline = std::chrono::steady_clock::now() + saveTimeout;
+    int status = 0;
+    for (;;)
+    {
+        const pid_t reaped = ::waitpid(pid, &status, WNOHANG);
+        if (reaped == pid)
+        {
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            {
+                NES_ERROR("udb process {} did not save the recording cleanly (status={})", pid, status);
+            }
+            return;
+        }
+        if (reaped < 0 && errno != EINTR)
+        {
+            NES_ERROR("Failed to reap udb process {}, errno={}", pid, errno);
+            return;
+        }
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            NES_ERROR("Timed out waiting for udb process {} to save the recording, killing it", pid);
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, nullptr, 0);
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 

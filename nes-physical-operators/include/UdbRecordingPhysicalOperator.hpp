@@ -14,8 +14,10 @@
 
 #pragma once
 
+#include <atomic>
 #include <optional>
 #include <string>
+#include <sys/types.h>
 
 #include <Interface/Record.hpp>
 #include <Interface/RecordBuffer.hpp>
@@ -27,8 +29,9 @@ namespace NES
 {
 
 /// Physical operator that spawns a udb recording process attached to the current NES process.
-/// Tuples pass through unchanged. The udb process is started once during pipeline setup
-/// and runs until NES terminates.
+/// Tuples pass through unchanged. The udb process is started during pipeline setup and stopped
+/// (signalled to save its recording and exit) when this operator's pipeline is terminated
+/// (query stop or completion).
 class UdbRecordingPhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
@@ -43,6 +46,10 @@ public:
     };
 
     explicit UdbRecordingPhysicalOperator(Config config);
+    /// std::atomic<pid_t> isn't copyable, so this operator needs an explicit copy constructor.
+    /// A copy deliberately does not inherit udbPid: exactly one object must own a given recorder
+    /// process, otherwise both would signal and reap the same pid and race against pid reuse.
+    UdbRecordingPhysicalOperator(const UdbRecordingPhysicalOperator& other);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;
@@ -56,6 +63,9 @@ public:
 private:
     Config config;
     std::optional<PhysicalOperator> child;
+    /// pid of the spawned udb process, set once in setup() and consumed once in terminate();
+    /// -1 means "not running" (never started, already stopped, or spawn failed).
+    mutable std::atomic<pid_t> udbPid{-1};
 };
 
 }
