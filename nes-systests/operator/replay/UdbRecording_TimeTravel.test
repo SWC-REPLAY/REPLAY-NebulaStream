@@ -12,9 +12,24 @@ ATTACH INLINE
 
 CREATE SINK sink(stream.id UINT64, stream.value UINT64, stream.timestamp UINT64) TYPE File;
 
-SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB recording;
+SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB recordingG TRACE_SIZE 2GB;
 ----
 1,1,1000
 2,1,1001
 3,1,1002
 4,2,2000
+
+# SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB recordingM TRACE_SIZE 1000MB;
+# ----
+# 1,1,1000
+# 2,1,1001
+# 3,1,1002
+# 4,2,2000
+#
+#
+# SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB recordingK TRACE_SIZE 1000000KB;
+# ----
+# 1,1,1000
+# 2,1,1001
+# 3,1,1002
+# 4,2,2000

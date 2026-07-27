@@ -32,8 +32,17 @@ namespace NES
 class UdbRecordingPhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    /// traceName is forwarded to udb as the output trace name (optional).
-    explicit UdbRecordingPhysicalOperator(std::optional<std::string> traceName);
+    /// Grouped recording attributes forwarded to udb. Add a field here to extend the set of
+    /// attributes; only spawnUdbProxy() and the lowering translation need to consume it.
+    ///   - traceName: udb output trace name (optional).
+    ///   - traceSize: udb --max-event-log-size, in the form SIZE[K|M|G] (optional).
+    struct Config
+    {
+        std::optional<std::string> traceName;
+        std::optional<std::string> traceSize;
+    };
+
+    explicit UdbRecordingPhysicalOperator(Config config);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;
@@ -45,7 +54,7 @@ public:
     void setChild(PhysicalOperator child) override;
 
 private:
-    std::optional<std::string> traceName;
+    Config config;
     std::optional<PhysicalOperator> child;
 };
 

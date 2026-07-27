@@ -14,6 +14,7 @@
 
 #include <AntlrSQLParser/AntlrSQLQueryPlanCreator.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -548,7 +549,7 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
     if (helpers.top().hasUdbClause)
     {
-        queryPlan = LogicalPlanBuilder::addUdbRecording(helpers.top().udbTraceName, queryPlan);
+        queryPlan = LogicalPlanBuilder::addUdbRecording(std::move(helpers.top().udbOptions), queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -1129,10 +1130,19 @@ void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelC
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
 {
     helpers.top().hasUdbClause = true;
+
     /// if no trace name is provided UDB auto generates one
     if (context->udbTraceName != nullptr)
     {
-        helpers.top().udbTraceName = context->udbTraceName->getText();
+        helpers.top().udbOptions.traceName = context->udbTraceName->getText();
+    }
+    /// if no trace size is provided UDB falls back to a default size
+    if (context->udbTraceSize != nullptr)
+    {
+        /// udb rejects lowercase units, so normalise what the case-insensitive grammar accepted.
+        std::string traceSize = context->udbTraceSize->getText();
+        std::ranges::transform(traceSize, traceSize.begin(), [](const unsigned char chr) { return static_cast<char>(std::toupper(chr)); });
+        helpers.top().udbOptions.traceSize = std::move(traceSize);
     }
 }
 }

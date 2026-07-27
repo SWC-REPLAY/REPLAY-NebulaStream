@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 #include <fcntl.h>
 #include <unistd.h>
 #include <linux/prctl.h>
@@ -46,7 +47,7 @@ namespace
 /// Prerequisites:
 ///   1. UDB_BINARY_PATH must point to the udb executable, e.g. via direnv:
 ///        export UDB_BINARY_PATH=/path/to/udb
-void spawnUdbProxy(const std::optional<std::string>& traceName)
+void spawnUdbProxy(const UdbRecordingPhysicalOperator::Config& config)
 {
     const char* udbBinEnv = std::getenv("UDB_BINARY_PATH");
     if (udbBinEnv == nullptr)
@@ -59,12 +60,26 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
 
     /// Build strings before fork() — malloc is not async-signal-safe in the child.
     const std::string pidStr = std::to_string(static_cast<int>(::getpid()));
-    const std::string traceFile = traceName.has_value() ? *traceName + ".undo" : std::string{};
+    const std::string traceFile = config.traceName.has_value() ? *config.traceName + ".undo" : std::string{};
 
     NES_DEBUG("Spawning udb (binary={}, pid={})", udbBin, pidStr);
 
+    /// Build the argv before fork() — malloc is not async-signal-safe in the child.
+    std::vector<char*> execArgs{const_cast<char*>(udbBin.c_str()), const_cast<char*>("--pid"), const_cast<char*>(pidStr.c_str())};
+    if (config.traceName.has_value())
+    {
+        execArgs.push_back(const_cast<char*>("--recording-file"));
+        execArgs.push_back(const_cast<char*>(traceFile.c_str()));
+    }
+    if (config.traceSize.has_value())
+    {
+        execArgs.push_back(const_cast<char*>("--max-event-log-size"));
+        execArgs.push_back(const_cast<char*>(config.traceSize->c_str()));
+    }
+    execArgs.push_back(nullptr);
+
     /// Pipe with O_CLOEXEC on the write end: exec closes it automatically on success.
-    /// If execlp fails the child writes a byte so the parent can log the error safely.
+    /// If execv fails the child writes a byte so the parent can log the error safely.
     std::array<int, 2> pipeFd{};
     if (::pipe2(pipeFd.data(), O_CLOEXEC) != 0)
     {
@@ -76,18 +91,9 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
     if (child == 0)
     {
         /// Child: write end is O_CLOEXEC — exec closes it. On failure write a byte so parent detects it.
-        /// NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
-        if (traceName.has_value())
-        {
-            ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), "--recording-file", traceFile.c_str(), nullptr);
-        }
-        else
-        {
-            ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), nullptr);
-        }
-        /// NOLINTEND(cppcoreguidelines-pro-type-vararg)
+        ::execv(udbBin.c_str(), execArgs.data());
 
-        /// execlp only returns on failure — only async-signal-safe calls allowed here.
+        /// execv only returns on failure — only async-signal-safe calls allowed here.
         const char errByte = 1;
         static_cast<void>(::write(pipeFd[1], &errByte, 1));
         constexpr int exitExecFailed = 127;
@@ -123,7 +129,7 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
 
     if (nread == 1)
     {
-        NES_ERROR("execlp failed for binary '{}'", udbBin);
+        NES_ERROR("execv failed for binary '{}'", udbBin);
         ::waitpid(child, nullptr, 0);
     }
     ::close(pipeFd[0]);
@@ -131,7 +137,7 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
 
 }
 
-UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(std::optional<std::string> traceName) : traceName(std::move(traceName))
+UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(Config config) : config(std::move(config))
 {
 }
 
@@ -141,7 +147,7 @@ void UdbRecordingPhysicalOperator::setup(ExecutionContext& executionCtx, Compila
     {
         setupChild(executionCtx, compilationContext);
     }
-    spawnUdbProxy(traceName);
+    spawnUdbProxy(config);
 }
 
 void UdbRecordingPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const

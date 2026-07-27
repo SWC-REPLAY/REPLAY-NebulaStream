@@ -30,18 +30,29 @@
 namespace NES
 {
 
+/// Grouped, reflectable configuration for UDB recording. Add a field here to extend the set of
+/// recording attributes; reflection, equality, and all operator/builder signatures pick it up
+/// automatically (this aggregate doubles as the operator's reflected payload).
+struct UdbRecordingOptions
+{
+    std::optional<std::string> traceName;
+    std::optional<std::string> traceSize;
+
+    bool operator==(const UdbRecordingOptions& rhs) const = default;
+};
+
 class UdbRecordingLogicalOperator : public ManagedByOperator
 {
 public:
     UdbRecordingLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
 
-    explicit UdbRecordingLogicalOperator(WeakLogicalOperator self, std::optional<std::string> traceName)
-        : ManagedByOperator(std::move(self)), traceName(std::move(traceName))
+    explicit UdbRecordingLogicalOperator(WeakLogicalOperator self, UdbRecordingOptions options)
+        : ManagedByOperator(std::move(self)), options(std::move(options))
     {
     }
 
-    explicit UdbRecordingLogicalOperator(std::optional<std::string> traceName)
-        : ManagedByOperator(WeakLogicalOperator{}), traceName(std::move(traceName))
+    explicit UdbRecordingLogicalOperator(UdbRecordingOptions options)
+        : ManagedByOperator(WeakLogicalOperator{}), options(std::move(options))
     {
     }
 
@@ -58,13 +69,13 @@ public:
     [[nodiscard]] Schema getOutputSchema() const;
     [[nodiscard]] UdbRecordingLogicalOperator withInferredSchema(const std::vector<Schema>&) const;
 
-    [[nodiscard]] const std::optional<std::string>& getTraceName() const { return traceName; }
+    [[nodiscard]] const UdbRecordingOptions& getOptions() const { return options; }
 
 private:
     static constexpr std::string_view NAME = "UdbRecording";
     std::vector<LogicalOperator> children;
     TraitSet traitSet;
-    std::optional<std::string> traceName;
+    UdbRecordingOptions options;
 };
 
 template <>
@@ -81,12 +92,4 @@ struct Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>
 
 static_assert(LogicalOperatorConcept<UdbRecordingLogicalOperator>);
 
-}
-
-namespace NES::detail
-{
-struct ReflectedUdbRecordingLogicalOperator
-{
-    std::optional<std::string> traceName;
-};
 }
