@@ -47,6 +47,19 @@ namespace NES
 namespace
 {
 
+/// Benchmark instrumentation. Emitted at WARNING because RelWithDebInfo compiles out everything
+/// below it, and the two phases bracketed here are exactly what the systest's stop-minus-running
+/// metric cannot show: attach happens before the query reaches Running, and the save is buried
+/// inside the reported elapsed time.
+template <typename F>
+void logPhase(const std::string_view phase, F&& phaseFn)
+{
+    const auto begin = std::chrono::steady_clock::now();
+    std::forward<F>(phaseFn)();
+    const auto elapsed = std::chrono::steady_clock::now() - begin;
+    NES_WARNING("UDBBENCH phase={} ms={}", phase, std::chrono::duration<double, std::milli>(elapsed).count());
+}
+
 /// A non-zero TracerPid is the only observable signal that udb has finished attaching.
 pid_t currentTracerPid()
 {
@@ -206,7 +219,7 @@ void UdbRecordingPhysicalOperator::setup(ExecutionContext& executionCtx, Compila
     {
         setupChild(executionCtx, compilationContext);
     }
-    udbPid = spawnUdbProxy(config).value_or(-1);
+    logPhase("attach", [this] { udbPid = spawnUdbProxy(config).value_or(-1); });
 }
 
 void UdbRecordingPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const
@@ -240,48 +253,53 @@ void UdbRecordingPhysicalOperator::terminate(ExecutionContext& executionCtx) con
         terminateChild(executionCtx);
     }
 
-    const pid_t pid = udbPid.exchange(-1);
-    if (pid <= 0)
-    {
-        return;
-    }
-    if (::kill(pid, SIGUSR1) != 0)
-    {
-        NES_ERROR("Failed to signal udb process {} to stop recording, errno={}", pid, errno);
-        ::waitpid(pid, nullptr, WNOHANG);
-        return;
-    }
-    /// Block until udb has saved the recording and exited, so the recording is guaranteed
-    /// finalized by the time terminate() returns. Bounded, because a wedged udb would otherwise
-    /// hang query teardown for good.
-    constexpr auto saveTimeout = std::chrono::seconds(60);
-    const auto deadline = std::chrono::steady_clock::now() + saveTimeout;
-    int status = 0;
-    for (;;)
-    {
-        const pid_t reaped = ::waitpid(pid, &status, WNOHANG);
-        if (reaped == pid)
+    logPhase(
+        "save",
+        [this]
         {
-            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            const pid_t pid = udbPid.exchange(-1);
+            if (pid <= 0)
             {
-                NES_ERROR("udb process {} did not save the recording cleanly (status={})", pid, status);
+                return;
             }
-            return;
-        }
-        if (reaped < 0 && errno != EINTR)
-        {
-            NES_ERROR("Failed to reap udb process {}, errno={}", pid, errno);
-            return;
-        }
-        if (std::chrono::steady_clock::now() >= deadline)
-        {
-            NES_ERROR("Timed out waiting for udb process {} to save the recording, killing it", pid);
-            ::kill(pid, SIGKILL);
-            ::waitpid(pid, nullptr, 0);
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
+            if (::kill(pid, SIGUSR1) != 0)
+            {
+                NES_ERROR("Failed to signal udb process {} to stop recording, errno={}", pid, errno);
+                ::waitpid(pid, nullptr, WNOHANG);
+                return;
+            }
+            /// Block until udb has saved the recording and exited, so the recording is guaranteed
+            /// finalized by the time terminate() returns. Bounded, because a wedged udb would otherwise
+            /// hang query teardown for good.
+            constexpr auto saveTimeout = std::chrono::seconds(60);
+            const auto deadline = std::chrono::steady_clock::now() + saveTimeout;
+            int status = 0;
+            for (;;)
+            {
+                const pid_t reaped = ::waitpid(pid, &status, WNOHANG);
+                if (reaped == pid)
+                {
+                    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+                    {
+                        NES_ERROR("udb process {} did not save the recording cleanly (status={})", pid, status);
+                    }
+                    return;
+                }
+                if (reaped < 0 && errno != EINTR)
+                {
+                    NES_ERROR("Failed to reap udb process {}, errno={}", pid, errno);
+                    return;
+                }
+                if (std::chrono::steady_clock::now() >= deadline)
+                {
+                    NES_ERROR("Timed out waiting for udb process {} to save the recording, killing it", pid);
+                    ::kill(pid, SIGKILL);
+                    ::waitpid(pid, nullptr, 0);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        });
 }
 
 std::optional<PhysicalOperator> UdbRecordingPhysicalOperator::getChild() const
