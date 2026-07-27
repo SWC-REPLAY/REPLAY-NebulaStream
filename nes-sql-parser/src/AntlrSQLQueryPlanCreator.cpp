@@ -14,13 +14,17 @@
 
 #include <AntlrSQLParser/AntlrSQLQueryPlanCreator.hpp>
 
+#include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -122,6 +126,48 @@ Windowing::TimeMeasure buildTimeMeasure(const int size, const uint64_t timebase)
             const std::string tokenName = std::string(lexer.getVocabulary().getSymbolicName(timebase));
             throw InvalidQuerySyntax("Unknown time unit: {}", tokenName);
     }
+}
+
+/// LiveRecorder sizes its event log in bytes, so the optional unit suffix is folded in here rather
+/// than carried through the plan.
+static uint64_t parseTraceSize(AntlrSQLParser::TraceSizeContext* context)
+{
+    const std::string digits = context->size->getText();
+    uint64_t size = 0;
+    const auto [end, errorCode] = std::from_chars(digits.data(), digits.data() + digits.size(), size);
+    if (errorCode != std::errc{} || end != digits.data() + digits.size())
+    {
+        throw InvalidQuerySyntax("TRACE_SIZE is not an unsigned integer: {}", digits);
+    }
+
+    uint64_t multiplier = 1;
+    if (context->unit != nullptr)
+    {
+        std::string unit = context->unit->getText();
+        std::ranges::transform(unit, unit.begin(), [](const unsigned char chr) { return static_cast<char>(std::toupper(chr)); });
+        if (unit == "KB")
+        {
+            multiplier = 1024;
+        }
+        else if (unit == "MB")
+        {
+            multiplier = 1024ULL * 1024;
+        }
+        else if (unit == "GB")
+        {
+            multiplier = 1024ULL * 1024 * 1024;
+        }
+        else
+        {
+            throw InvalidQuerySyntax("TRACE_SIZE unit must be one of KB, MB or GB, but got: {}", context->unit->getText());
+        }
+    }
+
+    if (size > std::numeric_limits<uint64_t>::max() / multiplier)
+    {
+        throw InvalidQuerySyntax("TRACE_SIZE does not fit into 64 bits: {}", context->getText());
+    }
+    return size * multiplier;
 }
 
 static LogicalFunction createFunctionFromOpBoolean(LogicalFunction leftFunction, LogicalFunction rightFunction, const uint64_t tokenType)
@@ -548,7 +594,7 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
     if (helpers.top().hasUdbClause)
     {
-        queryPlan = LogicalPlanBuilder::addUdbRecording(helpers.top().udbTraceName, queryPlan);
+        queryPlan = LogicalPlanBuilder::addUdbRecording(std::move(helpers.top().udbOptions), queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -1129,10 +1175,16 @@ void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelC
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
 {
     helpers.top().hasUdbClause = true;
-    /// if no trace name is provided UDB auto generates one
+
+    /// if no trace name is provided one is derived from the process id and the wall clock
     if (context->udbTraceName != nullptr)
     {
-        helpers.top().udbTraceName = context->udbTraceName->getText();
+        helpers.top().udbOptions.traceName = context->udbTraceName->getText();
+    }
+    /// if no trace size is provided LiveRecorder falls back to its default event log size
+    if (context->udbTraceSize != nullptr)
+    {
+        helpers.top().udbOptions.eventLogSizeBytes = parseTraceSize(context->udbTraceSize);
     }
 }
 }

@@ -14,6 +14,7 @@
 
 #include <Operators/UdbRecordingLogicalOperator.hpp>
 
+#include <cstdint>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -37,7 +38,11 @@ std::string UdbRecordingLogicalOperator::explain(ExplainVerbosity verbosity, Ope
 {
     if (verbosity == ExplainVerbosity::Debug)
     {
-        return fmt::format("UDB_RECORDING(opId: {}, traceName: {})", id, traceName.value_or("<auto>"));
+        return fmt::format(
+            "UDB_RECORDING(opId: {}, traceName: {}, eventLogSizeBytes: {})",
+            id,
+            options.traceName.value_or("<auto>"),
+            options.eventLogSizeBytes.transform([](const uint64_t bytes) { return std::to_string(bytes); }).value_or("<default>"));
     }
     return {"UDB_RECORDING"};
 }
@@ -92,7 +97,7 @@ UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withInferredSchema(cons
 
 bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& rhs) const
 {
-    return traitSet == rhs.traitSet && traceName == rhs.traceName;
+    return traitSet == rhs.traitSet && options == rhs.options;
 }
 
 }
@@ -103,14 +108,14 @@ namespace NES
 Reflected
 Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const TypedLogicalOperator<UdbRecordingLogicalOperator>& op) const
 {
-    return reflect(detail::ReflectedUdbRecordingLogicalOperator{.traceName = op->getTraceName()});
+    return reflect(op->getOptions());
 }
 
 TypedLogicalOperator<UdbRecordingLogicalOperator> Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(
     const Reflected& reflected, const ReflectionContext& context) const
 {
-    auto [traceName] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(reflected);
-    return TypedLogicalOperator<UdbRecordingLogicalOperator>{UdbRecordingLogicalOperator(std::move(traceName))};
+    auto options = context.unreflect<UdbRecordingOptions>(reflected);
+    return TypedLogicalOperator<UdbRecordingLogicalOperator>{UdbRecordingLogicalOperator(std::move(options))};
 }
 
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)

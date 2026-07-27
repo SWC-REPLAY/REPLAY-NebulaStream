@@ -334,7 +334,11 @@ inlineSink
 
 timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
 
-udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
+udbClause: TIME_TRAVEL_UDB udbTraceName=identifier? (TRACE_SIZE udbTraceSize=traceSize)?;
+
+/// The unit stays an IDENTIFIER and is validated in the listener: dedicated KB/MB/GB lexer tokens
+/// would win over IDENTIFIER on equal-length matches and make those names unusable as columns.
+traceSize: size=INTEGER_VALUE unit=IDENTIFIER?;
 
 nullNotnull
     : NOT? NULLTOKEN
@@ -522,6 +526,7 @@ JSON: 'JSON';
 TEXT: 'TEXT';
 TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
 TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
+TRACE_SIZE : 'TRACE_SIZE';
 EXPLAIN: 'EXPLAIN' | 'explain';
 MODEL: 'MODEL';
 MODELS: 'MODELS';
