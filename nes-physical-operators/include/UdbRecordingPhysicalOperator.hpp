@@ -15,25 +15,24 @@
 #pragma once
 
 #include <optional>
-#include <string>
 
 #include <Interface/Record.hpp>
 #include <Interface/RecordBuffer.hpp>
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
+#include <UdbRecorder.hpp>
 
 namespace NES
 {
 
-/// Physical operator that spawns a udb recording process attached to the current NES process.
-/// Tuples pass through unchanged. The udb process is started once during pipeline setup
-/// and runs until NES terminates.
+/// Records the worker process into an Undo trace for as long as this operator's pipeline lives.
+/// Tuples pass through unchanged: recording starts during pipeline setup and the trace is saved
+/// when the pipeline terminates (query stop or completion).
 class UdbRecordingPhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    /// traceName is forwarded to udb as the output trace name (optional).
-    explicit UdbRecordingPhysicalOperator(std::optional<std::string> traceName);
+    explicit UdbRecordingPhysicalOperator(UdbRecorder::Options options);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;
@@ -45,7 +44,7 @@ public:
     void setChild(PhysicalOperator child) override;
 
 private:
-    std::optional<std::string> traceName;
+    UdbRecorder::Options options;
     std::optional<PhysicalOperator> child;
 };
 
