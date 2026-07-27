@@ -20,8 +20,10 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -44,6 +46,22 @@ namespace NES
 
 namespace
 {
+
+/// A non-zero TracerPid is the only observable signal that udb has finished attaching.
+pid_t currentTracerPid()
+{
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line))
+    {
+        constexpr std::string_view prefix = "TracerPid:";
+        if (line.starts_with(prefix))
+        {
+            return static_cast<pid_t>(std::strtol(line.c_str() + prefix.size(), nullptr, 10));
+        }
+    }
+    return 0;
+}
 
 /// Spawns udb attached to the current NES PID. The returned pid is the udb (live-record) controller
 /// process itself in --pid (attach) mode; it must be explicitly stopped and reaped by the caller
@@ -140,6 +158,34 @@ std::optional<pid_t> spawnUdbProxy(const UdbRecordingPhysicalOperator::Config& c
         return std::nullopt;
     }
     ::close(pipeFd[0]);
+
+    /// udb attaches asynchronously, so without this wait a fast pipeline (e.g. INTERPRETER mode,
+    /// which skips the ~second-long JIT compilation that would otherwise mask the attach latency)
+    /// can run and terminate the recorder before it ever attached, yielding an empty recording.
+    /// Sources only start once every pipeline's setup() has returned, so blocking here is what
+    /// guarantees the whole execution is recorded regardless of execution mode.
+    constexpr auto attachTimeout = std::chrono::seconds(30);
+    const auto deadline = std::chrono::steady_clock::now() + attachTimeout;
+    while (currentTracerPid() == 0)
+    {
+        int status = 0;
+        if (::waitpid(child, &status, WNOHANG) == child)
+        {
+            NES_ERROR("udb process {} exited before attaching (status={})", child, status);
+            return std::nullopt;
+        }
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            /// A process can only have one tracer, so leaving a half-attached udb behind would block
+            /// every later recording for the lifetime of this process.
+            NES_ERROR("Timed out waiting for udb process {} to attach", child);
+            ::kill(child, SIGKILL);
+            ::waitpid(child, nullptr, 0);
+            return std::nullopt;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    NES_DEBUG("udb attached (tracerPid={})", currentTracerPid());
     return child;
 }
 

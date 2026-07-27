@@ -2,6 +2,8 @@
 # description: Run a query with TIME_TRAVEL_UDB and verify the query produces the expected output
 # groups: [UdbRecording]
 
+GlobalConfiguration worker.default_query_execution.execution_mode: INTERPRETER
+
 CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, timestamp UINT64);
 CREATE PHYSICAL SOURCE FOR stream TYPE File;
 ATTACH INLINE
