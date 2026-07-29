@@ -23,6 +23,7 @@
 #include <ErrorHandling.hpp>
 #include <LoweringRuleRegistry.hpp>
 #include <PhysicalOperator.hpp>
+#include <UdbRecording.hpp>
 #include <UdbRecordingPhysicalOperator.hpp>
 
 namespace NES
@@ -39,7 +40,8 @@ LoweringRuleResultSubgraph LowerToPhysicalUdbRecording::apply(LogicalOperator lo
     PRECONDITION(memoryLayoutTypeTrait.has_value(), "Expected a memory layout type trait");
     const auto memoryLayoutType = memoryLayoutTypeTrait.value()->memoryLayout;
 
-    auto physicalOperator = UdbRecordingPhysicalOperator(udbOp->getTraceName());
+    auto physicalOperator = UdbRecordingPhysicalOperator(
+        Udb::RecordingConfig{.traceName = udbOp->getOptions().traceName, .traceSize = udbOp->getOptions().traceSize});
     auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
         physicalOperator,
         inputSchema,
