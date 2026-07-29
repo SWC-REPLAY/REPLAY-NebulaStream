@@ -39,6 +39,16 @@ namespace NES
 
 /// Records the execution of its pipeline with udb and passes rows through unchanged.
 /// Without a trace name, udb generates one.
+/// Configuration for UDB recording; doubles as the operator's reflected payload.
+/// Adding a field here also requires forwarding it in LowerToPhysicalUdbRecording.
+struct UdbRecordingOptions
+{
+    std::optional<std::string> traceName;
+    std::optional<std::string> traceSize;
+
+    bool operator==(const UdbRecordingOptions& rhs) const = default;
+};
+
 class UdbRecordingLogicalOperator : public ManagedByOperator
 {
 public:
@@ -48,7 +58,7 @@ public:
     static TypedLogicalOperator<UdbRecordingLogicalOperator> create(std::optional<std::string> traceName);
     static TypedLogicalOperator<UdbRecordingLogicalOperator> create(LogicalOperator child, std::optional<std::string> traceName);
 
-    [[nodiscard]] const std::optional<std::string>& getTraceName() const { return traceName; }
+    [[nodiscard]] const UdbRecordingOptions& getOptions() const { return options; }
 
     [[nodiscard]] bool operator==(const UdbRecordingLogicalOperator& rhs) const;
 

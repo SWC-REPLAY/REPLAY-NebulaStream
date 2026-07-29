@@ -24,6 +24,7 @@
 #include <Traits/MemoryLayoutTypeTrait.hpp>
 #include <Util/SchemaFactory.hpp>
 #include <PhysicalOperator.hpp>
+#include <UdbRecording.hpp>
 #include <UdbRecordingPhysicalOperator.hpp>
 
 namespace NES

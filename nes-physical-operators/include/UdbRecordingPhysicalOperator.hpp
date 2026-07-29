@@ -15,25 +15,29 @@
 #pragma once
 
 #include <optional>
-#include <string>
 
 #include <Interface/Record.hpp>
 #include <Interface/RecordBuffer.hpp>
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
+#include <UdbRecording.hpp>
 
 namespace NES
 {
 
 /// Physical operator that spawns a udb recording process attached to the current NES process.
-/// Tuples pass through unchanged. The udb process is started once during pipeline setup
-/// and runs until NES terminates.
+/// Tuples pass through unchanged. The udb process is started during pipeline setup and stopped
+/// (signalled to save its recording and exit) when this operator's pipeline is terminated
+/// (query stop or completion).
 class UdbRecordingPhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    /// traceName is forwarded to udb as the output trace name (optional).
-    explicit UdbRecordingPhysicalOperator(std::optional<std::string> traceName);
+    explicit UdbRecordingPhysicalOperator(Udb::RecordingConfig config);
+    /// Udb::Recording is neither copyable nor movable, so this operator needs an explicit copy
+    /// constructor. A copy deliberately starts out not recording: exactly one object must own a
+    /// given udb process, otherwise both would signal and reap the same pid.
+    UdbRecordingPhysicalOperator(const UdbRecordingPhysicalOperator& other);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;
@@ -45,8 +49,11 @@ public:
     void setChild(PhysicalOperator child) override;
 
 private:
-    std::optional<std::string> traceName;
+    Udb::RecordingConfig config;
     std::optional<PhysicalOperator> child;
+    /// Engaged exactly while this pipeline is being recorded: constructed in setup(), destroyed in
+    /// terminate().
+    mutable std::optional<Udb::Recording> recording;
 };
 
 }

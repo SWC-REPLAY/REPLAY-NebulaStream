@@ -34,11 +34,12 @@
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
+#include <UdbRecording.hpp>
 
 namespace NES
 {
 
-namespace
+UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(Udb::RecordingConfig config) : config(std::move(config))
 {
 
 /// Spawns udb attached to the current NES PID. udb detaches itself after attaching so no reaping needed.
@@ -128,9 +129,8 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
     ::close(readEnd);
 }
 
-}
-
-UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(std::optional<std::string> traceName) : traceName(std::move(traceName))
+UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(const UdbRecordingPhysicalOperator& other)
+    : PhysicalOperatorConcept(other), config(other.config), child(other.child)
 {
 }
 
@@ -140,7 +140,11 @@ void UdbRecordingPhysicalOperator::setup(ExecutionContext& executionCtx, Compila
     {
         setupChild(executionCtx, compilationContext);
     }
-    spawnUdbProxy(traceName);
+
+    NES_INFO("Spawning and attaching udb");
+    /// Deliberately not swallowed: a TIME_TRAVEL_UDB query that cannot be recorded is a failed query,
+    /// not a query that quietly runs without producing a trace.
+    recording.emplace(config);
 }
 
 void UdbRecordingPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const
@@ -173,6 +177,10 @@ void UdbRecordingPhysicalOperator::terminate(ExecutionContext& executionCtx) con
     {
         terminateChild(executionCtx);
     }
+
+    NES_INFO("Saving udb recording and stopping udb");
+    /// Blocks until the trace is on disk.
+    recording.reset();
 }
 
 std::optional<PhysicalOperator> UdbRecordingPhysicalOperator::getChild() const
