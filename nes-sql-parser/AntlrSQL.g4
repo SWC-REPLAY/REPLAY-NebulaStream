@@ -334,7 +334,9 @@ inlineSink
 
 timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
 
-udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
+udbClause: TIME_TRAVEL_UDB udbTraceName=identifier? (TRACE_SIZE udbTraceSize=traceSize)?;
+
+traceSize: INTEGER_VALUE (KILOBYTES | MEGABYTES | GIGABYTES)?;
 
 nullNotnull
     : NOT? NULLTOKEN
@@ -522,6 +524,10 @@ JSON: 'JSON';
 TEXT: 'TEXT';
 TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
 TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
+TRACE_SIZE : 'TRACE_SIZE';
+KILOBYTES: 'KB' | 'kb';
+MEGABYTES: 'MB' | 'mb';
+GIGABYTES: 'GB' | 'gb';
 EXPLAIN: 'EXPLAIN' | 'explain';
 MODEL: 'MODEL';
 MODELS: 'MODELS';
