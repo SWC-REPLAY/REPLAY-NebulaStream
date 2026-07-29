@@ -15,6 +15,7 @@
 #include <StoreRegistry.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <format>
 #include <mutex>
@@ -41,12 +42,6 @@ namespace NES::StoreManager
 
 StoreRegistry::StoreRegistry() : bufferManager(BufferManager::create())
 {
-}
-
-StoreRegistry& StoreRegistry::instance()
-{
-    static StoreRegistry registry;
-    return registry;
 }
 
 void StoreRegistry::registerStore(const std::string& storeName, Store store)
@@ -183,9 +178,35 @@ void StoreRegistry::clearAndDeleteFiles()
     stores.clear();
 }
 
+namespace
+{
+/// Percent-encodes everything outside `[A-Za-z0-9_-]` so a store name can be used as a directory name.
+///
+/// The encoding is reversible on purpose. A lossy substitution — mapping every awkward character to '_' — would let two
+/// distinct store names collapse onto one directory, and two stores sharing a directory would silently read and write
+/// each other's rows.
+std::string encodeForPath(const std::string& storeName)
+{
+    std::string encoded;
+    encoded.reserve(storeName.size());
+    for (const auto character : storeName)
+    {
+        if (std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '_' || character == '-')
+        {
+            encoded.push_back(character);
+        }
+        else
+        {
+            encoded += std::format("%{:02x}", static_cast<unsigned char>(character));
+        }
+    }
+    return encoded;
+}
+}
+
 std::string StoreRegistry::generateStoreDir(const std::string& storeName)
 {
-    const std::string storeDir = std::format("{}{}", STORE_MANAGER_WORKING_DIR, storeName);
+    const std::string storeDir = std::format("{}{}", STORE_MANAGER_WORKING_DIR, encodeForPath(storeName));
     std::error_code err;
     std::filesystem::create_directories(storeDir, err);
     if (err)

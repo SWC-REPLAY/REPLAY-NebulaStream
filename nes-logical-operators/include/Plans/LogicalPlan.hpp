@@ -66,6 +66,12 @@ private:
 /// Get all parent operators of the target operator
 [[nodiscard]] std::vector<LogicalOperator> getParents(const LogicalPlan& plan, const LogicalOperator& target);
 
+/// The logical source an operator reads, or empty if it is not a source operator.
+///
+/// Handles both forms a source takes in a plan: the name the parser produced, and the descriptor it is resolved into
+/// once the source has been looked up in the catalog and expanded across its physical sources.
+[[nodiscard]] std::optional<std::string> logicalSourceNameOf(const LogicalOperator& op);
+
 /// Replace `target` with `replacement`, keeping target's children
 [[nodiscard]] std::optional<LogicalPlan> replaceOperator(const LogicalPlan& plan, OperatorId target, LogicalOperator replacement);
 

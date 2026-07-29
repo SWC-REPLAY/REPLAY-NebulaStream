@@ -14,12 +14,14 @@
 
 #include <BinaryStoreWriter.hpp>
 
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <system_error>
 #include <utility>
 
 #include <ErrorHandling.hpp>
@@ -52,7 +54,8 @@ void BinaryStoreWriter::open()
     fd = ::open(filePath.c_str(), flags, 0644);
     if (fd < 0)
     {
-        throw CannotOpenSink("Could not open output file: {} (errno={}, msg={})", filePath, errno, std::strerror(errno));
+        const int err = errno;
+        throw CannotOpenSink("Could not open output file: {} (errno={}, msg={})", filePath, err, std::generic_category().message(err));
     }
     struct stat st{};
     if (::fstat(fd, &st) != 0)
@@ -60,7 +63,7 @@ void BinaryStoreWriter::open()
         const int err = errno;
         ::close(fd);
         fd = -1;
-        throw CannotOpenSink("fstat failed for {}: errno={}, msg={}", filePath, err, std::strerror(err));
+        throw CannotOpenSink("fstat failed for {}: errno={}, msg={}", filePath, err, std::generic_category().message(err));
     }
     tail.store(static_cast<uint64_t>(st.st_size), std::memory_order_relaxed);
     headerWritten.store(st.st_size > 0, std::memory_order_relaxed);
@@ -107,7 +110,8 @@ void BinaryStoreWriter::ensureHeader()
     const ssize_t written = ::pwrite(fd, buf.data(), buf.size(), 0);
     if (written < 0 || static_cast<size_t>(written) != buf.size())
     {
-        throw CannotOpenSink("Writing store header failed: errno={} {}", errno, std::strerror(errno));
+        const int err = errno;
+        throw CannotOpenSink("Writing store header failed: errno={} {}", err, std::generic_category().message(err));
     }
 }
 
@@ -125,7 +129,8 @@ void BinaryStoreWriter::append(const uint8_t* data, size_t len)
     const ssize_t written = ::pwrite(fd, data, len, static_cast<off_t>(off));
     if (written < 0 || static_cast<size_t>(written) != len)
     {
-        throw CannotOpenSink("pwrite failed: errno={} {}", errno, std::strerror(errno));
+        const int err = errno;
+        throw CannotOpenSink("pwrite failed: errno={} {}", err, std::generic_category().message(err));
     }
 }
 
@@ -136,11 +141,12 @@ void BinaryStoreWriter::updateTimestamps(uint64_t minTs, uint64_t maxTs) const
         return;
     }
     /// Write both timestamps in a single pwrite to avoid torn reads of the min/max pair.
-    const uint64_t ts[2] = {minTs, maxTs};
-    const ssize_t written = ::pwrite(fd, ts, sizeof(ts), static_cast<off_t>(OFFSET_MIN_TS));
+    const std::array<uint64_t, 2> ts = {minTs, maxTs};
+    const ssize_t written = ::pwrite(fd, ts.data(), sizeof(ts), static_cast<off_t>(OFFSET_MIN_TS));
     if (written < 0 || static_cast<size_t>(written) != sizeof(ts))
     {
-        throw CannotOpenSink("Failed to update timestamps in header: errno={} {}", errno, std::strerror(errno));
+        const int err = errno;
+        throw CannotOpenSink("Failed to update timestamps in header: errno={} {}", err, std::generic_category().message(err));
     }
 }
 

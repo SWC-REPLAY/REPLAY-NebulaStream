@@ -24,9 +24,12 @@
 #include <Rules/Semantic/InlineSourceBindingRule.hpp>
 #include <Rules/Semantic/LogicalSourceExpansionRule.hpp>
 #include <Rules/Semantic/OriginIdInferenceRule.hpp>
+#include <Rules/Semantic/ReplayReadBindingRule.hpp>
 #include <Rules/Semantic/SinkBindingRule.hpp>
 #include <Rules/Semantic/SourceInferenceRule.hpp>
+#include <Rules/Semantic/StoreRegistrationRule.hpp>
 #include <Rules/Semantic/TypeInferenceRule.hpp>
+#include <Stores/StoreCatalog.hpp>
 
 namespace NES
 {
@@ -34,8 +37,12 @@ namespace NES
 SemanticAnalyzer::SemanticAnalyzer(
     std::shared_ptr<const SourceCatalog> sourceCatalog,
     std::shared_ptr<const SinkCatalog> sinkCatalog,
-    std::shared_ptr<const ModelCatalog> modelCatalog)
-    : sourceCatalog(std::move(sourceCatalog)), sinkCatalog(std::move(sinkCatalog)), modelCatalog(std::move(modelCatalog))
+    std::shared_ptr<const ModelCatalog> modelCatalog,
+    std::shared_ptr<StoreCatalog> storeCatalog)
+    : sourceCatalog(std::move(sourceCatalog))
+    , sinkCatalog(std::move(sinkCatalog))
+    , modelCatalog(std::move(modelCatalog))
+    , storeCatalog(std::move(storeCatalog))
 {
     RuleManager<LogicalPlan> ruleManager;
     ruleManager.addRule(InlineSinkBindingRule{this->sinkCatalog});
@@ -46,6 +53,11 @@ SemanticAnalyzer::SemanticAnalyzer(
     ruleManager.addRule(InferModelResolutionRule{this->modelCatalog});
     ruleManager.addRule(TypeInferenceRule{});
     ruleManager.addRule(OriginIdInferenceRule{});
+    /// The read side runs early — it rewrites a source reference before anything resolves it. The write side runs late,
+    /// once schemas are known. Both live here rather than in a frontend so the REPL, the worker and the systests get
+    /// replay from the same path.
+    ruleManager.addRule(ReplayReadBindingRule{this->storeCatalog, this->sourceCatalog});
+    ruleManager.addRule(StoreRegistrationRule{this->storeCatalog});
 
     this->ruleSequence = ruleManager.getSequence();
 }

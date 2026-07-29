@@ -20,6 +20,7 @@
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Registry.hpp>
+#include <StoreRegistry.hpp>
 
 namespace NES
 {
@@ -29,6 +30,9 @@ using SourceRegistryReturnType = std::unique_ptr<Source>;
 struct SourceRegistryArguments
 {
     SourceDescriptor sourceDescriptor;
+    /// The registry of the worker this source runs on. A replay source reads the store instance from it; other sources
+    /// ignore it.
+    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
 };
 
 class SourceRegistry : public BaseRegistry<SourceRegistry, std::string, SourceRegistryReturnType, SourceRegistryArguments>

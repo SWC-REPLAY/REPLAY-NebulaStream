@@ -211,8 +211,18 @@ namedExpression
 identifier: strictIdentifier;
 
 strictIdentifier
-    : IDENTIFIER #unquotedIdentifier
+    : (IDENTIFIER | nonReserved) #unquotedIdentifier
     | quotedIdentifier #quotedIdentifierAlternative;
+
+// Keywords that only carry meaning inside one specific clause and stay usable as ordinary identifiers everywhere else.
+// Every keyword added to the lexer silently takes a name away from users unless it is listed here: TIMESTAMP and
+// event_time were introduced for time travel and made those perfectly ordinary column names unparseable.
+// Only add a keyword here if it cannot also start a construct that is valid where an identifier is — otherwise the
+// grammar becomes ambiguous.
+nonReserved
+    : TIMESTAMP_KW
+    | EVENT_TIME
+    ;
 
 quotedIdentifier
     : BACKQUOTED_IDENTIFIER

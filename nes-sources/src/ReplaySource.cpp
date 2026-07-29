@@ -42,13 +42,14 @@
 namespace NES
 {
 
-ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor)
+ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor, std::shared_ptr<StoreManager::StoreRegistry> storeRegistry)
     : filePath(
           sourceDescriptor.getConfig().contains("file_path") ? std::get<std::string>(sourceDescriptor.getConfig().at("file_path"))
                                                              : std::string())
     , storeName(
           sourceDescriptor.getConfig().contains("store_name") ? std::get<std::string>(sourceDescriptor.getConfig().at("store_name"))
                                                               : std::string())
+    , storeRegistry(std::move(storeRegistry))
     , schema(*sourceDescriptor.getLogicalSource().getSchema())
 {
     const auto& config = sourceDescriptor.getConfig();
@@ -72,7 +73,8 @@ void ReplaySource::open(std::shared_ptr<AbstractBufferProvider>)
 {
     if (!storeName.empty())
     {
-        auto registeredStore = StoreManager::StoreRegistry::instance().getStore(storeName);
+        PRECONDITION(storeRegistry != nullptr, "A replay source reading store '{}' needs the worker's store registry", storeName);
+        auto registeredStore = storeRegistry->getStore(storeName);
         if (registeredStore.has_value())
         {
             store = registeredStore.value();
@@ -189,6 +191,6 @@ SourceValidationRegistryReturnType RegisterReplaySourceValidation(SourceValidati
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 SourceRegistryReturnType SourceGeneratedRegistrar::RegisterReplaySource(SourceRegistryArguments args)
 {
-    return std::make_unique<ReplaySource>(args.sourceDescriptor);
+    return std::make_unique<ReplaySource>(args.sourceDescriptor, args.storeRegistry);
 }
 }

@@ -12,6 +12,7 @@
     limitations under the License.
 */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -19,6 +20,8 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -29,12 +32,12 @@
 #include <Runtime/BufferManager.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
+#include <Util/Logger/Logger.hpp>
+#include <gtest/gtest.h>
 #include <FileStore.hpp>
 #include <MemoryStore.hpp>
 #include <Store.hpp>
 #include <TimeRange.hpp>
-#include <Util/Logger/Logger.hpp>
-#include <gtest/gtest.h>
 
 namespace NES::StoreManager
 {
@@ -46,10 +49,8 @@ protected:
     static constexpr size_t NUM_WRITERS = 4;
     static constexpr size_t TUPLES_PER_BATCH = 10;
 
-    Schema schema = Schema{}
-                        .addField("id", DataType::Type::UINT64)
-                        .addField("value", DataType::Type::UINT64)
-                        .addField("ts", DataType::Type::UINT64);
+    Schema schema
+        = Schema{}.addField("id", DataType::Type::UINT64).addField("value", DataType::Type::UINT64).addField("ts", DataType::Type::UINT64);
 
     std::shared_ptr<BufferManager> bufferManager = BufferManager::create();
 
@@ -85,28 +86,27 @@ protected:
     }
 
     /// Writer loop: writes batches of records with the invariant (id=writerId, value=ts*10+writerId, ts=ts).
-    void writerLoop(Store& store, size_t writerId, const std::atomic<bool>& stop,
-                    std::atomic<uint64_t>& totalWritten, bool shouldSleep)
+    void writerLoop(Store& store, size_t writerId, const std::atomic<bool>& stop, std::atomic<uint64_t>& totalWritten, bool shouldSleep)
     {
         const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
         uint64_t nextTs = 1;
         uint64_t batchCount = 0;
         std::vector<uint8_t> record(recordSize);
         auto lastLog = std::chrono::steady_clock::now();
-        constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
+        constexpr auto logInterval = std::chrono::seconds(10);
 
         while (!stop.load(std::memory_order_relaxed))
         {
             for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
             {
-                packRecord(record.data(), writerId, nextTs * 10 + writerId, nextTs);
+                packRecord(record.data(), writerId, (nextTs * 10) + writerId, nextTs);
                 store.writeRecord(record.data(), recordSize, Timestamp(nextTs), schema);
                 ++nextTs;
             }
             totalWritten.fetch_add(TUPLES_PER_BATCH, std::memory_order_relaxed);
             ++batchCount;
 
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
+            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= logInterval)
             {
                 NES_INFO("Writer {}: {} batches, {} tuples written", writerId, batchCount, totalWritten.load());
                 lastLog = now;
@@ -122,14 +122,20 @@ protected:
 
     /// Reader loop: continuously reads and validates every tuple.
     /// When checkOrdering is true, asserts that timestamps are non-decreasing within each read.
-    void readerLoop(Store& store, size_t readerId, size_t numWriters, const std::atomic<bool>& stop,
-                    std::atomic<uint64_t>& totalRead, bool checkOrdering)
+    void readerLoop(
+        Store& store,
+        size_t readerId,
+        size_t numWriters,
+        const std::atomic<bool>& stop,
+        std::atomic<uint64_t>& totalRead,
+        bool checkOrdering)
     {
         const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
-        const TimeRange unbounded{.fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
+        const TimeRange unbounded{
+            .fieldName = "TS", .start = Timestamp(Timestamp::INITIAL_VALUE), .end = Timestamp(Timestamp::INVALID_VALUE)};
         const uint64_t maxTuplesPerBuffer = bufferManager->getBufferSize() / recordSize;
         auto lastLog = std::chrono::steady_clock::now();
-        constexpr auto LOG_INTERVAL = std::chrono::seconds(10);
+        constexpr auto logInterval = std::chrono::seconds(10);
         uint64_t readCycles = 0;
 
         while (!stop.load(std::memory_order_relaxed))
@@ -137,8 +143,7 @@ protected:
             auto readBuffer = bufferManager->getBufferBlocking();
             const uint64_t tuplesRead = store.read(readBuffer, schema, unbounded);
 
-            ASSERT_LE(tuplesRead, maxTuplesPerBuffer)
-                << "Reader " << readerId << " got more tuples than buffer capacity";
+            ASSERT_LE(tuplesRead, maxTuplesPerBuffer) << "Reader " << readerId << " got more tuples than buffer capacity";
 
             if (tuplesRead > 0)
             {
@@ -152,17 +157,16 @@ protected:
                     const uint64_t value = readField(row, VALUE_OFFSET);
                     const uint64_t ts = readField(row, TS_OFFSET);
 
-                    ASSERT_LT(id, numWriters)
-                        << "Reader " << readerId << " tuple " << t << ": id (" << id << ") out of writer range [0, " << numWriters << ")";
+                    ASSERT_LT(id, numWriters) << "Reader " << readerId << " tuple " << t << ": id (" << id << ") out of writer range [0, "
+                                              << numWriters << ")";
 
-                    ASSERT_EQ(value, ts * 10 + id)
-                        << "Reader " << readerId << " tuple " << t << ": value (" << value
-                        << ") != ts*10+id (" << ts * 10 + id << ") for writer " << id;
+                    ASSERT_EQ(value, ts * 10 + id) << "Reader " << readerId << " tuple " << t << ": value (" << value << ") != ts*10+id ("
+                                                   << (ts * 10) + id << ") for writer " << id;
 
                     if (checkOrdering)
                     {
-                        ASSERT_GE(ts, prevTs)
-                            << "Reader " << readerId << " tuple " << t << ": ts went backwards (" << ts << " < " << prevTs << ")";
+                        ASSERT_GE(ts, prevTs) << "Reader " << readerId << " tuple " << t << ": ts went backwards (" << ts << " < " << prevTs
+                                              << ")";
                         prevTs = ts;
                     }
                 }
@@ -172,7 +176,7 @@ protected:
 
             ++readCycles;
 
-            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= LOG_INTERVAL)
+            if (auto now = std::chrono::steady_clock::now(); now - lastLog >= logInterval)
             {
                 NES_INFO("Reader {}: {} read cycles, {} tuples read so far", readerId, readCycles, totalRead.load());
                 lastLog = now;
@@ -208,16 +212,23 @@ protected:
         writers.reserve(config.numWriters);
         for (size_t i = 0; i < config.numWriters; ++i)
         {
-            writers.emplace_back(&ConcurrencyTests::writerLoop, this,
-                std::ref(store), i, std::cref(stop), std::ref(totalWritten), config.writerSleep);
+            writers.emplace_back(
+                &ConcurrencyTests::writerLoop, this, std::ref(store), i, std::cref(stop), std::ref(totalWritten), config.writerSleep);
         }
 
         std::vector<std::thread> readers;
         readers.reserve(config.numReaders);
         for (size_t i = 0; i < config.numReaders; ++i)
         {
-            readers.emplace_back(&ConcurrencyTests::readerLoop, this,
-                std::ref(store), i, config.numWriters, std::cref(stop), std::ref(totalRead), config.checkOrdering);
+            readers.emplace_back(
+                &ConcurrencyTests::readerLoop,
+                this,
+                std::ref(store),
+                i,
+                config.numWriters,
+                std::cref(stop),
+                std::ref(totalRead),
+                config.checkOrdering);
         }
 
         std::this_thread::sleep_for(duration);
@@ -235,18 +246,17 @@ protected:
         NES_INFO("Duration: {}s | Writers: {} | Readers: {}", duration.count(), config.numWriters, config.numReaders);
         NES_INFO("Total tuples written: {} | Total tuples read: {}", totalWritten.load(), totalRead.load());
 
-        EXPECT_GT(totalWritten.load(), 0u);
-        EXPECT_GT(totalRead.load(), 0u);
+        EXPECT_GT(totalWritten.load(), 0U);
+        EXPECT_GT(totalRead.load(), 0U);
 
-        return {totalWritten.load(), totalRead.load()};
+        return {.totalWritten = totalWritten.load(), .totalRead = totalRead.load()};
     }
 
     /// Create a unique temporary directory for FileStore tests.
     static std::filesystem::path createTempDir(const std::string& testName)
     {
         auto dir = std::filesystem::temp_directory_path()
-            / ("nes_concurrency_" + testName + "_"
-               + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            / ("nes_concurrency_" + testName + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(dir);
         return dir;
     }
@@ -327,8 +337,7 @@ TEST_F(ConcurrencyTests, ConcurrentWraparound_MemoryStore)
     /// Verify wraparound actually occurred.
     const uint64_t ringCapacity = maxBufferCount * tuplesPerBuffer;
     EXPECT_GT(result.totalWritten, ringCapacity)
-        << "Not enough data written to trigger wraparound (wrote " << result.totalWritten
-        << ", ring capacity " << ringCapacity << ")";
+        << "Not enough data written to trigger wraparound (wrote " << result.totalWritten << ", ring capacity " << ringCapacity << ")";
 
     /// Read remaining data and verify old timestamps were evicted.
     auto readBuffer = smallBufferManager->getBufferBlocking();
@@ -338,7 +347,7 @@ TEST_F(ConcurrencyTests, ConcurrentWraparound_MemoryStore)
     {
         /// The earliest record in the store should not be ts=1 — it must have been evicted.
         const uint64_t firstTs = readField(readBuffer.getAvailableMemoryArea<uint8_t>().data() + TS_OFFSET, 0);
-        EXPECT_GT(firstTs, 1u) << "Earliest timestamp should have been evicted by wraparound";
+        EXPECT_GT(firstTs, 1U) << "Earliest timestamp should have been evicted by wraparound";
     }
 
     store.close();
@@ -377,8 +386,7 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparound_MemoryStore)
 
     const uint64_t ringCapacity = maxBufferCount * tuplesPerBuffer;
     EXPECT_GT(result.totalWritten, ringCapacity)
-        << "Not enough data written to trigger wraparound (wrote " << result.totalWritten
-        << ", ring capacity " << ringCapacity << ")";
+        << "Not enough data written to trigger wraparound (wrote " << result.totalWritten << ", ring capacity " << ringCapacity << ")";
 
     /// Read remaining data and verify old timestamps were evicted.
     auto readBuffer = smallBufferManager->getBufferBlocking();
@@ -394,7 +402,7 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparound_MemoryStore)
             const uint64_t ts = readField(span.data() + (t * recordSize), TS_OFFSET);
             minTs = std::min(minTs, ts);
         }
-        EXPECT_GT(minTs, 1u) << "Earliest timestamp should have been evicted by wraparound";
+        EXPECT_GT(minTs, 1U) << "Earliest timestamp should have been evicted by wraparound";
     }
 
     store.close();
@@ -417,8 +425,7 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_FileStore)
 {
     auto tmpDir = createTempDir("concurrent_rw");
     auto store = makeStore<FileStore>(
-        FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"},
-        schema);
+        FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"}, schema);
     store.open();
     runTest(store, {.numWriters = 1, .writerSleep = true, .checkOrdering = false}, getTestDuration());
     store.close();
@@ -444,8 +451,7 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWrite_FileStore)
 {
     auto tmpDir = createTempDir("concurrent_mp_rw");
     auto store = makeStore<FileStore>(
-        FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"},
-        schema);
+        FileStore::Config{.storeName = "test", .storeDir = tmpDir.string(), .schemaText = "id:UINT64,value:UINT64,ts:UINT64"}, schema);
     store.open();
     runTest(store, {.numWriters = NUM_WRITERS, .writerSleep = true, .checkOrdering = false}, getTestDuration());
     store.close();

@@ -21,6 +21,7 @@
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <BackpressureChannel.hpp>
+#include <StoreRegistry.hpp>
 
 namespace NES
 {
@@ -32,10 +33,14 @@ class SourceProvider
 {
     size_t defaultMaxInflightBuffers;
     std::shared_ptr<AbstractBufferProvider> bufferPool;
+    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
 
 public:
     /// Constructor that can be configured with various options
-    SourceProvider(size_t defaultMaxInflightBuffers, std::shared_ptr<AbstractBufferProvider> bufferPool);
+    SourceProvider(
+        size_t defaultMaxInflightBuffers,
+        std::shared_ptr<AbstractBufferProvider> bufferPool,
+        std::shared_ptr<StoreManager::StoreRegistry> storeRegistry);
 
     /// Returning a shared pointer, because sources may be shared by multiple executable query plans (qeps).
     [[nodiscard]] std::unique_ptr<SourceHandle>

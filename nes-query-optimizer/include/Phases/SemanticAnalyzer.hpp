@@ -18,6 +18,7 @@
 
 #include <Plans/LogicalPlan.hpp>
 #include <Rules/Rule.hpp>
+#include <Stores/StoreCatalog.hpp>
 
 namespace NES
 {
@@ -40,12 +41,15 @@ public:
     explicit SemanticAnalyzer(
         std::shared_ptr<const SourceCatalog> sourceCatalog,
         std::shared_ptr<const SinkCatalog> sinkCatalog,
-        std::shared_ptr<const ModelCatalog> modelCatalog);
+        std::shared_ptr<const ModelCatalog> modelCatalog,
+        std::shared_ptr<StoreCatalog> storeCatalog);
 
 private:
     std::shared_ptr<const SourceCatalog> sourceCatalog;
     std::shared_ptr<const SinkCatalog> sinkCatalog;
     std::shared_ptr<const ModelCatalog> modelCatalog;
+    /// Not const: analysing a query that records history registers the store it will write.
+    std::shared_ptr<StoreCatalog> storeCatalog;
     std::vector<Rule<LogicalPlan>> ruleSequence;
 };
 }

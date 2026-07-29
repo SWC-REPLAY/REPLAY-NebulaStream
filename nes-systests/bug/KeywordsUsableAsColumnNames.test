@@ -1,0 +1,55 @@
+# name: bug/KeywordsUsableAsColumnNames.test
+# description: Reproduces keywords introduced for time travel taking ordinary column names away from users
+# groups: [Bug, Parser, Replay]
+
+# The time travel clause introduced TIMESTAMP and event_time as lexer keywords. Because the lexer matches them
+# everywhere rather than only inside that clause, they stopped being usable as column names and silently broke
+# unrelated queries at parse time: operator/map/Map_Add.test uses TIMESTAMP and the Yahoo benchmarks use event_time.
+#
+# The lexer defines EVENT_TIME as 'EVENT_TIME' | 'event_time', so both spellings are keywords and both have to be
+# freed. They are exercised on separate sources because unquoted identifiers are upper-cased when bound, which would
+# otherwise make the two spellings the same column.
+
+CREATE LOGICAL SOURCE lowerKeywords(TIMESTAMP UINT64, event_time UINT64, value UINT64);
+CREATE PHYSICAL SOURCE FOR lowerKeywords TYPE File;
+ATTACH INLINE
+1000,2000,1
+1001,2001,2
+1002,2002,3
+
+CREATE LOGICAL SOURCE upperKeywords(EVENT_TIME UINT64, value UINT64);
+CREATE PHYSICAL SOURCE FOR upperKeywords TYPE File;
+ATTACH INLINE
+3000,1
+3001,2
+
+CREATE SINK sinkAll(lowerKeywords.TIMESTAMP UINT64, lowerKeywords.event_time UINT64, lowerKeywords.value UINT64) TYPE File;
+CREATE SINK sinkProjected(lowerKeywords.TIMESTAMP UINT64, lowerKeywords.event_time UINT64) TYPE File;
+CREATE SINK sinkFiltered(lowerKeywords.TIMESTAMP UINT64, lowerKeywords.value UINT64) TYPE File;
+CREATE SINK sinkUpper(upperKeywords.EVENT_TIME UINT64, upperKeywords.value UINT64) TYPE File;
+
+# Keyword columns survive schema definition and a SELECT *
+SELECT * FROM lowerKeywords INTO sinkAll;
+----
+1000,2000,1
+1001,2001,2
+1002,2002,3
+
+# ... and being named explicitly in a projection
+SELECT TIMESTAMP, event_time FROM lowerKeywords INTO sinkProjected;
+----
+1000,2000
+1001,2001
+1002,2002
+
+# ... and being referenced from a predicate, where an identifier and a clause keyword could be confused
+SELECT TIMESTAMP, value FROM lowerKeywords WHERE TIMESTAMP > UINT64(1000) INTO sinkFiltered;
+----
+1001,2
+1002,3
+
+# The upper-case spelling of the keyword is a distinct lexer alternative and has to be freed too
+SELECT EVENT_TIME, value FROM upperKeywords INTO sinkUpper;
+----
+3000,1
+3001,2

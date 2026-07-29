@@ -29,11 +29,28 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Iterators/BFSIterator.hpp>
 #include <Operators/LogicalOperator.hpp>
+#include <Operators/Sources/SourceDescriptorLogicalOperator.hpp>
+#include <Operators/Sources/SourceNameLogicalOperator.hpp>
+#include <Sources/LogicalSource.hpp>
+#include <Sources/SourceDescriptor.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/QueryConsoleDumpHandler.hpp>
 
 namespace NES
 {
+
+std::optional<std::string> logicalSourceNameOf(const LogicalOperator& op)
+{
+    if (const auto named = op.tryGetAs<SourceNameLogicalOperator>())
+    {
+        return named.value()->getLogicalSourceName();
+    }
+    if (const auto descriptor = op.tryGetAs<SourceDescriptorLogicalOperator>())
+    {
+        return descriptor.value()->getSourceDescriptor().getLogicalSource().getLogicalSourceName();
+    }
+    return std::nullopt;
+}
 
 const QueryId& LogicalPlan::getQueryId() const
 {

@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -80,9 +81,11 @@ public:
     std::vector<LogicalFunction> joinKeyRelationHelper;
     std::vector<std::string> joinSourceRenames;
     JoinLogicalOperator::JoinType joinType = JoinLogicalOperator::JoinType::INNER_JOIN;
-    std::optional<std::string> timeTravelTimestamp;
-    std::optional<std::string> timeTravelEndTimestamp;
-    bool timeTravelAll{false};
+    /// FOR EVENT_TIME read, normalised to a half-open [start, end) range. Both bounds empty means TIMESTAMP ALL, which
+    /// is why the presence of the clause is tracked separately from the bounds.
+    bool hasTimeTravelReadClause{false};
+    std::optional<uint64_t> timeTravelStart;
+    std::optional<uint64_t> timeTravelEnd;
 
     /// UDB specific variables
     bool hasUdbClause{false};

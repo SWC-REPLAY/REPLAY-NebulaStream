@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
@@ -35,11 +36,15 @@ struct StoreConfig
     std::optional<std::string> storeOrder;
 };
 
-/// Manages named store instances, allowing concurrent TIME_TRAVEL queries to each use their own store.
+/// Holds the live store instances a worker has materialised, keyed by the names the StoreCatalog assigned.
+///
+/// Owned by the worker rather than process-global: a store is a physical thing that lives where its operator was
+/// placed, so in a deployment with several workers each of them holds its own. A worker also materialises a store per
+/// store operator, which is what lets one query record more than one cut of its plan.
 class StoreRegistry
 {
 public:
-    static StoreRegistry& instance();
+    StoreRegistry();
 
     /// Register a store under a name.
     void registerStore(const std::string& storeName, Store store);
@@ -64,8 +69,6 @@ public:
     void clearAndDeleteFiles();
 
 private:
-    StoreRegistry();
-
     /// Generate a unique file path for a store.
     static std::string generateStoreDir(const std::string& storeName);
 

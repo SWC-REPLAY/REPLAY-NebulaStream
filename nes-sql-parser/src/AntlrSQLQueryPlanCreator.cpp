@@ -17,6 +17,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -62,6 +63,7 @@
 #include <Operators/Windows/JoinLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
 #include <Plans/LogicalPlanBuilder.hpp>
+#include <Traits/ReplayReadTrait.hpp>
 #include <Util/Overloaded.hpp>
 #include <Util/Strings.hpp>
 #include <WindowTypes/Measures/TimeCharacteristic.hpp>
@@ -73,6 +75,7 @@
 #include <CommonParserFunctions.hpp>
 #include <ErrorHandling.hpp>
 #include <ParserUtil.hpp>
+#include "DataTypes/TimeUnit.hpp"
 
 namespace NES::Parsers
 {
@@ -511,6 +514,19 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
         return LogicalPlanBuilder::createLogicalPlan(helpers.top().getSource());
     }();
 
+    /// A FOR EVENT_TIME source reads from a replay store rather than from the live source. Which store can serve it is a
+    /// catalog question, so all that happens here is tagging the source with the requested range; ReplayReadBindingRule
+    /// resolves it once the store catalog is in reach.
+    if (helpers.top().hasTimeTravelReadClause)
+    {
+        const auto roots = queryPlan.getRootOperators();
+        INVARIANT(roots.size() == 1, "A primary query is built from exactly one source operator");
+        auto traitSet = roots.front().getTraitSet();
+        const bool inserted = traitSet.tryInsert(ReplayReadTrait{helpers.top().timeTravelStart, helpers.top().timeTravelEnd});
+        INVARIANT(inserted, "A freshly created source operator cannot already carry a ReplayReadTrait");
+        queryPlan = queryPlan.withRootOperators({roots.front().withTraitSet(std::move(traitSet))});
+    }
+
     for (auto whereExpr = helpers.top().getWhereClauses().rbegin(); whereExpr != helpers.top().getWhereClauses().rend(); ++whereExpr)
     {
         queryPlan = LogicalPlanBuilder::addSelection(std::move(*whereExpr), queryPlan);
@@ -546,15 +562,13 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     /// inject replay store operator into the plan if REPLAYABLE WITH HISTORY OF was provided
     if (helpers.top().hasReplayableClause)
     {
+        /// No store_name here on purpose: a store's name has to be unique across queries, and once the optimizer places
+        /// store operators the parser cannot know how many there are. StoreRegistrationRule names them.
         std::unordered_map<std::string, std::string> configMap;
         configMap["memory_buffer_size"] = helpers.top().replayableStorageSize;
-        if (!helpers.top().getSource().empty())
-        {
-            configMap["store_name"] = fmt::format("replay_{}", helpers.top().getSource());
-        }
         auto config = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(configMap));
-        queryPlan = LogicalPlanBuilder::addReplayStore(
-            queryPlan, config, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
+        queryPlan
+            = LogicalPlanBuilder::addReplayStore(queryPlan, config, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
     }
     helpers.pop();
     if (helpers.empty())
@@ -1124,43 +1138,52 @@ void AntlrSQLQueryPlanCreator::exitModelInferenceRelation(AntlrSQLParser::ModelI
 
 void AntlrSQLQueryPlanCreator::enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context)
 {
-    auto stripQuotes = [](std::string text) -> std::string
+    auto parseTimestamp = [](const std::string& text) -> uint64_t
     {
-        if (text.size() >= 2 && (text.front() == '\'' || text.front() == '"'))
+        auto stripped = text;
+        if (stripped.size() >= 2 && (stripped.front() == '\'' || stripped.front() == '"'))
         {
-            text = text.substr(1, text.size() - 2);
+            stripped = stripped.substr(1, stripped.size() - 2);
         }
-        return text;
+        try
+        {
+            return std::stoull(stripped);
+        }
+        catch (const std::exception&)
+        {
+            throw InvalidQuerySyntax("FOR EVENT_TIME timestamp must be an unsigned integer, got '{}'", stripped);
+        }
     };
 
-    if (context->timestampValue)
+    auto& helper = helpers.top();
+    helper.hasTimeTravelReadClause = true;
+
+    /// Every syntax below is normalised to half-open [start, end) so that nothing downstream has to know which one was
+    /// written. The inclusive forms therefore gain one on their upper bound.
+    if (context->timestampValue != nullptr)
     {
-        /// AS OF TIMESTAMP '<value>'
-        helpers.top().timeTravelTimestamp = stripQuotes(context->timestampValue->getText());
+        /// AS OF TIMESTAMP '<value>' — everything from that point on
+        helper.timeTravelStart = parseTimestamp(context->timestampValue->getText());
     }
-    else if (context->startBetween)
+    else if (context->startBetween != nullptr)
     {
-        /// BETWEEN '<start>' AND '<end>'
-        helpers.top().timeTravelTimestamp = stripQuotes(context->startBetween->getText());
-        helpers.top().timeTravelEndTimestamp = stripQuotes(context->endBetween->getText());
+        /// BETWEEN '<start>' AND '<end>' — both bounds inclusive
+        helper.timeTravelStart = parseTimestamp(context->startBetween->getText());
+        helper.timeTravelEnd = parseTimestamp(context->endBetween->getText()) + 1;
     }
-    else if (context->startFrom)
+    else if (context->startFrom != nullptr)
     {
-        /// FROM '<start>' TO '<end>'
-        helpers.top().timeTravelTimestamp = stripQuotes(context->startFrom->getText());
-        helpers.top().timeTravelEndTimestamp = stripQuotes(context->endFrom->getText());
+        /// FROM '<start>' TO '<end>' — already half-open
+        helper.timeTravelStart = parseTimestamp(context->startFrom->getText());
+        helper.timeTravelEnd = parseTimestamp(context->endFrom->getText());
     }
-    else if (context->startContained)
+    else if (context->startContained != nullptr)
     {
-        /// CONTAINED IN ('<start>', '<end>')
-        helpers.top().timeTravelTimestamp = stripQuotes(context->startContained->getText());
-        helpers.top().timeTravelEndTimestamp = stripQuotes(context->endContained->getText());
+        /// CONTAINED IN ('<start>', '<end>') — both bounds inclusive
+        helper.timeTravelStart = parseTimestamp(context->startContained->getText());
+        helper.timeTravelEnd = parseTimestamp(context->endContained->getText()) + 1;
     }
-    else
-    {
-        /// ALL
-        helpers.top().timeTravelAll = true;
-    }
+    /// else: ALL — no bounds
 }
 
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)

@@ -13,5 +13,6 @@
 add_subdirectory(Functions)
 add_subdirectory(Plans)
 add_subdirectory(Operators)
+add_subdirectory(Stores)
 add_subdirectory(WindowTypes)
 add_subdirectory(Serialization)

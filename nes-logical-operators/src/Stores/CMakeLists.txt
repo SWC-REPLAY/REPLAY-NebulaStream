@@ -10,15 +10,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_source_files(nes-query-optimizer
-        InlineSinkBindingRule.cpp
-        InlineSourceBindingRule.cpp
-        SourceInferenceRule.cpp
-        LogicalSourceExpansionRule.cpp
-        OriginIdInferenceRule.cpp
-        TypeInferenceRule.cpp
-        SinkBindingRule.cpp
-        InferModelResolutionRule.cpp
-        ReplayReadBindingRule.cpp
-        StoreRegistrationRule.cpp
+add_source_files(nes-logical-operators
+        StoreCatalog.cpp
 )

@@ -44,6 +44,7 @@
 #include <QueryCompiler.hpp>
 #include <QueryStatus.hpp>
 #include <SingleNodeWorkerConfiguration.hpp>
+#include <StoreRegistry.hpp>
 #include <WorkerStatus.hpp>
 
 extern void initNetworkServices(const std::string& connectionAddr, const NES::Host& host, const NES::NetworkOptions& options);
@@ -72,8 +73,11 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         listener->addListener(googleTracePrinter);
     }
 
-    nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener)).build(host);
-    compiler = std::make_unique<QueryCompilation::QueryCompiler>(configuration.workerConfiguration.defaultQueryExecution);
+    /// The worker owns its replay stores: they hold rows that live on this node, and lowering materialises them here.
+    auto storeRegistry = std::make_shared<StoreManager::StoreRegistry>();
+    nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener), storeRegistry).build(host);
+    compiler = std::make_unique<QueryCompilation::QueryCompiler>(
+        configuration.workerConfiguration.defaultQueryExecution, std::move(storeRegistry));
 
     if (!configuration.dataAddress.getValue().empty())
     {

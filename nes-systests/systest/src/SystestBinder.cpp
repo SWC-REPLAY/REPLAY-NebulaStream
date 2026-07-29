@@ -39,8 +39,6 @@
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
-#include <DataTypes/TimeUnit.hpp>
-#include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Identifiers/NESStrongType.hpp>
 #include <Operators/LogicalOperator.hpp>
@@ -49,7 +47,6 @@
 #include <Operators/Sources/InlineSourceLogicalOperator.hpp>
 #include <Operators/Sources/SourceDescriptorLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
-#include <Plans/LogicalPlanBuilder.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
 #include <SQLQueryParser/StatementBinder.hpp>
 #include <Sinks/SinkCatalog.hpp>
@@ -57,6 +54,7 @@
 #include <Sources/SourceDataProvider.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Statements/StatementHandler.hpp>
+#include <Stores/StoreCatalog.hpp>
 #include <Util/Files.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Util/Pointers.hpp>
@@ -481,8 +479,15 @@ struct SystestBinder::Impl
         auto loadedSystests = loadFromSLTFile(testfile.file, testfile.name(), testfile.sourceCatalog, modelCatalog, sinkProvider);
         std::unordered_set<SystestQueryId> foundQueries;
 
+        /// Analysing a query that records history registers its store, and a later FOR EVENT_TIME query resolves against
+        /// that registration. Queries are collected in a map, so sort them back into file order before analysing them.
+        std::ranges::sort(
+            loadedSystests, [](const auto& lhs, const auto& rhs) { return lhs.getSystemTestQueryId() < rhs.getSystemTestQueryId(); });
+
+        /// One catalog per test file, matching the source and sink catalogs, so stores cannot leak between test files.
+        auto storeCatalog = std::make_shared<StoreCatalog>();
         const QueryOptimizer queryOptimizer{
-            queryOptimizerConfiguration, testfile.sourceCatalog, testfile.sinkCatalog, copyPtr(workerCatalog), modelCatalog};
+            queryOptimizerConfiguration, testfile.sourceCatalog, testfile.sinkCatalog, copyPtr(workerCatalog), modelCatalog, storeCatalog};
 
         std::vector<SystestQuery> buildSystests;
         for (auto& builder : loadedSystests)
@@ -826,7 +831,6 @@ struct SystestBinder::Impl
         const std::string_view& testFileName,
         std::unordered_map<SystestQueryId, SystestQueryBuilder>& plans,
         SLTSinkFactory& sltSinkProvider,
-        const std::shared_ptr<SourceCatalog>& sourceCatalog,
         const std::string& query,
         const SystestQueryId& currentQueryNumberInTest,
         const std::vector<ConfigurationOverride>& configOverrides,
@@ -975,7 +979,6 @@ struct SystestBinder::Impl
                     testFileName,
                     plans,
                     sltSinkProvider,
-                    sourceCatalog,
                     query,
                     currentQueryNumberInTest,
                     mergedConfigOverrides,

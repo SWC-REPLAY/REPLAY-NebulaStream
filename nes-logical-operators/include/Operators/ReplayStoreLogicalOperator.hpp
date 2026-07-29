@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -69,16 +70,17 @@ public:
 
     struct ConfigParameters
     {
+        /// Empty until StoreRegistrationRule assigns one. The parser cannot name a store: names must be unique across
+        /// queries, and once the optimizer places store operators it also decides how many of them there are.
         static inline const DescriptorConfig::ConfigParameter<std::string> STORE_NAME{
             "store_name",
-            std::nullopt,
+            std::string{},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_NAME, cfg); }};
 
         static inline const DescriptorConfig::ConfigParameter<std::string> MEMORY_BUFFER_SIZE{
             "memory_buffer_size",
             std::string{"64MB"},
-            [](const std::unordered_map<std::string, std::string>& cfg)
-            { return DescriptorConfig::tryGet(MEMORY_BUFFER_SIZE, cfg); }};
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(MEMORY_BUFFER_SIZE, cfg); }};
 
         static inline const DescriptorConfig::ConfigParameter<std::string> STORE_ORDER{
             "store_order",
@@ -88,8 +90,7 @@ public:
         static inline const DescriptorConfig::ConfigParameter<uint64_t> MAX_BUFFER_COUNT{
             "max_buffer_count",
             uint64_t{128}, /// NOLINT(readability-magic-numbers)
-            [](const std::unordered_map<std::string, std::string>& cfg)
-            { return DescriptorConfig::tryGet(MAX_BUFFER_COUNT, cfg); }};
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(MAX_BUFFER_COUNT, cfg); }};
 
         static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
             = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME, MEMORY_BUFFER_SIZE, STORE_ORDER, MAX_BUFFER_COUNT);

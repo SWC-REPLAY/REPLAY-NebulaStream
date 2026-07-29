@@ -58,6 +58,7 @@
 #include <InputFormatterProvider.hpp>
 #include <Pipeline.hpp>
 #include <ScanPhysicalOperator.hpp>
+#include <StoreRegistry.hpp>
 #include <TestTaskQueue.hpp>
 
 namespace NES::InputFormatterTestUtil
@@ -153,7 +154,9 @@ std::pair<BackpressureController, std::unique_ptr<SourceHandle>> createFileSourc
         logicalSource.value(), "File", Host("localhost"), std::move(fileSourceConfiguration), {{"type", "CSV"}});
     INVARIANT(sourceDescriptor.has_value(), "Test File Source couldn't be created");
     auto [backpressureController, backpressureListener] = createBackpressureChannel();
-    const SourceProvider sourceProvider(numberOfRequiredSourceBuffers, std::move(sourceBufferPool));
+    /// A file source never touches the store registry, so an empty one is enough here.
+    const SourceProvider sourceProvider(
+        numberOfRequiredSourceBuffers, std::move(sourceBufferPool), std::make_shared<StoreManager::StoreRegistry>());
     return {std::move(backpressureController), sourceProvider.lower(NES::OriginId(1), backpressureListener, sourceDescriptor.value())};
 }
 
