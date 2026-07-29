@@ -23,6 +23,7 @@
 #include <variant>
 #include <vector>
 #include <Functions/LogicalFunction.hpp>
+#include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/WindowAggregationLogicalFunction.hpp>
 #include <Operators/Windows/JoinLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>

@@ -24,6 +24,7 @@
 #include <Util/SchemaFactory.hpp>
 #include <ErrorHandling.hpp>
 #include <PhysicalOperator.hpp>
+#include <UdbRecording.hpp>
 #include <UdbRecordingPhysicalOperator.hpp>
 
 namespace NES
