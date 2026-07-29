@@ -27,18 +27,17 @@ class ReplayConfiguration final : public BaseConfiguration
 {
 public:
     ReplayConfiguration() = default;
+
     ReplayConfiguration(const std::string& name, const std::string& description) : BaseConfiguration(name, description) { }
 
     /// Maximum size (in bytes) of a single memory buffer. Default: 64 MB.
-    UIntOption memoryBufferSize
-        = {"memory_buffer_size", "67108864", "Maximum size in bytes of a single memory buffer (default 64 MB)"};
+    UIntOption memoryBufferSize = {"memory_buffer_size", "67108864", "Maximum size in bytes of a single memory buffer (default 64 MB)"};
 
     /// Maximum number of sealed buffers before wraparound evicts the oldest. Default: 128.
     UIntOption maxBufferCount = {"max_buffer_count", "128", "Maximum sealed buffers before wraparound evicts oldest"};
 
     /// Store chain order, e.g. "MemoryStore->FileStore". Default: "MemoryStore->FileStore".
-    ScalarOption<std::string> storeOrder
-        = {"store_order", "MemoryStore->FileStore", "Store chain order, e.g. MemoryStore->FileStore"};
+    ScalarOption<std::string> storeOrder = {"store_order", "MemoryStore->FileStore", "Store chain order, e.g. MemoryStore->FileStore"};
 
 private:
     std::vector<BaseOption*> getOptions() override;

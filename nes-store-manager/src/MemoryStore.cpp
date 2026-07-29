@@ -21,6 +21,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -180,7 +181,7 @@ void MemoryStore::writeRecord(
     /// Copy record into active buffer
     auto& buf = activeBuffer.value();
     auto destSpan = buf.buffer.getAvailableMemoryArea<uint8_t>();
-    std::memcpy(destSpan.data() + activeWriteOffset, recordData, recordSize);
+    std::memcpy(destSpan.subspan(activeWriteOffset, recordSize).data(), recordData, recordSize);
     activeWriteOffset += recordSize;
 
     /// Update active buffer's min/max timestamps
@@ -209,8 +210,10 @@ void MemoryStore::allocateActiveBuffer()
     activeWriteOffset = 0;
 }
 
+namespace
+{
 /// Compute the byte offset of a field within a row, using the packed binary layout.
-static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string& fieldName)
+std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string& fieldName)
 {
     uint32_t offset = 0;
     for (size_t i = 0; i < schema.getNumberOfFields(); ++i)
@@ -223,6 +226,8 @@ static std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::
         offset += field.dataType.isType(DataType::Type::VARSIZED) ? sizeof(uint32_t) : field.dataType.getSizeInBytesWithNull();
     }
     return std::nullopt;
+}
+
 }
 
 uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
@@ -263,7 +268,8 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
         if (range.isUnbounded() || (timedBuf.minTs >= range.start && timedBuf.maxTs < range.end))
         {
             const uint64_t tuplesToCopy = std::min(numTuples, maxDestTuples - destTuples);
-            std::memcpy(destSpan.data() + (destTuples * rowWidth), srcSpan.data(), tuplesToCopy * rowWidth);
+            const auto dest = destSpan.subspan(destTuples * rowWidth, tuplesToCopy * rowWidth);
+            std::memcpy(dest.data(), srcSpan.data(), dest.size());
             destTuples += tuplesToCopy;
             continue;
         }
@@ -274,13 +280,14 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
 
         for (uint64_t i = 0; i < numTuples && destTuples < maxDestTuples; ++i)
         {
-            const uint8_t* rowPtr = srcSpan.data() + (i * rowWidth);
+            const auto row = srcSpan.subspan(i * rowWidth, rowWidth);
             uint64_t tsValue = 0;
             /// Skip the 1-byte null indicator before the actual value
-            std::memcpy(&tsValue, rowPtr + *tsOffset + 1, sizeof(uint64_t));
+            const auto tsBytes = row.subspan(*tsOffset + 1, sizeof(uint64_t));
+            std::memcpy(&tsValue, tsBytes.data(), tsBytes.size());
             if (range.contains(Timestamp(tsValue)))
             {
-                std::memcpy(destSpan.data() + (destTuples * rowWidth), rowPtr, rowWidth);
+                std::memcpy(destSpan.subspan(destTuples * rowWidth, rowWidth).data(), row.data(), rowWidth);
                 ++destTuples;
             }
         }
