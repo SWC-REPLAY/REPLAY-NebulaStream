@@ -110,6 +110,7 @@ EXCEPTION(NotImplemented, 9003, "not implemented")
 
 /// Special errors
 EXCEPTION(UnknownException, 9999, "unknown exception")
+EXCEPTION(UdbRecordingFailure, 8888, "udb recording failure") /// random code for now
 
 /// Test Exception is thrown in testing related code, to differentiate between system errors and errors during test setup/cleanup
 EXCEPTION(TestException, 10000, "exception in test code")

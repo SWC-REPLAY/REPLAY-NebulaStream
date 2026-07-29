@@ -2,6 +2,13 @@
 # description: Run a query with TIME_TRAVEL_UDB and verify the query produces the expected output
 # groups: [UdbRecording]
 
+# Only one tracer per process, so recordings must not overlap.
+SEQUENTIAL_EXECUTION
+
+# INTERPRETER skips query compilation, whose latency would otherwise mask a regression in the
+# attach barrier: without it a fast pipeline finishes before udb attaches and the trace is empty.
+GlobalConfiguration worker.default_query_execution.execution_mode: INTERPRETER
+
 CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, timestamp UINT64);
 CREATE PHYSICAL SOURCE FOR stream TYPE File;
 ATTACH INLINE
@@ -12,7 +19,21 @@ ATTACH INLINE
 
 CREATE SINK sink(stream.id UINT64, stream.value UINT64, stream.timestamp UINT64) TYPE File;
 
-SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB recording;
+SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB RecordingGB TRACE_SIZE 2GB;
+----
+1,1,1000
+2,1,1001
+3,1,1002
+4,2,2000
+
+SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB RecordingMB TRACE_SIZE 1000MB;
+----
+1,1,1000
+2,1,1001
+3,1,1002
+4,2,2000
+
+SELECT id, value, timestamp FROM stream INTO sink TIME_TRAVEL_UDB RecordingKB TRACE_SIZE 1000000KB;
 ----
 1,1,1000
 2,1,1001
