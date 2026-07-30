@@ -26,8 +26,11 @@ namespace NES
 
 struct LowerToPhysicalReplayStore : AbstractLoweringRule
 {
-    LowerToPhysicalReplayStore(QueryExecutionConfiguration conf, std::shared_ptr<StoreManager::StoreRegistry> storeRegistry)
-        : conf(std::move(conf)), storeRegistry(std::move(storeRegistry))
+    LowerToPhysicalReplayStore(
+        QueryExecutionConfiguration conf,
+        std::shared_ptr<StoreManager::StoreRegistry> storeRegistry,
+        StoreManager::StoreConfig defaultStoreConfig)
+        : conf(std::move(conf)), storeRegistry(std::move(storeRegistry)), defaultStoreConfig(std::move(defaultStoreConfig))
     {
     }
 
@@ -37,6 +40,8 @@ private:
     QueryExecutionConfiguration conf;
     /// The registry of the worker this operator is being lowered for; the store is materialised here.
     std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
+    /// Worker-level defaults for anything the query did not configure itself.
+    StoreManager::StoreConfig defaultStoreConfig;
 };
 
 }

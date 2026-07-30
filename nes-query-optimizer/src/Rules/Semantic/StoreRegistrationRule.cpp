@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-#include <Identifiers/Identifiers.hpp>
+#include <Iterators/BFSIterator.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
@@ -143,7 +143,8 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
         auto renamed = storeOperator->withConfig(std::move(config));
         auto replacement = renamed.withChildren(children);
         auto rewritten = replaceOperator(queryPlan, storeOperator.getId(), LogicalOperator{replacement});
-        INVARIANT(rewritten.has_value(), "Could not assign name '{}' to its store operator; the plan would reach lowering unnamed", storeName);
+        INVARIANT(
+            rewritten.has_value(), "Could not assign name '{}' to its store operator; the plan would reach lowering unnamed", storeName);
         queryPlan = std::move(rewritten.value());
     }
 

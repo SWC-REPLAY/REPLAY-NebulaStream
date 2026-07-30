@@ -32,6 +32,8 @@ struct LoweringRuleRegistryArguments
     /// The registry of the worker this plan is being compiled for. Lowering a replay store operator materialises the
     /// store here, which is why it cannot come from a process-global.
     std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
+    /// Worker-level replay store defaults, used for any parameter the query itself did not specify.
+    StoreManager::StoreConfig defaultStoreConfig;
 };
 
 class LoweringRuleRegistry

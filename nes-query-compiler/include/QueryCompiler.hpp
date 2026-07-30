@@ -40,14 +40,20 @@ struct QueryCompilationRequest
 class QueryCompiler
 {
 public:
-    QueryCompiler(QueryExecutionConfiguration defaultQueryExecution, std::shared_ptr<StoreManager::StoreRegistry> storeRegistry)
-        : defaultQueryExecution(std::move(defaultQueryExecution)), storeRegistry(std::move(storeRegistry)) { };
+    QueryCompiler(
+        QueryExecutionConfiguration defaultQueryExecution,
+        std::shared_ptr<StoreManager::StoreRegistry> storeRegistry,
+        StoreManager::StoreConfig defaultStoreConfig)
+        : defaultQueryExecution(std::move(defaultQueryExecution))
+        , storeRegistry(std::move(storeRegistry))
+        , defaultStoreConfig(std::move(defaultStoreConfig)) { };
 
     std::unique_ptr<CompiledQueryPlan> compileQuery(std::unique_ptr<QueryCompilationRequest> request);
 
 private:
     QueryExecutionConfiguration defaultQueryExecution;
     std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
+    StoreManager::StoreConfig defaultStoreConfig;
 };
 
 }

@@ -94,6 +94,8 @@ public:
     /// Replayable specific variables
     bool hasReplayableClause{false};
     std::string replayableStorageSize;
+    /// Store options from the clause's SET(...), already lower-cased to match the store operator's config parameters.
+    std::unordered_map<std::string, std::string> replayableOptions;
 
     /// Utility variables to keep state between enter/exit parser function calls.
     size_t opBoolean{}; ///anonymous token enum in AntlrSQLLexer.h

@@ -76,8 +76,14 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
     /// The worker owns its replay stores: they hold rows that live on this node, and lowering materialises them here.
     auto storeRegistry = std::make_shared<StoreManager::StoreRegistry>();
     nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener), storeRegistry).build(host);
+    /// Worker-level replay defaults. A query that configures its own store overrides these; anything it leaves unset
+    /// comes from here.
+    const StoreManager::StoreConfig defaultStoreConfig{
+        .memoryBufferSize = configuration.replayConfiguration.memoryBufferSize.getValue(),
+        .maxBufferCount = configuration.replayConfiguration.maxBufferCount.getValue(),
+        .storeOrder = configuration.replayConfiguration.storeOrder.getValue()};
     compiler = std::make_unique<QueryCompilation::QueryCompiler>(
-        configuration.workerConfiguration.defaultQueryExecution, std::move(storeRegistry));
+        configuration.workerConfiguration.defaultQueryExecution, std::move(storeRegistry), defaultStoreConfig);
 
     if (!configuration.dataAddress.getValue().empty())
     {

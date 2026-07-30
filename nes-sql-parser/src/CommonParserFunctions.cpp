@@ -181,6 +181,11 @@ std::unordered_map<std::string, std::string> getSourceConfig(const ConfigMap& co
     return sourceOptions;
 }
 
+std::unordered_map<std::string, std::string> getReplayStoreConfig(const ConfigMap& configOptions)
+{
+    return collectConfigBlock(configOptions, {"REPLAY"});
+}
+
 std::unordered_map<std::string, std::string> getSinkConfig(const ConfigMap& configOptions)
 {
     std::unordered_map<std::string, std::string> sinkOptions{};

@@ -21,6 +21,9 @@
 
 namespace NES::LowerToPhysicalOperators
 {
-PhysicalPlan
-apply(const LogicalPlan& queryPlan, const QueryExecutionConfiguration& conf, std::shared_ptr<StoreManager::StoreRegistry> storeRegistry);
+PhysicalPlan apply(
+    const LogicalPlan& queryPlan,
+    const QueryExecutionConfiguration& conf,
+    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry,
+    StoreManager::StoreConfig defaultStoreConfig);
 }

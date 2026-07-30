@@ -30,8 +30,7 @@
 namespace NES
 {
 
-ReplayReadTrait::ReplayReadTrait(std::optional<uint64_t> start, std::optional<uint64_t> end)
-    : start(std::move(start)), end(std::move(end))
+ReplayReadTrait::ReplayReadTrait(std::optional<uint64_t> start, std::optional<uint64_t> end) : start(std::move(start)), end(std::move(end))
 {
 }
 
@@ -73,7 +72,7 @@ const std::optional<uint64_t>& ReplayReadTrait::getEnd() const
 
 Reflected Reflector<ReplayReadTrait>::operator()(const ReplayReadTrait& trait) const
 {
-    return reflect(detail::ReflectedReplayReadTrait{trait.start, trait.end});
+    return reflect(detail::ReflectedReplayReadTrait{.start = trait.start, .end = trait.end});
 }
 
 ReplayReadTrait Unreflector<ReplayReadTrait>::operator()(const Reflected& reflected, const ReflectionContext& context) const

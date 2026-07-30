@@ -77,19 +77,23 @@ public:
             std::string{},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_NAME, cfg); }};
 
+        /// The store parameters default to "unset" rather than to concrete values on purpose. Config validation fills in
+        /// a default for every parameter the query did not mention, so a concrete default here would be indistinguishable
+        /// from a value the user asked for, and would silently mask the worker-level replay configuration that lowering
+        /// falls back to. Empty string and zero mean "not given by the query".
         static inline const DescriptorConfig::ConfigParameter<std::string> MEMORY_BUFFER_SIZE{
             "memory_buffer_size",
-            std::string{"64MB"},
+            std::string{},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(MEMORY_BUFFER_SIZE, cfg); }};
 
         static inline const DescriptorConfig::ConfigParameter<std::string> STORE_ORDER{
             "store_order",
-            std::string{"MemoryStore->FileStore"},
+            std::string{},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_ORDER, cfg); }};
 
         static inline const DescriptorConfig::ConfigParameter<uint64_t> MAX_BUFFER_COUNT{
             "max_buffer_count",
-            uint64_t{128}, /// NOLINT(readability-magic-numbers)
+            uint64_t{0},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(MAX_BUFFER_COUNT, cfg); }};
 
         static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap

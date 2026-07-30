@@ -564,7 +564,9 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     {
         /// No store_name here on purpose: a store's name has to be unique across queries, and once the optimizer places
         /// store operators the parser cannot know how many there are. StoreRegistrationRule names them.
-        std::unordered_map<std::string, std::string> configMap;
+        /// The SET options first, then the history limit, so that WITH HISTORY OF stays the authoritative spelling of
+        /// the buffer size even if the same parameter is also given as an option.
+        std::unordered_map<std::string, std::string> configMap = helpers.top().replayableOptions;
         configMap["memory_buffer_size"] = helpers.top().replayableStorageSize;
         auto config = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(configMap));
         queryPlan
@@ -1217,6 +1219,14 @@ void AntlrSQLQueryPlanCreator::enterReplayableClause(AntlrSQLParser::ReplayableC
     else
     {
         throw InvalidQuerySyntax("Only storage-based history limits (e.g., '10GB') are currently supported");
+    }
+
+    /// SET(<value> AS REPLAY.<KEY>) configures the store this query records into. Options outside the REPLAY namespace
+    /// are dropped here and rejected by the store operator's config validation, which knows the valid parameter names.
+    if (context->optionsClause() != nullptr)
+    {
+        const auto options = bindConfigOptions(context->optionsClause()->options->namedConfigExpression());
+        helpers.top().replayableOptions = getReplayStoreConfig(options);
     }
 }
 }

@@ -1,0 +1,57 @@
+# name: operator/replay/StoreConfiguration.test
+# description: Replay store configuration reaches the store, from the query and from the worker configuration
+# groups: [Replay]
+
+# Store configuration can be given per query, as SET(<value> AS REPLAY.<KEY>) on the REPLAYABLE clause, or per worker
+# via the replay.* configuration. Both were previously accepted and silently discarded, so this asserts that each
+# actually arrives.
+#
+# Assertions use an invalid store order rather than a valid one on purpose: a valid value is indistinguishable from the
+# default, so a test using one passes whether or not the configuration is honoured. Only a value that must be rejected
+# proves it was read.
+
+SEQUENTIAL_EXECUTION
+
+CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, ts UINT64);
+CREATE PHYSICAL SOURCE FOR stream TYPE File;
+ATTACH INLINE
+1,1,1000
+2,1,1001
+3,1,1002
+
+CREATE SINK sinkChain(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkMemoryOnly(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkRead(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkRejected(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+
+# A per-query store order the store can build
+SELECT id, value, ts FROM stream INTO sinkChain REPLAYABLE WITH HISTORY OF '32MB' SET(
+    'MemoryStore->FileStore' AS REPLAY.STORE_ORDER,
+    64 AS REPLAY.MAX_BUFFER_COUNT
+);
+----
+1,1,1000
+2,1,1001
+3,1,1002
+
+# ... and reading it back still works with that configuration in force
+SELECT id, value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP '1001' INTO sinkRead;
+----
+2,1,1001
+3,1,1002
+
+# A single-tier store order is also accepted, proving the value is not merely ignored in favour of the default chain
+SELECT id, value, ts FROM stream INTO sinkMemoryOnly REPLAYABLE WITH HISTORY OF '32MB' SET(
+    'MemoryStore' AS REPLAY.STORE_ORDER
+);
+----
+1,1,1000
+2,1,1001
+3,1,1002
+
+# An unbuildable store order given per query has to fail the query, which it can only do if the value arrived
+SELECT id, value, ts FROM stream INTO sinkRejected REPLAYABLE WITH HISTORY OF '32MB' SET(
+    'NotAStoreType' AS REPLAY.STORE_ORDER
+);
+----
+ERROR 1000

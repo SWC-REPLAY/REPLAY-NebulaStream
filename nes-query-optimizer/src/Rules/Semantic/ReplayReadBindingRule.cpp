@@ -25,13 +25,13 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
-#include <Sources/SourceDescriptor.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/Sources/InlineSourceLogicalOperator.hpp>
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
 #include <Rules/Semantic/InlineSourceBindingRule.hpp>
 #include <Rules/Semantic/SourceInferenceRule.hpp>
+#include <Sources/SourceDescriptor.hpp>
 #include <Stores/StoreCatalog.hpp>
 #include <Traits/ReplayReadTrait.hpp>
 #include <Util/Logger/Logger.hpp>

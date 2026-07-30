@@ -31,6 +31,7 @@
 #include <PhysicalPlan.hpp>
 #include <PhysicalPlanBuilder.hpp>
 #include <QueryExecutionConfiguration.hpp>
+#include <StoreRegistry.hpp>
 
 namespace NES::LowerToPhysicalOperators
 {
@@ -125,9 +126,11 @@ lowerOperatorRecursively(const LogicalOperator& logicalOperator, const LoweringR
 PhysicalPlan apply(
     const LogicalPlan& queryPlan,
     const QueryExecutionConfiguration& conf,
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry) /// NOLINT
+    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry,
+    StoreManager::StoreConfig defaultStoreConfig) /// NOLINT
 {
-    const auto registryArgument = LoweringRuleRegistryArguments{.conf = conf, .storeRegistry = std::move(storeRegistry)};
+    const auto registryArgument = LoweringRuleRegistryArguments{
+        .conf = conf, .storeRegistry = std::move(storeRegistry), .defaultStoreConfig = std::move(defaultStoreConfig)};
     std::vector<std::shared_ptr<PhysicalOperatorWrapper>> newRootOperators;
     newRootOperators.reserve(queryPlan.getRootOperators().size());
     for (const auto& logicalRoot : queryPlan.getRootOperators())

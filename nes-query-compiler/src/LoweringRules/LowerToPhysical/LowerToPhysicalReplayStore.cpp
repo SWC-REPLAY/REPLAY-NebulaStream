@@ -18,6 +18,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <Configurations/Descriptor.hpp>
 #include <Functions/FunctionProvider.hpp>
@@ -66,10 +67,41 @@ size_t parseSizeString(const std::string& s)
     throw InvalidConfigParameter("Cannot parse size string: '{}'", s);
 }
 
+/// Rejects a malformed store chain before it reaches the registry, which only asserts on it.
+///
+/// The value comes either from a query's SET(...) or from the worker's replay configuration — both user input. Letting
+/// it through would abort the worker on an assertion instead of failing the one query that asked for it.
+void validateStoreOrder(const std::string& storeOrder)
+{
+    std::string_view remaining{storeOrder};
+    while (!remaining.empty())
+    {
+        const auto separator = remaining.find("->");
+        const auto name = remaining.substr(0, separator);
+        if (name != "MemoryStore" && name != "FileStore")
+        {
+            throw InvalidConfigParameter(
+                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore, or MemoryStore->FileStore",
+                name,
+                storeOrder);
+        }
+        if (separator == std::string_view::npos)
+        {
+            return;
+        }
+        remaining.remove_prefix(separator + 2);
+    }
+    throw InvalidConfigParameter("Store order must not be empty");
+}
+
 /// Materialise the store on this worker if it has not been already. The catalog says a store with this name exists and
 /// what it holds; this is where the instance that actually holds the rows comes into being.
 void ensureStoreRegistered(
-    StoreManager::StoreRegistry& storeRegistry, const std::string& storeName, const Schema& outputSchema, const Descriptor& logicalCfg)
+    StoreManager::StoreRegistry& storeRegistry,
+    const std::string& storeName,
+    const Schema& outputSchema,
+    const Descriptor& logicalCfg,
+    const StoreManager::StoreConfig& defaults)
 {
     if (storeRegistry.getStore(storeName).has_value())
     {
@@ -83,8 +115,9 @@ void ensureStoreRegistered(
         storeSchema.addField(field.getUnqualifiedName(), field.dataType);
     }
 
-    /// Build StoreConfig from the operator's config parameters.
-    StoreManager::StoreConfig storeConfig;
+    /// Anything the query configured itself wins; whatever it left unset falls back to the worker's replay
+    /// configuration. The store operator's parameters default to empty/zero precisely so the two are distinguishable.
+    StoreManager::StoreConfig storeConfig = defaults;
     if (const auto sizeStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MEMORY_BUFFER_SIZE);
         sizeStr.has_value() && !sizeStr->empty())
     {
@@ -95,9 +128,15 @@ void ensureStoreRegistered(
     {
         storeConfig.storeOrder = *orderStr;
     }
-    if (const auto maxBuf = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MAX_BUFFER_COUNT); maxBuf.has_value())
+    if (const auto maxBuf = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MAX_BUFFER_COUNT);
+        maxBuf.has_value() && *maxBuf > 0)
     {
         storeConfig.maxBufferCount = maxBuf;
+    }
+
+    if (storeConfig.storeOrder.has_value())
+    {
+        validateStoreOrder(*storeConfig.storeOrder);
     }
 
     std::stringstream schemaStream;
@@ -121,7 +160,7 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
     PRECONDITION(!storeName.empty(), "Store '{}' was not named; StoreRegistrationRule must run before lowering", storeName);
 
     /// Register the store on-demand if it hasn't been registered yet.
-    ensureStoreRegistered(*storeRegistry, storeName, outputSchema, logicalCfg);
+    ensureStoreRegistered(*storeRegistry, storeName, outputSchema, logicalCfg, defaultStoreConfig);
 
     auto registeredStore = storeRegistry->getStore(storeName);
     PRECONDITION(registeredStore.has_value(), "Store '{}' must be registered before lowering", storeName);
@@ -162,7 +201,7 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
 std::unique_ptr<AbstractLoweringRule>
 LoweringRuleGeneratedRegistrar::RegisterReplayStoreLoweringRule(LoweringRuleRegistryArguments argument) /// NOLINT
 {
-    return std::make_unique<LowerToPhysicalReplayStore>(argument.conf, argument.storeRegistry);
+    return std::make_unique<LowerToPhysicalReplayStore>(argument.conf, argument.storeRegistry, argument.defaultStoreConfig);
 }
 
 }
