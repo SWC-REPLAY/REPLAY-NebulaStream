@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -22,6 +23,8 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -48,20 +51,37 @@ protected:
     static constexpr size_t NUM_READERS = 4;
     static constexpr size_t NUM_WRITERS = 4;
     static constexpr size_t TUPLES_PER_BATCH = 10;
+    /// Writers encode `value = ts * VALUE_TS_MULTIPLIER + writerId` so readers can detect a torn or mismatched record
+    /// from its contents alone.
+    static constexpr uint64_t VALUE_TS_MULTIPLIER = 10;
+    /// Long enough to interleave writers and readers many times over, short enough to belong in an ordinary test run.
+    static constexpr std::chrono::seconds DEFAULT_TEST_DURATION{10};
 
     Schema schema
         = Schema{}.addField("id", DataType::Type::UINT64).addField("value", DataType::Type::UINT64).addField("ts", DataType::Type::UINT64);
 
     std::shared_ptr<BufferManager> bufferManager = BufferManager::create();
 
-    /// Returns the test duration from TEST_DURATION_SECONDS env var, defaulting to 300s (5 minutes).
+    /// How long each stress test runs, from the TEST_DURATION_SECONDS env var.
+    ///
+    /// The default is short enough that these stay usable in an ordinary test run: at five minutes each, six of them
+    /// added half an hour to every full ctest and looked like a hang rather than a test. Raise it via the env var to
+    /// soak for races, which is what the knob is for — every assertion here is satisfied within the first moments, so
+    /// a longer run buys interleavings, not coverage.
     static std::chrono::seconds getTestDuration()
     {
         if (const char* env = std::getenv("TEST_DURATION_SECONDS"))
         {
-            return std::chrono::seconds(std::atoi(env));
+            const std::string_view text{env};
+            int seconds = 0;
+            const auto [parseEnd, errorCode] = std::from_chars(text.begin(), text.end(), seconds);
+            if (errorCode == std::errc{} && parseEnd == text.end() && seconds > 0)
+            {
+                return std::chrono::seconds{seconds};
+            }
+            NES_WARNING("Ignoring malformed TEST_DURATION_SECONDS='{}', using the default", text);
         }
-        return std::chrono::seconds(300);
+        return DEFAULT_TEST_DURATION;
     }
 
     /// Record layout: [8-byte id][8-byte value][8-byte ts] = 24 bytes (non-nullable fields).
@@ -99,7 +119,7 @@ protected:
         {
             for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
             {
-                packRecord(record.data(), writerId, (nextTs * 10) + writerId, nextTs);
+                packRecord(record.data(), writerId, (nextTs * VALUE_TS_MULTIPLIER) + writerId, nextTs);
                 store.writeRecord(record.data(), recordSize, Timestamp(nextTs), schema);
                 ++nextTs;
             }
@@ -160,8 +180,9 @@ protected:
                     ASSERT_LT(id, numWriters) << "Reader " << readerId << " tuple " << t << ": id (" << id << ") out of writer range [0, "
                                               << numWriters << ")";
 
-                    ASSERT_EQ(value, ts * 10 + id) << "Reader " << readerId << " tuple " << t << ": value (" << value << ") != ts*10+id ("
-                                                   << (ts * 10) + id << ") for writer " << id;
+                    ASSERT_EQ(value, (ts * VALUE_TS_MULTIPLIER) + id)
+                        << "Reader " << readerId << " tuple " << t << ": value (" << value << ") != ts*" << VALUE_TS_MULTIPLIER << "+id ("
+                        << (ts * VALUE_TS_MULTIPLIER) + id << ") for writer " << id;
 
                     if (checkOrdering)
                     {
@@ -274,7 +295,7 @@ protected:
 ///   - Multiple concurrent writers (see ConcurrentMultiProducerReadWrite_MemoryStore)
 ///   - Flush/eviction under write contention (single writer never contends on the mutex)
 ///   - TimeRange-filtered reads (uses unbounded range only)
-TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
+TEST_F(ConcurrencyTests, ConcurrentReadWriteMemoryStore)
 {
     auto store = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager);
     store.open();
@@ -296,7 +317,7 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_MemoryStore)
 ///   - Monotonic timestamp ordering (not guaranteed with multiple writers appending in arrival order)
 ///   - TimeRange-filtered reads (uses unbounded range only)
 ///   - Per-writer completeness (does not verify every written record is eventually read)
-TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWrite_MemoryStore)
+TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWriteMemoryStore)
 {
     auto store = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager);
     store.open();
@@ -318,7 +339,7 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWrite_MemoryStore)
 ///   - Multiple writers triggering eviction (see ConcurrentMultiProducerWraparound_MemoryStore)
 ///   - Flush to a next-level store (standalone MemoryStore only, no chaining)
 ///   - TimeRange-filtered reads (uses unbounded range only)
-TEST_F(ConcurrencyTests, ConcurrentWraparound_MemoryStore)
+TEST_F(ConcurrencyTests, ConcurrentWraparoundMemoryStore)
 {
     const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
     /// Small buffers: 10 records per buffer. With maxBufferCount=4, the ring holds 40 records total.
@@ -370,7 +391,7 @@ TEST_F(ConcurrencyTests, ConcurrentWraparound_MemoryStore)
 ///   - Flush to a next-level store (standalone MemoryStore only, no chaining)
 ///   - TimeRange-filtered reads (uses unbounded range only)
 ///   - Per-writer completeness (eviction intentionally discards old data)
-TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparound_MemoryStore)
+TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparoundMemoryStore)
 {
     const uint32_t recordSize = schema.getSizeOfSchemaInBytes();
     constexpr size_t tuplesPerBuffer = 10;
@@ -421,7 +442,7 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparound_MemoryStore)
 ///   - Multiple concurrent writers (see ConcurrentMultiProducerReadWrite_FileStore)
 ///   - Monotonic timestamp ordering (FileStore row order depends on atomic tail reservation)
 ///   - TimeRange-filtered reads (uses unbounded range only)
-TEST_F(ConcurrencyTests, ConcurrentReadWrite_FileStore)
+TEST_F(ConcurrencyTests, ConcurrentReadWriteFileStore)
 {
     auto tmpDir = createTempDir("concurrent_rw");
     auto store = makeStore<FileStore>(
@@ -447,7 +468,7 @@ TEST_F(ConcurrencyTests, ConcurrentReadWrite_FileStore)
 ///   - Monotonic timestamp ordering (not guaranteed with multiple writers)
 ///   - TimeRange-filtered reads (uses unbounded range only)
 ///   - Per-writer completeness (does not verify every written record is eventually read)
-TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWrite_FileStore)
+TEST_F(ConcurrencyTests, ConcurrentMultiProducerReadWriteFileStore)
 {
     auto tmpDir = createTempDir("concurrent_mp_rw");
     auto store = makeStore<FileStore>(
