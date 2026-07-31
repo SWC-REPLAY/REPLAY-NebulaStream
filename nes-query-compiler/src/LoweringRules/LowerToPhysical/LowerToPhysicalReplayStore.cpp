@@ -35,7 +35,7 @@
 #include <ReplayStoreOperatorHandler.hpp>
 #include <ReplayStorePhysicalOperator.hpp>
 #include <StoreRegistry.hpp>
-#include "DataTypes/Schema.hpp"
+#include <DataTypes/Schema.hpp>
 
 namespace NES
 {
