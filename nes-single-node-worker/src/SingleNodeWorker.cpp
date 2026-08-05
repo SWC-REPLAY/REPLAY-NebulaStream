@@ -52,7 +52,15 @@ extern void initNetworkServices(const std::string& connectionAddr, const NES::Ho
 namespace NES
 {
 
-SingleNodeWorker::~SingleNodeWorker() = default;
+SingleNodeWorker::~SingleNodeWorker()
+{
+    /// The stores hold buffers from the engine's pool, so they have to go before the engine tears that pool down.
+    if (storeRegistry)
+    {
+        storeRegistry->closeAll();
+    }
+}
+
 SingleNodeWorker::SingleNodeWorker(SingleNodeWorker&& other) noexcept = default;
 SingleNodeWorker& SingleNodeWorker::operator=(SingleNodeWorker&& other) noexcept = default;
 
@@ -73,17 +81,16 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         listener->addListener(googleTracePrinter);
     }
 
-    /// The worker owns its replay stores: they hold rows that live on this node, and lowering materialises them here.
-    auto storeRegistry = std::make_shared<StoreManager::StoreRegistry>();
-    nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener), storeRegistry).build(host);
-    /// Worker-level replay defaults. A query that configures its own store overrides these; anything it leaves unset
-    /// comes from here.
-    const StoreManager::StoreConfig defaultStoreConfig{
+    /// The worker owns its replay stores: they hold rows that live on this node, and each is materialised here when the
+    /// pipeline that writes it starts. The registry carries the worker-level replay defaults, so a query that
+    /// configures its own store overrides them there and nothing in between has to pass them along.
+    storeRegistry = std::make_unique<StoreManager::StoreRegistry>(StoreManager::StoreConfig{
         .memoryBufferSize = configuration.replayConfiguration.memoryBufferSize.getValue(),
         .maxBufferCount = configuration.replayConfiguration.maxBufferCount.getValue(),
-        .storeOrder = configuration.replayConfiguration.storeOrder.getValue()};
-    compiler = std::make_unique<QueryCompilation::QueryCompiler>(
-        configuration.workerConfiguration.defaultQueryExecution, std::move(storeRegistry), defaultStoreConfig);
+        .storeOrder = configuration.replayConfiguration.storeOrder.getValue()});
+    const OptionalRef<StoreManager::StoreRegistry> borrowedStoreRegistry{*storeRegistry};
+    nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener), borrowedStoreRegistry).build(host);
+    compiler = std::make_unique<QueryCompilation::QueryCompiler>(configuration.workerConfiguration.defaultQueryExecution);
 
     if (!configuration.dataAddress.getValue().empty())
     {

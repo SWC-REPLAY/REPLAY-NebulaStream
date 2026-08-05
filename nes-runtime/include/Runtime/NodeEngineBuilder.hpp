@@ -18,7 +18,12 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Listeners/StatisticListener.hpp>
 #include <Runtime/NodeEngine.hpp>
-#include <StoreRegistry.hpp>
+#include <Util/Pointers.hpp>
+
+namespace NES::StoreManager
+{
+class StoreRegistry;
+}
 
 namespace NES
 {
@@ -28,16 +33,17 @@ class NodeEngineBuilder
 public:
     NodeEngineBuilder() = delete;
 
+    /// `storeRegistry` is borrowed from the worker and must outlive the engine this builds.
     NodeEngineBuilder(
         WorkerConfiguration workerConfiguration,
         std::shared_ptr<StatisticListener> statisticsListener,
-        std::shared_ptr<StoreManager::StoreRegistry> storeRegistry);
+        OptionalRef<StoreManager::StoreRegistry> storeRegistry);
 
     std::unique_ptr<NodeEngine> build(const Host& host);
 
 private:
     WorkerConfiguration workerConfiguration;
     std::shared_ptr<StatisticListener> statisticsListener;
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
 };
 }

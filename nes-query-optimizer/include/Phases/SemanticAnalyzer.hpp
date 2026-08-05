@@ -18,12 +18,12 @@
 
 #include <Plans/LogicalPlan.hpp>
 #include <Rules/Rule.hpp>
-#include <Stores/StoreCatalog.hpp>
 
 namespace NES
 {
 class SinkCatalog;
 class SourceCatalog;
+class StoreCatalog;
 }
 
 namespace NES

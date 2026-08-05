@@ -19,8 +19,13 @@
 
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include <Util/Pointers.hpp>
 #include <Util/Registry.hpp>
-#include <StoreRegistry.hpp>
+
+namespace NES::StoreManager
+{
+class StoreRegistry;
+}
 
 namespace NES
 {
@@ -30,9 +35,9 @@ using SourceRegistryReturnType = std::unique_ptr<Source>;
 struct SourceRegistryArguments
 {
     SourceDescriptor sourceDescriptor;
-    /// The registry of the worker this source runs on. A replay source reads the store instance from it; other sources
-    /// ignore it.
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
+    /// The store registry of the worker this source runs on, borrowed and outliving the source. A replay source resolves
+    /// its store from it; every other source ignores it, and it is empty on a worker without replay stores.
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
 };
 
 class SourceRegistry : public BaseRegistry<SourceRegistry, std::string, SourceRegistryReturnType, SourceRegistryArguments>

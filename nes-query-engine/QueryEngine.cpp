@@ -38,6 +38,7 @@
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Util/AtomicState.hpp>
+#include <Util/Pointers.hpp>
 #include <fmt/format.h>
 #include <folly/MPMCQueue.h>
 #include <DelayedTaskSubmitter.hpp>
@@ -206,6 +207,7 @@ struct DefaultPEC final : PipelineExecutionContext
     std::function<bool(const TupleBuffer& tb, ContinuationPolicy)> handler;
     std::function<void(const TupleBuffer& tb, std::chrono::milliseconds duration)> repeatHandler;
     std::shared_ptr<AbstractBufferProvider> bm;
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
     size_t numberOfThreads;
     WorkerThreadId threadId;
     PipelineId pipelineId;
@@ -222,16 +224,20 @@ struct DefaultPEC final : PipelineExecutionContext
         WorkerThreadId threadId,
         PipelineId pipelineId,
         std::shared_ptr<AbstractBufferProvider> bm,
+        OptionalRef<StoreManager::StoreRegistry> storeRegistry,
         std::function<bool(const TupleBuffer& tb, ContinuationPolicy)> handler,
         std::function<void(const TupleBuffer& tb, std::chrono::milliseconds)> repeatHandler)
         : handler(std::move(handler))
         , repeatHandler(std::move(repeatHandler))
         , bm(std::move(bm))
+        , storeRegistry(storeRegistry)
         , numberOfThreads(numberOfThreads)
         , threadId(threadId)
         , pipelineId(pipelineId)
     {
     }
+
+    [[nodiscard]] OptionalRef<StoreManager::StoreRegistry> getStoreRegistry() const override { return storeRegistry; }
 
     [[nodiscard]] WorkerThreadId getWorkerThreadId() const override
     {
@@ -409,10 +415,12 @@ public:
         std::shared_ptr<AbstractQueryStatusListener> listener,
         std::shared_ptr<QueryEngineStatisticListener> stats,
         std::shared_ptr<AbstractBufferProvider> bufferProvider,
+        OptionalRef<StoreManager::StoreRegistry> storeRegistry,
         const size_t admissionQueueSize)
         : listener(std::move(listener))
         , statistic(std::move(stats))
         , bufferProvider(std::move(bufferProvider))
+        , storeRegistry(storeRegistry)
         , taskQueue(admissionQueueSize)
         , delayedTaskSubmitter([this](Task&& task) noexcept { taskQueue.addInternalTaskNonBlocking(std::move(task)); })
     {
@@ -458,6 +466,7 @@ private:
     std::shared_ptr<AbstractQueryStatusListener> listener;
     std::shared_ptr<QueryEngineStatisticListener> statistic;
     std::shared_ptr<AbstractBufferProvider> bufferProvider;
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
     std::atomic<TaskId::Underlying> taskIdCounter;
 
     TaskQueue<Task> taskQueue;
@@ -493,6 +502,7 @@ bool ThreadPool::WorkerThread::operator()(WorkTask& task) const
             WorkerThread::id,
             pipeline->id,
             pool.bufferProvider,
+            pool.storeRegistry,
             [&](const TupleBuffer& tupleBuffer, PipelineExecutionContext::ContinuationPolicy continuationPolicy)
             {
                 ENGINE_LOG_DEBUG(
@@ -550,6 +560,7 @@ bool ThreadPool::WorkerThread::operator()(StartPipelineTask& startPipeline) cons
             WorkerThread::id,
             pipeline->id,
             pool.bufferProvider,
+            pool.storeRegistry,
             [](const TupleBuffer&, PipelineExecutionContext::ContinuationPolicy)
             {
                 /// Catch Emits, that are currently not supported during pipeline stage initialization.
@@ -628,6 +639,7 @@ bool ThreadPool::WorkerThread::operator()(StopPipelineTask& stopPipelineTask) co
         WorkerThread::id,
         stopPipelineTask.pipeline->id,
         pool.bufferProvider,
+        pool.storeRegistry,
         [&](const TupleBuffer& tupleBuffer, PipelineExecutionContext::ContinuationPolicy policy)
         {
             if (terminating)
@@ -771,12 +783,14 @@ QueryEngine::QueryEngine(
     std::shared_ptr<QueryEngineStatisticListener> statListener,
     std::shared_ptr<AbstractQueryStatusListener> listener,
     std::shared_ptr<BufferManager> bm,
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry,
     const Host& host)
     : bufferManager(std::move(bm))
     , statusListener(std::move(listener))
     , statisticListener(std::move(statListener))
     , queryCatalog(std::make_shared<QueryCatalog>())
-    , threadPool(std::make_unique<ThreadPool>(statusListener, statisticListener, bufferManager, config.admissionQueueSize.getValue()))
+    , threadPool(std::make_unique<ThreadPool>(
+          statusListener, statisticListener, bufferManager, storeRegistry, config.admissionQueueSize.getValue()))
     , host(host)
 {
     for (size_t i = 0; i < config.numberOfWorkerThreads.getValue(); ++i)

@@ -18,6 +18,7 @@
 #include <cctype>
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <ranges>
@@ -28,7 +29,7 @@
 #include <vector>
 
 #include <DataTypes/Schema.hpp>
-#include <Runtime/BufferManager.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 #include <FileStore.hpp>
@@ -40,7 +41,59 @@
 namespace NES::StoreManager
 {
 
-StoreRegistry::StoreRegistry() : bufferManager(BufferManager::create())
+namespace
+{
+/// Split a store order like "MemoryStore->FileStore" into its links, rejecting anything that does not name a supported
+/// store type.
+///
+/// This throws rather than asserting because the value is user input either way: it comes from a query's SET(...) or
+/// from the worker's replay configuration. Aborting the worker on an assertion would take down every other query with
+/// it, so a bad chain has to fail just the query that asked for it.
+std::vector<std::string> parseStoreOrder(const std::string& storeOrder)
+{
+    if (storeOrder.empty())
+    {
+        throw InvalidConfigParameter("Store order must not be empty");
+    }
+
+    std::vector<std::string> storeNames;
+    std::string remaining = storeOrder;
+    while (true)
+    {
+        const auto pos = remaining.find("->");
+        if (pos == std::string::npos)
+        {
+            storeNames.push_back(remaining);
+            break;
+        }
+        storeNames.push_back(remaining.substr(0, pos));
+        remaining = remaining.substr(pos + 2);
+    }
+
+    for (const auto& name : storeNames)
+    {
+        if (name != "MemoryStore" && name != "FileStore")
+        {
+            throw InvalidConfigParameter(
+                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore, or MemoryStore->FileStore",
+                name,
+                storeOrder);
+        }
+    }
+    return storeNames;
+}
+
+/// Per field: what the query asked for, else what the worker configured, else nothing (the store type decides).
+StoreConfig mergeOverDefaults(const StoreConfig& overrides, const StoreConfig& defaults)
+{
+    return StoreConfig{
+        .memoryBufferSize = overrides.memoryBufferSize.has_value() ? overrides.memoryBufferSize : defaults.memoryBufferSize,
+        .maxBufferCount = overrides.maxBufferCount.has_value() ? overrides.maxBufferCount : defaults.maxBufferCount,
+        .storeOrder = overrides.storeOrder.has_value() ? overrides.storeOrder : defaults.storeOrder};
+}
+}
+
+StoreRegistry::StoreRegistry(StoreConfig defaults) : defaults(std::move(defaults))
 {
 }
 
@@ -50,42 +103,26 @@ void StoreRegistry::registerStore(const std::string& storeName, Store store)
     stores.emplace(storeName, std::move(store));
 }
 
-void StoreRegistry::registerDefaultStore(const std::string& storeName, const Schema& schema, const std::string& schemaText)
-{
-    registerConfiguredStore(storeName, schema, schemaText, StoreConfig{});
-}
-
-void StoreRegistry::registerConfiguredStore(
-    const std::string& storeName, const Schema& schema, const std::string& schemaText, const StoreConfig& config)
+Store StoreRegistry::getOrCreateStore(
+    const std::string& storeName,
+    const Schema& schema,
+    const std::string& schemaText,
+    const StoreConfig& overrides,
+    const std::shared_ptr<AbstractBufferProvider>& bufferProvider)
 {
     const std::unique_lock lock(mutex);
-    NES_DEBUG("Registering configured store with name {} and schema {}", storeName, schemaText);
+    if (const auto existing = stores.find(storeName); existing != stores.end())
+    {
+        return existing->second;
+    }
+
+    NES_DEBUG("Materialising store with name {} and schema {}", storeName, schemaText);
+
+    const auto config = mergeOverDefaults(overrides, defaults);
+    const auto storeOrder = config.storeOrder.value_or("MemoryStore->FileStore");
+    const auto storeNames = parseStoreOrder(storeOrder);
 
     const auto storeDir = generateStoreDir(storeName);
-    const auto storeOrder = config.storeOrder.value_or("MemoryStore->FileStore");
-
-    /// Parse the store order string by splitting on "->"
-    std::vector<std::string> storeNames;
-    {
-        std::string remaining = storeOrder;
-        while (true)
-        {
-            auto pos = remaining.find("->");
-            if (pos == std::string::npos)
-            {
-                storeNames.push_back(remaining);
-                break;
-            }
-            storeNames.push_back(remaining.substr(0, pos));
-            remaining = remaining.substr(pos + 2);
-        }
-    }
-
-    PRECONDITION(!storeNames.empty(), "Store order must not be empty");
-    for (const auto& name : storeNames)
-    {
-        PRECONDITION(name == "MemoryStore" || name == "FileStore", "Unknown store type '{}' in store order '{}'", name, storeOrder);
-    }
 
     /// Build the store chain bottom-up (last in the order is the tail).
     /// Supported chains: "MemoryStore->FileStore", "MemoryStore", "FileStore"
@@ -107,26 +144,23 @@ void StoreRegistry::registerConfiguredStore(
         auto headStore = makeStore<MemoryStore>(
             schema,
             MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
-            bufferManager,
+            bufferProvider,
             std::move(fileStore),
             policy);
 
-        stores.emplace(storeName, headStore);
+        return stores.emplace(storeName, headStore).first->second;
     }
-    else if (hasMemoryStore)
+    if (hasMemoryStore)
     {
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
         auto headStore = makeStore<MemoryStore>(
-            schema, MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount}, bufferManager);
-        stores.emplace(storeName, headStore);
+            schema, MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount}, bufferProvider);
+        return stores.emplace(storeName, headStore).first->second;
     }
-    else if (hasFileStore)
-    {
-        auto headStore
-            = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
-        stores.emplace(storeName, headStore);
-    }
+    auto headStore
+        = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+    return stores.emplace(storeName, headStore).first->second;
 }
 
 std::optional<Store> StoreRegistry::getStore(const std::string& storeName) const
@@ -151,6 +185,16 @@ void StoreRegistry::unregisterStore(const std::string& storeName)
 void StoreRegistry::clear()
 {
     const std::unique_lock lock(mutex);
+    stores.clear();
+}
+
+void StoreRegistry::closeAll()
+{
+    const std::unique_lock lock(mutex);
+    for (auto& [name, store] : stores)
+    {
+        store.close();
+    }
     stores.clear();
 }
 

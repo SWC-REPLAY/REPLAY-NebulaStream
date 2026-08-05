@@ -31,15 +31,23 @@
 #include <SingleNodeWorkerConfiguration.hpp>
 #include <WorkerStatus.hpp>
 
+namespace NES::StoreManager
+{
+class StoreRegistry;
+}
+
 namespace NES
 {
 
 /// @brief The SingleNodeWorker is a compiling StreamProcessingEngine, working alone on local sources and sinks, without external
 /// coordination. The SingleNodeWorker can register LogicalQueryPlans which are lowered into an executable format, by the
 /// QueryCompiler. The user can manage the lifecycle of queries inside the NodeEngine using the SingleNodeWorkers interface.
-/// The Class itself is NonCopyable, but Movable, it owns the QueryCompiler and the NodeEngine.
+/// The Class itself is NonCopyable, but Movable, it owns the QueryCompiler, the NodeEngine and its replay stores.
 class SingleNodeWorker
 {
+    /// The worker owns its replay stores: they hold rows that live on this node. Declared before the engine, which
+    /// borrows it, so that it is destroyed after it. The stores themselves are released earlier, in the destructor.
+    UniquePtr<StoreManager::StoreRegistry> storeRegistry;
     SharedPtr<CompositeStatisticListener> listener;
     SharedPtr<NodeEngine> nodeEngine;
     UniquePtr<QueryCompilation::QueryCompiler> compiler;

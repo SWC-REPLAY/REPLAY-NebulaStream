@@ -13,17 +13,11 @@
 */
 
 #pragma once
-#include <memory>
 #include <Plans/LogicalPlan.hpp>
 #include <PhysicalPlan.hpp>
 #include <QueryExecutionConfiguration.hpp>
-#include <StoreRegistry.hpp>
 
 namespace NES::LowerToPhysicalOperators
 {
-PhysicalPlan apply(
-    const LogicalPlan& queryPlan,
-    const QueryExecutionConfiguration& conf,
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry,
-    StoreManager::StoreConfig defaultStoreConfig);
+PhysicalPlan apply(const LogicalPlan& queryPlan, const QueryExecutionConfiguration& conf);
 }

@@ -24,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -58,7 +59,6 @@
 #include <InputFormatterProvider.hpp>
 #include <Pipeline.hpp>
 #include <ScanPhysicalOperator.hpp>
-#include <StoreRegistry.hpp>
 #include <TestTaskQueue.hpp>
 
 namespace NES::InputFormatterTestUtil
@@ -154,9 +154,8 @@ std::pair<BackpressureController, std::unique_ptr<SourceHandle>> createFileSourc
         logicalSource.value(), "File", Host("localhost"), std::move(fileSourceConfiguration), {{"type", "CSV"}});
     INVARIANT(sourceDescriptor.has_value(), "Test File Source couldn't be created");
     auto [backpressureController, backpressureListener] = createBackpressureChannel();
-    /// A file source never touches the store registry, so an empty one is enough here.
-    const SourceProvider sourceProvider(
-        numberOfRequiredSourceBuffers, std::move(sourceBufferPool), std::make_shared<StoreManager::StoreRegistry>());
+    /// A file source never resolves a replay store, so it needs no registry at all.
+    const SourceProvider sourceProvider(numberOfRequiredSourceBuffers, std::move(sourceBufferPool), std::nullopt);
     return {std::move(backpressureController), sourceProvider.lower(NES::OriginId(1), backpressureListener, sourceDescriptor.value())};
 }
 

@@ -32,6 +32,7 @@
 #include <Sources/SourceDescriptor.hpp>
 #include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <Util/Pointers.hpp>
 #include <fmt/format.h>
 #include <ErrorHandling.hpp>
 #include <ReplayStoreReader.hpp>
@@ -42,14 +43,14 @@
 namespace NES
 {
 
-ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor, std::shared_ptr<StoreManager::StoreRegistry> storeRegistry)
+ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor, OptionalRef<StoreManager::StoreRegistry> storeRegistry)
     : filePath(
           sourceDescriptor.getConfig().contains("file_path") ? std::get<std::string>(sourceDescriptor.getConfig().at("file_path"))
                                                              : std::string())
     , storeName(
           sourceDescriptor.getConfig().contains("store_name") ? std::get<std::string>(sourceDescriptor.getConfig().at("store_name"))
                                                               : std::string())
-    , storeRegistry(std::move(storeRegistry))
+    , storeRegistry(storeRegistry)
     , schema(*sourceDescriptor.getLogicalSource().getSchema())
 {
     const auto& config = sourceDescriptor.getConfig();
@@ -73,8 +74,8 @@ void ReplaySource::open(std::shared_ptr<AbstractBufferProvider>)
 {
     if (!storeName.empty())
     {
-        PRECONDITION(storeRegistry != nullptr, "A replay source reading store '{}' needs the worker's store registry", storeName);
-        auto registeredStore = storeRegistry->getStore(storeName);
+        PRECONDITION(storeRegistry.has_value(), "A replay source reading store '{}' needs the worker's store registry", storeName);
+        auto registeredStore = storeRegistry->get().getStore(storeName);
         if (registeredStore.has_value())
         {
             store = registeredStore.value();

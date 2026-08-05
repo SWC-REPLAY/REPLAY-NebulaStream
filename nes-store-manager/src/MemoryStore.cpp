@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 #include <DataTypes/Schema.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
@@ -39,18 +40,18 @@
 namespace NES::StoreManager
 {
 
-MemoryStore::MemoryStore(const Schema& schema, std::shared_ptr<BufferManager> bufferManager)
+MemoryStore::MemoryStore(const Schema& schema, std::shared_ptr<AbstractBufferProvider> bufferManager)
     : schema(schema), bufferManager(std::move(bufferManager))
 {
 }
 
-MemoryStore::MemoryStore(const Schema& schema, Config config, std::shared_ptr<BufferManager> bufferManager)
+MemoryStore::MemoryStore(const Schema& schema, Config config, std::shared_ptr<AbstractBufferProvider> bufferManager)
     : schema(schema), config(config), bufferManager(std::move(bufferManager))
 {
 }
 
 MemoryStore::MemoryStore(
-    const Schema& schema, const Config config, std::shared_ptr<BufferManager> bufferManager, Store nextLevel, FlushPolicy policy)
+    const Schema& schema, const Config config, std::shared_ptr<AbstractBufferProvider> bufferManager, Store nextLevel, FlushPolicy policy)
     : schema(schema), config(config), bufferManager(std::move(bufferManager)), nextLevel(std::move(nextLevel)), flushPolicy(policy)
 {
     auto foundTransformation = StoreTransformationRegistry::instance().findTransformation(
@@ -368,6 +369,6 @@ namespace NES
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterMemoryStoreStoreType(StoreTypeRegistryArguments args)
 {
-    return StoreManager::makeStore<StoreManager::MemoryStore>(std::move(args.schema), std::move(args.bufferManager));
+    return StoreManager::makeStore<StoreManager::MemoryStore>(std::move(args.schema), std::move(args.bufferProvider));
 }
 }

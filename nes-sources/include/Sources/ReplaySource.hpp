@@ -29,13 +29,14 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include <Util/Pointers.hpp>
 #include <Store.hpp>
-#include <StoreRegistry.hpp>
 #include <TimeRange.hpp>
 
 namespace NES::StoreManager
 {
 class ReplayStoreReader;
+class StoreRegistry;
 }
 
 namespace NES
@@ -46,7 +47,8 @@ class ReplaySource final : public Source
 {
 public:
     static constexpr std::string_view NAME = "Replay";
-    ReplaySource(const SourceDescriptor& sourceDescriptor, std::shared_ptr<StoreManager::StoreRegistry> storeRegistry);
+    /// `storeRegistry` is borrowed from the worker this source runs on and must outlive it.
+    ReplaySource(const SourceDescriptor& sourceDescriptor, OptionalRef<StoreManager::StoreRegistry> storeRegistry);
     ~ReplaySource() override;
 
     void open(std::shared_ptr<AbstractBufferProvider> bufferProvider) override;
@@ -67,8 +69,9 @@ protected:
 private:
     std::string filePath;
     std::string storeName;
-    /// The registry of the worker this source runs on; the named store is resolved from it when the source opens.
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
+    /// The registry of the worker this source runs on, borrowed; the named store is resolved from it when the source
+    /// opens.
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
     std::optional<StoreManager::Store> store;
     std::unique_ptr<StoreManager::ReplayStoreReader> reader;
     Schema schema;

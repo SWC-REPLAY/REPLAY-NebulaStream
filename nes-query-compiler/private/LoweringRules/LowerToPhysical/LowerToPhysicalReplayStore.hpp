@@ -14,34 +14,22 @@
 
 #pragma once
 
-#include <memory>
 #include <utility>
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <QueryExecutionConfiguration.hpp>
-#include <StoreRegistry.hpp>
 
 namespace NES
 {
 
 struct LowerToPhysicalReplayStore : AbstractLoweringRule
 {
-    LowerToPhysicalReplayStore(
-        QueryExecutionConfiguration conf,
-        std::shared_ptr<StoreManager::StoreRegistry> storeRegistry,
-        StoreManager::StoreConfig defaultStoreConfig)
-        : conf(std::move(conf)), storeRegistry(std::move(storeRegistry)), defaultStoreConfig(std::move(defaultStoreConfig))
-    {
-    }
+    explicit LowerToPhysicalReplayStore(QueryExecutionConfiguration conf) : conf(std::move(conf)) { }
 
     LoweringRuleResultSubgraph apply(LogicalOperator logicalOperator) override;
 
 private:
     QueryExecutionConfiguration conf;
-    /// The registry of the worker this operator is being lowered for; the store is materialised here.
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
-    /// Worker-level defaults for anything the query did not configure itself.
-    StoreManager::StoreConfig defaultStoreConfig;
 };
 
 }

@@ -19,7 +19,6 @@
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Util/Registry.hpp>
 #include <QueryExecutionConfiguration.hpp>
-#include <StoreRegistry.hpp>
 
 namespace NES
 {
@@ -29,11 +28,6 @@ using LoweringRuleRegistryReturnType = std::unique_ptr<AbstractLoweringRule>;
 struct LoweringRuleRegistryArguments
 {
     QueryExecutionConfiguration conf;
-    /// The registry of the worker this plan is being compiled for. Lowering a replay store operator materialises the
-    /// store here, which is why it cannot come from a process-global.
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
-    /// Worker-level replay store defaults, used for any parameter the query itself did not specify.
-    StoreManager::StoreConfig defaultStoreConfig;
 };
 
 class LoweringRuleRegistry

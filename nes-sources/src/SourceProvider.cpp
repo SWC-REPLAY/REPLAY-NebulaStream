@@ -25,6 +25,7 @@
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <Util/Pointers.hpp>
 #include <BackpressureChannel.hpp>
 #include <ErrorHandling.hpp>
 #include <SourceRegistry.hpp>
@@ -36,8 +37,8 @@ namespace NES
 SourceProvider::SourceProvider(
     size_t defaultMaxInflightBuffers,
     std::shared_ptr<AbstractBufferProvider> bufferPool,
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry)
-    : defaultMaxInflightBuffers(defaultMaxInflightBuffers), bufferPool(std::move(bufferPool)), storeRegistry(std::move(storeRegistry))
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry)
+    : defaultMaxInflightBuffers(defaultMaxInflightBuffers), bufferPool(std::move(bufferPool)), storeRegistry(storeRegistry)
 {
 }
 

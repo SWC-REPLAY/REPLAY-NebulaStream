@@ -23,8 +23,8 @@
 #include <Runtime/BufferManager.hpp>
 #include <Runtime/NodeEngine.hpp>
 #include <Sources/SourceProvider.hpp>
+#include <Util/Pointers.hpp>
 #include <QueryEngine.hpp>
-#include <StoreRegistry.hpp>
 
 namespace NES
 {
@@ -33,10 +33,8 @@ namespace NES
 NodeEngineBuilder::NodeEngineBuilder(
     WorkerConfiguration workerConfiguration,
     std::shared_ptr<StatisticListener> statisticsListener,
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry)
-    : workerConfiguration(std::move(workerConfiguration))
-    , statisticsListener(std::move(statisticsListener))
-    , storeRegistry(std::move(storeRegistry))
+    OptionalRef<StoreManager::StoreRegistry> storeRegistry)
+    : workerConfiguration(std::move(workerConfiguration)), statisticsListener(std::move(statisticsListener)), storeRegistry(storeRegistry)
 {
 }
 
@@ -47,7 +45,8 @@ std::unique_ptr<NodeEngine> NodeEngineBuilder::build(const Host& host)
         workerConfiguration.numberOfBuffersInGlobalBufferManager.getValue());
     auto queryLog = std::make_shared<QueryLog>();
 
-    auto queryEngine = std::make_unique<QueryEngine>(workerConfiguration.queryEngine, statisticsListener, queryLog, bufferManager, host);
+    auto queryEngine
+        = std::make_unique<QueryEngine>(workerConfiguration.queryEngine, statisticsListener, queryLog, bufferManager, storeRegistry, host);
 
     auto sourceProvider
         = std::make_unique<SourceProvider>(workerConfiguration.defaultMaxInflightBuffers.getValue(), bufferManager, storeRegistry);

@@ -20,7 +20,6 @@
 #include <Util/DumpMode.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <QueryExecutionConfiguration.hpp>
-#include <StoreRegistry.hpp>
 
 namespace NES::QueryCompilation
 {
@@ -40,20 +39,12 @@ struct QueryCompilationRequest
 class QueryCompiler
 {
 public:
-    QueryCompiler(
-        QueryExecutionConfiguration defaultQueryExecution,
-        std::shared_ptr<StoreManager::StoreRegistry> storeRegistry,
-        StoreManager::StoreConfig defaultStoreConfig)
-        : defaultQueryExecution(std::move(defaultQueryExecution))
-        , storeRegistry(std::move(storeRegistry))
-        , defaultStoreConfig(std::move(defaultStoreConfig)) { };
+    explicit QueryCompiler(QueryExecutionConfiguration defaultQueryExecution) : defaultQueryExecution(std::move(defaultQueryExecution)) { };
 
     std::unique_ptr<CompiledQueryPlan> compileQuery(std::unique_ptr<QueryCompilationRequest> request);
 
 private:
     QueryExecutionConfiguration defaultQueryExecution;
-    std::shared_ptr<StoreManager::StoreRegistry> storeRegistry;
-    StoreManager::StoreConfig defaultStoreConfig;
 };
 
 }

@@ -16,12 +16,19 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Util/Pointers.hpp>
+
+namespace NES::StoreManager
+{
+class StoreRegistry;
+}
 
 namespace NES
 {
@@ -58,6 +65,10 @@ public:
     [[nodiscard]] virtual uint64_t getNumberOfWorkerThreads() const = 0;
     [[nodiscard]] virtual std::shared_ptr<AbstractBufferProvider> getBufferManager() const = 0;
     [[nodiscard]] virtual PipelineId getPipelineId() const = 0;
+
+    /// This worker's replay stores, empty on a worker without any. Worker-scoped like the buffer manager above; an
+    /// operator handler resolves its store from it when the pipeline starts.
+    [[nodiscard]] virtual OptionalRef<StoreManager::StoreRegistry> getStoreRegistry() const { return std::nullopt; }
 
     /// TODO #30 Remove OperatorHandler from the pipeline execution context
     virtual std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& getOperatorHandlers() = 0;

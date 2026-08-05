@@ -19,7 +19,7 @@
 #include <unordered_map>
 
 #include <DataTypes/Schema.hpp>
-#include <Runtime/BufferManager.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 #include <Util/Registry.hpp>
 #include <Store.hpp>
 
@@ -32,7 +32,7 @@ struct StoreTypeRegistryArguments
 {
     Schema schema;
     std::unordered_map<std::string, std::string> config;
-    std::shared_ptr<BufferManager> bufferManager;
+    std::shared_ptr<AbstractBufferProvider> bufferProvider; /// Supplied at runtime by component that materialises the store
 };
 
 class StoreTypeRegistry : public BaseRegistry<StoreTypeRegistry, std::string, StoreTypeRegistryReturnType, StoreTypeRegistryArguments>

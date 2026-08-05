@@ -24,7 +24,7 @@
 #include <vector>
 
 #include <DataTypes/Schema.hpp>
-#include <Runtime/BufferManager.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <FlushPolicy.hpp>
@@ -55,12 +55,13 @@ public:
     };
 
     /// Standalone constructor (no chaining).
-    MemoryStore(const Schema& schema, std::shared_ptr<BufferManager> bufferManager);
-    MemoryStore(const Schema& schema, Config config, std::shared_ptr<BufferManager> bufferManager);
+    MemoryStore(const Schema& schema, std::shared_ptr<AbstractBufferProvider> bufferManager);
+    MemoryStore(const Schema& schema, Config config, std::shared_ptr<AbstractBufferProvider> bufferManager);
 
     /// Chained constructor: this store flushes to nextLevel when the policy triggers.
     /// The transformation is validated at construction to ensure the store pair is compatible.
-    MemoryStore(const Schema& schema, Config config, std::shared_ptr<BufferManager> bufferManager, Store nextLevel, FlushPolicy policy);
+    MemoryStore(
+        const Schema& schema, Config config, std::shared_ptr<AbstractBufferProvider> bufferManager, Store nextLevel, FlushPolicy policy);
 
     void open();
     void close(Store& self);
@@ -87,7 +88,7 @@ private:
 
     Schema schema;
     Config config;
-    std::shared_ptr<BufferManager> bufferManager;
+    std::shared_ptr<AbstractBufferProvider> bufferManager;
     std::deque<TimedBuffer> buffers;
     uint64_t currentSize{0};
     mutable std::shared_mutex mutex;

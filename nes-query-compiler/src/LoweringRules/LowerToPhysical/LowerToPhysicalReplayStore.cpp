@@ -18,9 +18,9 @@
 #include <memory>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <Configurations/Descriptor.hpp>
+#include <DataTypes/Schema.hpp>
 #include <Functions/FunctionProvider.hpp>
 #include <Interface/BufferRef/LowerSchemaProvider.hpp>
 #include <LoweringRules/AbstractLoweringRule.hpp>
@@ -35,7 +35,6 @@
 #include <ReplayStoreOperatorHandler.hpp>
 #include <ReplayStorePhysicalOperator.hpp>
 #include <StoreRegistry.hpp>
-#include <DataTypes/Schema.hpp>
 
 namespace NES
 {
@@ -67,81 +66,39 @@ size_t parseSizeString(const std::string& s)
     throw InvalidConfigParameter("Cannot parse size string: '{}'", s);
 }
 
-/// Rejects a malformed store chain before it reaches the registry, which only asserts on it.
-///
-/// The value comes either from a query's SET(...) or from the worker's replay configuration — both user input. Letting
-/// it through would abort the worker on an assertion instead of failing the one query that asked for it.
-void validateStoreOrder(const std::string& storeOrder)
+/// Only what this query configured for itself. Whatever stays unset is filled in by the worker's replay defaults when
+/// the store is materialised. The store operator's parameters default to empty/zero precisely so "the query said
+/// nothing" stays distinguishable from "the query said this".
+StoreManager::StoreConfig readStoreOverrides(const Descriptor& logicalCfg)
 {
-    std::string_view remaining{storeOrder};
-    while (!remaining.empty())
-    {
-        const auto separator = remaining.find("->");
-        const auto name = remaining.substr(0, separator);
-        if (name != "MemoryStore" && name != "FileStore")
-        {
-            throw InvalidConfigParameter(
-                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore, or MemoryStore->FileStore",
-                name,
-                storeOrder);
-        }
-        if (separator == std::string_view::npos)
-        {
-            return;
-        }
-        remaining.remove_prefix(separator + 2);
-    }
-    throw InvalidConfigParameter("Store order must not be empty");
-}
-
-/// Materialise the store on this worker if it has not been already. The catalog says a store with this name exists and
-/// what it holds; this is where the instance that actually holds the rows comes into being.
-void ensureStoreRegistered(
-    StoreManager::StoreRegistry& storeRegistry,
-    const std::string& storeName,
-    const Schema& outputSchema,
-    const Descriptor& logicalCfg,
-    const StoreManager::StoreConfig& defaults)
-{
-    if (storeRegistry.getStore(storeName).has_value())
-    {
-        return;
-    }
-
-    /// Build unqualified schema for the store.
-    Schema storeSchema;
-    for (const auto& field : outputSchema.getFields())
-    {
-        storeSchema.addField(field.getUnqualifiedName(), field.dataType);
-    }
-
-    /// Anything the query configured itself wins; whatever it left unset falls back to the worker's replay
-    /// configuration. The store operator's parameters default to empty/zero precisely so the two are distinguishable.
-    StoreManager::StoreConfig storeConfig = defaults;
+    StoreManager::StoreConfig overrides;
     if (const auto sizeStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MEMORY_BUFFER_SIZE);
         sizeStr.has_value() && !sizeStr->empty())
     {
-        storeConfig.memoryBufferSize = parseSizeString(*sizeStr);
+        overrides.memoryBufferSize = parseSizeString(*sizeStr);
     }
     if (const auto orderStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_ORDER);
         orderStr.has_value() && !orderStr->empty())
     {
-        storeConfig.storeOrder = *orderStr;
+        overrides.storeOrder = *orderStr;
     }
     if (const auto maxBuf = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MAX_BUFFER_COUNT);
         maxBuf.has_value() && *maxBuf > 0)
     {
-        storeConfig.maxBufferCount = maxBuf;
+        overrides.maxBufferCount = maxBuf;
     }
+    return overrides;
+}
 
-    if (storeConfig.storeOrder.has_value())
+/// The store records field names without their source qualifier.
+Schema unqualify(const Schema& schema)
+{
+    Schema storeSchema;
+    for (const auto& field : schema.getFields())
     {
-        validateStoreOrder(*storeConfig.storeOrder);
+        storeSchema.addField(field.getUnqualifiedName(), field.dataType);
     }
-
-    std::stringstream schemaStream;
-    schemaStream << storeSchema;
-    storeRegistry.registerConfiguredStore(storeName, storeSchema, schemaStream.str(), storeConfig);
+    return storeSchema;
 }
 }
 
@@ -156,27 +113,28 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
 
     const auto outputSchema = logicalOperator.getOutputSchema();
 
-    PRECONDITION(storeRegistry != nullptr, "Lowering a replay store needs the worker's store registry");
     PRECONDITION(!storeName.empty(), "Store '{}' was not named; StoreRegistrationRule must run before lowering", storeName);
-
-    /// Register the store on-demand if it hasn't been registered yet.
-    ensureStoreRegistered(*storeRegistry, storeName, outputSchema, logicalCfg, defaultStoreConfig);
-
-    auto registeredStore = storeRegistry->getStore(storeName);
-    PRECONDITION(registeredStore.has_value(), "Store '{}' must be registered before lowering", storeName);
 
     const auto physicalFunction = QueryCompilation::FunctionProvider::lowerFunction(storeOp->tsExtractionFunction);
     EventTimeFunction timeFunction(physicalFunction, storeOp->unit);
+
+    /// The store itself is materialised on the worker when the pipeline starts; lowering only records what to build.
+    auto storeSchema = unqualify(outputSchema);
+    std::stringstream schemaStream;
+    schemaStream << storeSchema;
 
     ReplayStoreOperatorHandler::Config handlerCfg{
         .storeName = storeName,
         .schema = outputSchema,
         .unit = storeOp->unit,
         .onField = storeOp->tsExtractionFunction,
+        .storeSchema = storeSchema,
+        .schemaText = schemaStream.str(),
+        .storeOverrides = readStoreOverrides(logicalCfg),
     };
 
     auto handlerId = getNextOperatorHandlerId();
-    auto handler = std::make_shared<ReplayStoreOperatorHandler>(std::move(handlerCfg), std::move(*registeredStore));
+    auto handler = std::make_shared<ReplayStoreOperatorHandler>(std::move(handlerCfg));
 
     const auto inputSchema = logicalOperator.getInputSchemas()[0];
     const auto memoryLayoutTypeTrait = logicalOperator.getTraitSet().tryGet<MemoryLayoutTypeTrait>();
@@ -201,7 +159,7 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
 std::unique_ptr<AbstractLoweringRule>
 LoweringRuleGeneratedRegistrar::RegisterReplayStoreLoweringRule(LoweringRuleRegistryArguments argument) /// NOLINT
 {
-    return std::make_unique<LowerToPhysicalReplayStore>(argument.conf, argument.storeRegistry, argument.defaultStoreConfig);
+    return std::make_unique<LowerToPhysicalReplayStore>(argument.conf);
 }
 
 }
