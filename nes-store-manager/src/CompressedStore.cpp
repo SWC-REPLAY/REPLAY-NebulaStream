@@ -15,10 +15,14 @@
 #include <CompressedStore.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <ctime>
+#include <iomanip>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -29,8 +33,28 @@
 namespace NES::StoreManager
 {
 
+namespace
+{
+/// Distinct filename prefix from FileStore's ("replay_") — a FileStore and a
+/// CompressedStore chained together share the same storeName/storeDir, so they
+/// must not collide on the same generated path.
+std::string generateFilePath(const CompressedStore::Config& cfg)
+{
+    const auto now = std::chrono::system_clock::now();
+    const auto timeT = std::chrono::system_clock::to_time_t(now);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::ostringstream ts;
+    ts << std::put_time(std::localtime(&timeT), "%Y%m%d_%H%M%S") << '_' << std::setfill('0') << std::setw(3) << ms.count();
+    return cfg.storeDir + "/compressed_" + cfg.storeName + "_" + ts.str() + ".bin";
+}
+}
+
 CompressedStore::CompressedStore(Config cfg, const Schema& schemaIn)
-    : config(std::move(cfg)), schema(schemaIn), codec(config.codec, config.compressionLevel)
+    : config(std::move(cfg))
+    , schema(schemaIn)
+    , codec(config.codec, config.compressionLevel)
+    , filePath(generateFilePath(config))
+    , writer(BinaryStoreWriter::Config{.storeName = config.storeName, .filePath = filePath, .schemaText = config.schemaText})
 {
     activeBuffer.reserve(config.segmentSize);
 }
@@ -39,6 +63,8 @@ CompressedStore::CompressedStore(Config cfg, const Schema& schemaIn, Store next,
     : config(std::move(cfg))
     , schema(schemaIn)
     , codec(config.codec, config.compressionLevel)
+    , filePath(generateFilePath(config))
+    , writer(BinaryStoreWriter::Config{.storeName = config.storeName, .filePath = filePath, .schemaText = config.schemaText})
     , nextLevel(std::move(next))
     , flushPolicy(policy)
 {
@@ -57,6 +83,11 @@ void CompressedStore::open()
 {
     {
         const std::unique_lock lock(mutex);
+        fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
+        fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
+        writer.open();
+        writer.ensureHeader();
+        writerOpened = true;
         opened = true;
     }
     if (nextLevel)
@@ -150,7 +181,22 @@ void CompressedStore::sealActiveSegment()
     header.compressedBytes = payload.size();
     header.codecId = codec.getTypeId();
 
-    segments.push_back(CompressedSegment{.header = header, .payload = std::move(payload)});
+    /// Write [header][compressed payload] to disk; keep only the header in memory.
+    const uint64_t offset = writer.size();
+    const auto headerBytes = serializeSegmentHeader(header);
+    writer.append(headerBytes.data(), headerBytes.size());
+    writer.append(payload.data(), payload.size());
+    segments.push_back(SegmentIndexEntry{.offset = offset, .header = header});
+
+    if (activeMinTs.getRawValue() != Timestamp::INVALID_VALUE && activeMinTs < fileMinTs)
+    {
+        fileMinTs = activeMinTs;
+    }
+    if (activeMaxTs.getRawValue() != Timestamp::INITIAL_VALUE && activeMaxTs > fileMaxTs)
+    {
+        fileMaxTs = activeMaxTs;
+    }
+    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
 
     activeBuffer.clear();
     activeMinTs = Timestamp(Timestamp::INVALID_VALUE);
@@ -180,6 +226,11 @@ void CompressedStore::close(Store& self)
     {
         const std::unique_lock lock(mutex);
         sealActiveSegment();
+        if (writerOpened)
+        {
+            writer.close();
+            writerOpened = false;
+        }
         opened = false;
     }
     /// If chained, hand the freshly sealed data downstream before closing.
@@ -250,8 +301,13 @@ uint64_t CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, co
             continue;
         }
 
-        const std::vector<uint8_t> raw
-            = codec.decompress(seg.payload.data(), seg.header.compressedBytes, seg.header.uncompressedBytes);
+        /// Segment survived pruning — read just its compressed payload off disk.
+        std::vector<uint8_t> compressed(seg.header.compressedBytes);
+        const auto payloadOffset = seg.offset + SEGMENT_HEADER_BYTES;
+        const ssize_t got = writer.readAt(compressed.data(), seg.header.compressedBytes, payloadOffset);
+        PRECONDITION(got == static_cast<ssize_t>(seg.header.compressedBytes), "Short read of compressed segment payload");
+
+        const std::vector<uint8_t> raw = codec.decompress(compressed.data(), seg.header.compressedBytes, seg.header.uncompressedBytes);
         const uint64_t numTuples = seg.header.rowCount;
 
         /// Whole segment in range -> copy all rows.
@@ -328,6 +384,7 @@ uint64_t CompressedStore::size() const
 void CompressedStore::removeFile()
 {
     const std::unique_lock lock(mutex);
+    writer.removeFile();
     segments.clear();
     activeBuffer.clear();
     activeRowCount = 0;

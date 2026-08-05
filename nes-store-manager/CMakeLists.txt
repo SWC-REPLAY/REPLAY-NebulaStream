@@ -13,12 +13,20 @@
 # include registrar generation functions
 include(${PROJECT_SOURCE_DIR}/cmake/PluginRegistrationUtil.cmake)
 
+find_package(zstd CONFIG REQUIRED)
+find_package(Snappy CONFIG REQUIRED)
+
 add_subdirectory(src)
 get_source(nes-store-manager NES_STORE_MANAGER_SOURCE_FILES)
 
-add_library(nes-store-manager ${NES_STORE_MANAGER_SOURCE_FILES})
+add_library(nes-store-manager ${NES_STORE_MANAGER_SOURCE_FILES}
+        include/CompressedStore.hpp
+        src/CompressedStore.cpp
+)
 
 target_link_libraries(nes-store-manager PUBLIC nes-common nes-data-types nes-memory)
+target_link_libraries(nes-store-manager PRIVATE zstd::libzstd_shared)
+target_link_libraries(nes-store-manager PRIVATE Snappy::snappy)
 target_compile_definitions(nes-store-manager PRIVATE STORE_MANAGER_WORKING_DIR="${CMAKE_CURRENT_BINARY_DIR}/working-dir/")
 target_include_directories(nes-store-manager PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

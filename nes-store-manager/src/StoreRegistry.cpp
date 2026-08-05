@@ -31,6 +31,7 @@
 #include <DataTypes/Schema.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <CompressedStore.hpp>
 #include <ErrorHandling.hpp>
 #include <FileStore.hpp>
 #include <FlushPolicy.hpp>
@@ -72,10 +73,10 @@ std::vector<std::string> parseStoreOrder(const std::string& storeOrder)
 
     for (const auto& name : storeNames)
     {
-        if (name != "MemoryStore" && name != "FileStore")
+        if (name != "MemoryStore" && name != "FileStore" && name != "CompressedStore")
         {
             throw InvalidConfigParameter(
-                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore, or MemoryStore->FileStore",
+                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore or CompressedStore, chained with '->'",
                 name,
                 storeOrder);
         }
@@ -125,10 +126,42 @@ Store StoreRegistry::getOrCreateStore(
     const auto storeDir = generateStoreDir(storeName);
 
     /// Build the store chain bottom-up (last in the order is the tail).
-    /// Supported chains: "MemoryStore->FileStore", "MemoryStore", "FileStore"
+    /// Supported chains: "MemoryStore->FileStore->CompressedStore", "MemoryStore->FileStore",
+    /// "FileStore->CompressedStore", "MemoryStore", "FileStore", "CompressedStore"
     const bool hasMemoryStore = std::ranges::find(storeNames, "MemoryStore") != storeNames.end();
     const bool hasFileStore = std::ranges::find(storeNames, "FileStore") != storeNames.end();
+    const bool hasCompressedStore = std::ranges::find(storeNames, "CompressedStore") != storeNames.end();
 
+    if (hasMemoryStore && hasFileStore && hasCompressedStore)
+    {
+        auto memoryToFile = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
+        PRECONDITION(memoryToFile.has_value(), "No transformation registered for 'MemoryStore' -> 'FileStore'");
+        auto fileToCompressed = StoreTransformationRegistry::instance().findTransformation("FileStore", "CompressedStore");
+        PRECONDITION(fileToCompressed.has_value(), "No transformation registered for 'FileStore' -> 'CompressedStore'");
+
+        auto compressedStore = makeStore<CompressedStore>(
+            CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+
+        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
+        const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
+        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+
+        auto fileStore = makeStore<FileStore>(
+            FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText},
+            schema,
+            std::move(compressedStore),
+            *fileToCompressed,
+            policy);
+
+        auto headStore = makeStore<MemoryStore>(
+            schema,
+            MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
+            bufferProvider,
+            std::move(fileStore),
+            policy);
+
+        return stores.emplace(storeName, headStore).first->second;
+    }
     if (hasMemoryStore && hasFileStore)
     {
         auto transformation = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
@@ -150,12 +183,38 @@ Store StoreRegistry::getOrCreateStore(
 
         return stores.emplace(storeName, headStore).first->second;
     }
+    if (hasFileStore && hasCompressedStore)
+    {
+        auto transformation = StoreTransformationRegistry::instance().findTransformation("FileStore", "CompressedStore");
+        PRECONDITION(transformation.has_value(), "No transformation registered for 'FileStore' -> 'CompressedStore'");
+
+        auto compressedStore = makeStore<CompressedStore>(
+            CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+
+        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
+        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+
+        auto headStore = makeStore<FileStore>(
+            FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText},
+            schema,
+            std::move(compressedStore),
+            *transformation,
+            policy);
+
+        return stores.emplace(storeName, headStore).first->second;
+    }
     if (hasMemoryStore)
     {
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
         auto headStore = makeStore<MemoryStore>(
             schema, MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount}, bufferProvider);
+        return stores.emplace(storeName, headStore).first->second;
+    }
+    if (hasCompressedStore)
+    {
+        auto headStore = makeStore<CompressedStore>(
+            CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
         return stores.emplace(storeName, headStore).first->second;
     }
     auto headStore

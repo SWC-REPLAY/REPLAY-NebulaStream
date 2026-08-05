@@ -111,12 +111,18 @@ void FileStore::close([[maybe_unused]] Store& self)
 
 void FileStore::flush([[maybe_unused]] Store& self)
 {
+
+        if (nextLevel && transformation)
+        {
+            transformation->execute(self, *nextLevel);   // drain me into the next tier
+            nextLevel->flush();
+        }
     /// BinaryStoreWriter uses pwrite which is immediately durable after fsync.
     /// A full flush is performed on close().
-    if (nextLevel)
+    /*if (nextLevel)
     {
         nextLevel->flush();
-    }
+    }*/
 }
 
 void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, [[maybe_unused]] Store& self)
@@ -144,6 +150,12 @@ void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Time
 
     NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
     writer.append(recordData, recordSize);
+
+    /// Check flush policy and flush to next level if triggered (mirrors MemoryStore::writeRecord).
+    if (flushPolicy && flushPolicy->shouldFlush(writer.size() - dataStartOffset))
+    {
+        flush(self);
+    }
 }
 
 void FileStore::appendRawBytes(const uint8_t* data, const size_t len)
@@ -217,7 +229,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     if (nextLevel)
     {
         NES_DEBUG("Checking if next level has data to be read");
-        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range); nextLevelRead == 0)
+        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range); nextLevelRead != 0)
         {
             return nextLevelRead;
         }
@@ -309,6 +321,31 @@ uint64_t FileStore::size() const
 void FileStore::removeFile()
 {
     writer.removeFile();
+}
+
+FileStore::DrainedData FileStore::drain()
+{
+    std::unique_lock lock(mutex);
+
+    DrainedData out;
+    out.minTs = fileMinTs;
+    out.maxTs = fileMaxTs;
+
+    const uint64_t tail = writer.size();
+    if (tail > dataStartOffset)
+    {
+        const uint64_t len = tail - dataStartOffset;
+        out.bytes.resize(len);
+        const ssize_t got = writer.readAt(out.bytes.data(), len, dataStartOffset);
+        out.bytes.resize(got > 0 ? static_cast<size_t>(got) : 0);
+    }
+
+    /// Let go of the data: cut the file back to the header, reset the ts range.
+    writer.truncateTo(dataStartOffset);
+    fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
+    fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
+
+    return out;
 }
 
 uint32_t FileStore::calculateRowWidth(const Schema& schema)

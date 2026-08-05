@@ -217,6 +217,7 @@
                 pkgs.highs
                 pkgs.openssl.dev
                 pkgs.zstd.dev
+                pkgs.snappy
                 pkgs.zlib.dev
                 pkgs.libdwarf.dev
                 pkgs.libffi

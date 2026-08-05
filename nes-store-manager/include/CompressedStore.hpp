@@ -25,6 +25,7 @@
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
+#include <BinaryStoreWriter.hpp>
 #include <CompressedSegmentFormat.hpp>
 #include <CompressionCodec.hpp>
 #include <FlushPolicy.hpp>
@@ -35,7 +36,9 @@
 namespace NES::StoreManager
 {
 
-/// Lossless, segment-based, compressed store. A full peer of MemoryStore/FileStore:
+/// Lossless, segment-based, compressed store, backed by a file on disk (one
+/// [SegmentHeader][compressed bytes] record per sealed segment, per
+/// CompressedSegmentFormat.hpp). A full peer of MemoryStore/FileStore:
 /// it can RECEIVE data from a prior layer (via a transformation calling
 /// appendRawBytes) and CHAIN to a next layer (flush forwards downstream), with the
 /// same method duties as MemoryStore.
@@ -96,6 +99,8 @@ public:
 
     void removeFile();
 
+    [[nodiscard]] const std::string& getFilePath() const { return filePath; }
+
     /// ---- bulk ingest from a prior layer (used by a transformation) ---------
     /// Mirrors FileStore::appendRawBytes / updateFileTimestamps.
     void appendRawBytes(const uint8_t* data, size_t len);
@@ -107,18 +112,21 @@ public:
     [[nodiscard]] uint64_t debugSegmentCount() const;
 
 private:
-    /// One sealed, compressed segment: metadata header + compressed bytes.
-    struct CompressedSegment
+    /// Points at one sealed segment already written to disk: its file offset
+    /// (of the SegmentHeader) plus the header itself, so read() can prune by
+    /// timestamp range and know exactly where/how much to pread, without
+    /// holding any compressed payload bytes in memory.
+    struct SegmentIndexEntry
     {
+        uint64_t offset;
         SegmentHeader header;
-        std::vector<uint8_t> payload;
     };
 
-    /// Compress the active buffer into a segment and reset it.
+    /// Compress the active buffer, write [header][payload] to disk, and reset it.
     /// PRECONDITION: the caller already holds `mutex` (unique lock).
     void sealActiveSegment();
 
-    /// Total bytes currently stored (compressed segments + pending buffer).
+    /// Total bytes currently stored (sealed segments' compressed size + pending buffer).
     /// PRECONDITION: the caller already holds `mutex`.
     [[nodiscard]] uint64_t currentSizeLocked() const;
 
@@ -132,8 +140,15 @@ private:
     Timestamp activeMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
     uint64_t activeRowCount{0};
 
-    /// Sealed, compressed segments (held in memory in this version).
-    std::vector<CompressedSegment> segments;
+    /// On-disk backing file for sealed segments.
+    std::string filePath;
+    BinaryStoreWriter writer;
+    bool writerOpened{false};
+    Timestamp fileMinTs{Timestamp(Timestamp::INVALID_VALUE)};
+    Timestamp fileMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
+
+    /// Lightweight index of sealed segments (headers only — payload lives on disk).
+    std::vector<SegmentIndexEntry> segments;
 
     bool opened{false};
     mutable std::shared_mutex mutex;

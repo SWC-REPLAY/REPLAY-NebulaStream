@@ -18,8 +18,13 @@ add_source_files(nes-store-manager
         MemoryStore.cpp
         FileStore.cpp
         MemoryToFileTransformation.cpp
+        CompressionCodec.cpp
+        CompressedStore.cpp
+        FileToCompressedTransformation.cpp
 )
 
 add_plugin(MemoryStore StoreType MemoryStore.cpp)
 add_plugin(FileStore StoreType FileStore.cpp)
 add_plugin(MemoryStore_to_FileStore StoreTransformation MemoryToFileTransformation.cpp)
+add_plugin(FileStore_to_CompressedStore StoreTransformation FileToCompressedTransformation.cpp)
+

@@ -159,4 +159,17 @@ ssize_t BinaryStoreWriter::readAt(void* dest, size_t len, uint64_t offset) const
     return ::pread(fd, dest, len, static_cast<off_t>(offset));
 }
 
+void BinaryStoreWriter::truncateTo(uint64_t offset)
+{
+    if (fd < 0)
+    {
+        return;
+    }
+    if (::ftruncate(fd, static_cast<off_t>(offset)) != 0)
+    {
+        throw CannotOpenSink("ftruncate failed: errno={} {}", errno, std::strerror(errno));
+    }
+    tail.store(offset, std::memory_order_relaxed);
+}
+
 }

@@ -45,6 +45,14 @@ public:
         std::string schemaText;
     };
 
+
+    struct DrainedData
+    {
+        std::vector<uint8_t> bytes;
+        Timestamp minTs{Timestamp(Timestamp::INVALID_VALUE)};
+        Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
+    };
+
     /// Standalone constructor (no chaining).
     explicit FileStore(Config config, const Schema& schema);
 
@@ -83,6 +91,11 @@ public:
 
     /// Calculate packed row width from schema (no padding, matching binary format).
     static uint32_t calculateRowWidth(const Schema& schema);
+
+    /// Read all rows out of the file, then truncate it back to just the header.
+    /// The store is left empty (data has moved to the next tier).
+    [[nodiscard]] DrainedData drain();
+
 
 private:
     Config config;

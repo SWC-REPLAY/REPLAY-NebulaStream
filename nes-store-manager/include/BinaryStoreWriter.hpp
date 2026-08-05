@@ -62,6 +62,9 @@ public:
     /// Read up to `len` bytes from file offset `offset` into `dest` using pread (thread-safe).
     ssize_t readAt(void* dest, size_t len, uint64_t offset) const;
 
+    /// Shrink the file to `offset` bytes and move the write frontier back to it.
+    void truncateTo(uint64_t offset);
+
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }
 
     [[nodiscard]] uint64_t size() const { return tail.load(std::memory_order_relaxed); }
