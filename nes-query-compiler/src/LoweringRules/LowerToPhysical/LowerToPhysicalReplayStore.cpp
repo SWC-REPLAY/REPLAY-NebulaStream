@@ -125,9 +125,6 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
 
     ReplayStoreOperatorHandler::Config handlerCfg{
         .storeName = storeName,
-        .schema = outputSchema,
-        .unit = storeOp->unit,
-        .onField = storeOp->tsExtractionFunction,
         .storeSchema = storeSchema,
         .schemaText = schemaStream.str(),
         .storeOverrides = readStoreOverrides(logicalCfg),

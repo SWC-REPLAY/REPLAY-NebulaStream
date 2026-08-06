@@ -132,16 +132,10 @@ void MemoryStore::flush(Store& self)
     }
 }
 
-void MemoryStore::writeRecord(
-    const uint8_t* recordData, const uint32_t recordSize, const Timestamp ts, const Schema& writeSchema, Store& self)
+void MemoryStore::writeRecord(const uint8_t* recordData, const uint32_t recordSize, const Timestamp ts, Store& self)
 {
     std::unique_lock lock(mutex);
     PRECONDITION(opened, "MemoryStore must be opened before writing");
-    /// Update schema from the write-time schema which has resolved types
-    if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
-    {
-        schema = writeSchema;
-    }
 
     /// Allocate an active buffer if we don't have one yet
     if (!activeBuffer.has_value())

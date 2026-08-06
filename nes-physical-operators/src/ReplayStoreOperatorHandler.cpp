@@ -59,7 +59,7 @@ void ReplayStoreOperatorHandler::writeRecord(const uint8_t* data, uint32_t size,
 {
     PRECONDITION(store.has_value(), "Store '{}' must be materialised by start() before records are written", config.storeName);
     NES_DEBUG("ReplayStoreOperatorHandler::writeRecord: size={}, ts={}, store={}", size, ts, config.storeName);
-    store->writeRecord(data, size, ts, config.schema);
+    store->writeRecord(data, size, ts);
 }
 
 }

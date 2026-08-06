@@ -55,7 +55,7 @@ concept StoreConcept = requires(
     { store.flush(self) };
 
     /// Write a single record to the store
-    { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), schema, self) } -> std::same_as<void>;
+    { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), self) } -> std::same_as<void>;
 
     /// Read data into a TupleBuffer within the given time range, return number of rows written
     { store.read(bufferRef, schema, TimeRange{}) } -> std::convertible_to<uint64_t>;
@@ -84,7 +84,7 @@ struct ErasedStore
     virtual void open() = 0;
     virtual void close(Store& self) = 0;
     virtual void flush(Store& self) = 0;
-    virtual void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self) = 0;
+    virtual void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self) = 0;
     [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) = 0;
     [[nodiscard]] virtual bool hasMore() const = 0;
     [[nodiscard]] virtual Schema getSchema() const = 0;
@@ -110,9 +110,9 @@ struct StoreModel final : ErasedStore
 
     void flush(Store& self) override { impl.flush(self); }
 
-    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema, Store& self) override
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self) override
     {
-        impl.writeRecord(recordData, recordSize, ts, schema, self);
+        impl.writeRecord(recordData, recordSize, ts, self);
     }
 
     [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) override
@@ -211,10 +211,10 @@ struct TypedStore
         self->flush(selfStore);
     }
 
-    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& schema)
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts)
     {
         Store selfStore(self);
-        self->writeRecord(recordData, recordSize, ts, schema, selfStore);
+        self->writeRecord(recordData, recordSize, ts, selfStore);
     }
 
     [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range)

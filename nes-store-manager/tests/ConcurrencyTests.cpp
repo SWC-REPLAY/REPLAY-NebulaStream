@@ -120,7 +120,7 @@ protected:
             for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
             {
                 packRecord(record.data(), writerId, (nextTs * VALUE_TS_MULTIPLIER) + writerId, nextTs);
-                store.writeRecord(record.data(), recordSize, Timestamp(nextTs), schema);
+                store.writeRecord(record.data(), recordSize, Timestamp(nextTs));
                 ++nextTs;
             }
             totalWritten.fetch_add(TUPLES_PER_BATCH, std::memory_order_relaxed);

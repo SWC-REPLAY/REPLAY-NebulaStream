@@ -19,8 +19,6 @@
 #include <string>
 
 #include <DataTypes/Schema.hpp>
-#include <DataTypes/TimeUnit.hpp>
-#include <Functions/LogicalFunction.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <Time/Timestamp.hpp>
@@ -37,9 +35,6 @@ public:
     struct Config
     {
         std::string storeName;
-        Schema schema;
-        Windowing::TimeUnit unit;
-        LogicalFunction onField;
         /// Unqualified schema the store records, and its rendered form for the store header.
         Schema storeSchema;
         std::string schemaText;

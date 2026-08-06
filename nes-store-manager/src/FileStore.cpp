@@ -119,8 +119,7 @@ void FileStore::flush([[maybe_unused]] Store& self)
     }
 }
 
-void FileStore::writeRecord(
-    const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, [[maybe_unused]] Store& self)
+void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, [[maybe_unused]] Store& self)
 {
     Timestamp currentMin{Timestamp(Timestamp::INVALID_VALUE)};
     Timestamp currentMax{Timestamp(Timestamp::INITIAL_VALUE)};
@@ -128,11 +127,6 @@ void FileStore::writeRecord(
         const std::unique_lock lock(mutex);
         PRECONDITION(writerOpened, "FileStore must be opened before writing");
         PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
-        /// Update schema from the write-time schema which has resolved types
-        if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
-        {
-            schema = writeSchema;
-        }
 
         if (ts < fileMinTs)
         {
