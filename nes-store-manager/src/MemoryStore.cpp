@@ -138,27 +138,22 @@ void MemoryStore::writeRecord(const uint8_t* recordData, const uint32_t recordSi
     PRECONDITION(opened, "MemoryStore must be opened before writing");
 
     /// Allocate an active buffer if we don't have one yet
-    if (!activeBuffer.has_value())
-    {
-        allocateActiveBuffer();
-    }
+    auto* active = activeBuffer.has_value() ? &activeBuffer.value() : &allocateActiveBuffer();
 
     /// Check if the active buffer has space for this record
-    auto& active = *activeBuffer;
-    const auto bufferSize = active.buffer.getBufferSize();
+    const auto bufferSize = active->buffer.getBufferSize();
     if (activeWriteOffset + recordSize > bufferSize)
     {
         /// Seal the active buffer and push to completed deque
-        active.buffer.setNumberOfTuples(activeWriteOffset / recordSize);
+        active->buffer.setNumberOfTuples(activeWriteOffset / recordSize);
         currentSize += bufferSize;
-        buffers.push_back(std::move(active));
+        buffers.push_back(std::move(*active));
 
         /// Wraparound: evict oldest buffers when the ring is full
         while (buffers.size() > config.maxBufferCount)
         {
             if (nextLevel && transformation)
             {
-                /// Flush all buffers to the next level before evicting
                 lock.unlock();
                 flush(self);
                 lock.lock();
@@ -170,23 +165,22 @@ void MemoryStore::writeRecord(const uint8_t* recordData, const uint32_t recordSi
             }
         }
 
-        allocateActiveBuffer();
+        active = &allocateActiveBuffer();
     }
 
     /// Copy record into active buffer
-    auto& buf = activeBuffer.value();
-    auto destSpan = buf.buffer.getAvailableMemoryArea<uint8_t>();
+    auto destSpan = active->buffer.getAvailableMemoryArea<uint8_t>();
     std::memcpy(destSpan.subspan(activeWriteOffset, recordSize).data(), recordData, recordSize);
     activeWriteOffset += recordSize;
 
     /// Update active buffer's min/max timestamps
-    if (ts < buf.minTs)
+    if (ts < active->minTs)
     {
-        buf.minTs = ts;
+        active->minTs = ts;
     }
-    if (ts > buf.maxTs)
+    if (ts > active->maxTs)
     {
-        buf.maxTs = ts;
+        active->maxTs = ts;
     }
 
     /// Check flush policy and flush to next level if triggered
@@ -197,12 +191,13 @@ void MemoryStore::writeRecord(const uint8_t* recordData, const uint32_t recordSi
     }
 }
 
-void MemoryStore::allocateActiveBuffer()
+TimedBuffer& MemoryStore::allocateActiveBuffer()
 {
     auto tb = bufferManager->getBufferBlocking();
     activeBuffer
         = TimedBuffer{.buffer = std::move(tb), .minTs = Timestamp(Timestamp::INVALID_VALUE), .maxTs = Timestamp(Timestamp::INITIAL_VALUE)};
     activeWriteOffset = 0;
+    return *activeBuffer;
 }
 
 namespace

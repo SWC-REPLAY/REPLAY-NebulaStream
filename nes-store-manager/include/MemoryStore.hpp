@@ -83,8 +83,7 @@ public:
     std::vector<TimedBuffer> drain();
 
 private:
-    /// Allocate a new TupleBuffer from the BufferManager and set it as the active buffer.
-    void allocateActiveBuffer();
+    TimedBuffer& allocateActiveBuffer();
 
     Schema schema;
     Config config;
