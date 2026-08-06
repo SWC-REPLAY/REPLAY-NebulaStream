@@ -100,7 +100,7 @@ void BinaryStoreWriter::ensureHeader()
         return;
     }
 
-    auto buf = serializeHeader(config.schemaText);
+    auto buf = serializeHeader(config.schemaText, HEADER_UNSET_TS, HEADER_UNSET_TS);
 
     const uint64_t off = tail.fetch_add(buf.size(), std::memory_order_relaxed);
     if (off != 0)

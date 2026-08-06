@@ -19,6 +19,7 @@
 #include <cstring>
 #include <fstream>
 #include <regex>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -30,6 +31,25 @@
 namespace NES
 {
 
+namespace
+{
+/// Copy `len` bytes from `src` into `dest` at `off`, advancing `off` past the copied bytes.
+void writeBytes(const std::span<char> dest, size_t& off, const void* src, const size_t len)
+{
+    std::memcpy(dest.subspan(off, len).data(), src, len);
+    off += len;
+}
+
+/// Read the raw bytes of a single trivially copyable header field from the stream.
+template <typename T>
+void readField(std::ifstream& ifs, T& field)
+{
+    std::array<char, sizeof(T)> raw{};
+    ifs.read(raw.data(), raw.size());
+    std::memcpy(&field, raw.data(), sizeof(T));
+}
+}
+
 std::string serializeHeader(const std::string& schemaText, uint64_t minTs, uint64_t maxTs)
 {
     const uint64_t fingerprint = fnv1a64(schemaText.c_str(), schemaText.size());
@@ -38,26 +58,19 @@ std::string serializeHeader(const std::string& schemaText, uint64_t minTs, uint6
     const size_t headerSize = HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaLen;
     std::string buf;
     buf.resize(headerSize);
+    const std::span bufSpan{buf};
     size_t off = 0;
 
-    std::memcpy(buf.data() + off, MAGIC.data(), MAGIC.size());
-    off += MAGIC.size();
-    std::memcpy(buf.data() + off, &VERSION, sizeof(uint32_t));
-    off += sizeof(uint32_t);
-    std::memcpy(buf.data() + off, &ENDIANNESS_LE, sizeof(uint8_t));
-    off += sizeof(uint8_t);
-    uint32_t flags = 0;
-    std::memcpy(buf.data() + off, &flags, sizeof(uint32_t));
-    off += sizeof(uint32_t);
-    std::memcpy(buf.data() + off, &fingerprint, sizeof(uint64_t));
-    off += sizeof(uint64_t);
-    std::memcpy(buf.data() + off, &minTs, sizeof(uint64_t));
-    off += sizeof(uint64_t);
-    std::memcpy(buf.data() + off, &maxTs, sizeof(uint64_t));
-    off += sizeof(uint64_t);
-    std::memcpy(buf.data() + off, &schemaLen, sizeof(uint32_t));
-    off += sizeof(uint32_t);
-    std::memcpy(buf.data() + off, schemaText.data(), schemaLen);
+    writeBytes(bufSpan, off, MAGIC.data(), MAGIC.size());
+    writeBytes(bufSpan, off, &VERSION, sizeof(uint32_t));
+    writeBytes(bufSpan, off, &ENDIANNESS_LE, sizeof(uint8_t));
+    const uint32_t flags = 0;
+    writeBytes(bufSpan, off, &flags, sizeof(uint32_t));
+    writeBytes(bufSpan, off, &fingerprint, sizeof(uint64_t));
+    writeBytes(bufSpan, off, &minTs, sizeof(uint64_t));
+    writeBytes(bufSpan, off, &maxTs, sizeof(uint64_t));
+    writeBytes(bufSpan, off, &schemaLen, sizeof(uint32_t));
+    writeBytes(bufSpan, off, schemaText.data(), schemaLen);
 
     return buf;
 }
@@ -73,13 +86,13 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
 
     FileHeader header;
     uint32_t schemaLen = 0;
-    ifs.read(reinterpret_cast<char*>(&header.version), sizeof(header.version));
-    ifs.read(reinterpret_cast<char*>(&header.endianness), sizeof(header.endianness));
-    ifs.read(reinterpret_cast<char*>(&header.flags), sizeof(header.flags));
-    ifs.read(reinterpret_cast<char*>(&header.fingerprint), sizeof(header.fingerprint));
-    ifs.read(reinterpret_cast<char*>(&header.minTs), sizeof(header.minTs));
-    ifs.read(reinterpret_cast<char*>(&header.maxTs), sizeof(header.maxTs));
-    ifs.read(reinterpret_cast<char*>(&schemaLen), sizeof(schemaLen));
+    readField(ifs, header.version);
+    readField(ifs, header.endianness);
+    readField(ifs, header.flags);
+    readField(ifs, header.fingerprint);
+    readField(ifs, header.minTs);
+    readField(ifs, header.maxTs);
+    readField(ifs, schemaLen);
     if (!ifs)
     {
         throw CannotOpenSink("Failed to read header fields");
