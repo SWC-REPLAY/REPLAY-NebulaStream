@@ -15,6 +15,8 @@
 
 #include <charconv>
 #include <concepts>
+#include <cstddef>
+#include <expected>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -158,5 +160,10 @@ std::vector<T> splitWithStringDelimiter(std::string_view inputString, std::strin
 
 /// Splits the given input string_view on all characters of the delimiters string_view.
 std::vector<std::string_view> splitOnMultipleDelimiters(std::string_view input, const std::vector<char>& delimiters);
+
+/// Parses a byte size such as "64", "64B", "64KB", "64MB" or "64GB" into a number of bytes. The suffix is
+/// case-sensitive and the multipliers are binary (1KB = 1024B). A missing suffix means bytes.
+/// Returns a message describing why the input could not be parsed instead of throwing.
+[[nodiscard]] std::expected<size_t, std::string> parseByteSize(std::string_view input);
 
 }

@@ -28,6 +28,7 @@
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Traits/MemoryLayoutTypeTrait.hpp>
+#include <Util/Strings.hpp>
 #include <Watermark/TimeFunction.hpp>
 #include <ErrorHandling.hpp>
 #include <LoweringRuleRegistry.hpp>
@@ -41,31 +42,6 @@ namespace NES
 
 namespace
 {
-/// Parse a size string like "64MB" into bytes.
-size_t parseSizeString(const std::string& s)
-{
-    size_t pos = 0;
-    const auto number = std::stoull(s, &pos);
-    const auto suffix = s.substr(pos);
-    if (suffix.empty() || suffix == "B")
-    {
-        return number;
-    }
-    if (suffix == "KB")
-    {
-        return number * 1024UZ;
-    }
-    if (suffix == "MB")
-    {
-        return number * 1024UZ * 1024UZ;
-    }
-    if (suffix == "GB")
-    {
-        return number * 1024UZ * 1024UZ * 1024UZ;
-    }
-    throw InvalidConfigParameter("Cannot parse size string: '{}'", s);
-}
-
 /// Only what this query configured for itself. Whatever stays unset is filled in by the worker's replay defaults when
 /// the store is materialised. The store operator's parameters default to empty/zero precisely so "the query said
 /// nothing" stays distinguishable from "the query said this".
@@ -75,7 +51,12 @@ StoreConfig readStoreOverrides(const Descriptor& logicalCfg)
     if (const auto sizeStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MEMORY_BUFFER_SIZE);
         sizeStr.has_value() && !sizeStr->empty())
     {
-        overrides.memoryBufferSize = parseSizeString(*sizeStr);
+        const auto parsed = parseByteSize(*sizeStr);
+        if (!parsed.has_value())
+        {
+            throw InvalidConfigParameter("Cannot parse memory buffer size '{}': {}", *sizeStr, parsed.error());
+        }
+        overrides.memoryBufferSize = *parsed;
     }
     if (const auto orderStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_ORDER);
         orderStr.has_value() && !orderStr->empty())
