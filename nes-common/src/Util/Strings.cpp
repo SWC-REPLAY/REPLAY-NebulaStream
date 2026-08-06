@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <expected>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -341,9 +342,10 @@ std::expected<size_t, std::string> parseByteSize(std::string_view input)
     const auto trimmed = trimWhiteSpaces(input);
 
     size_t value = 0;
-    const auto* const end = trimmed.data() + trimmed.size();
-    const auto [suffixStart, errorCode] = std::from_chars(trimmed.data(), end, value);
-    if (errorCode == std::errc::invalid_argument || suffixStart == trimmed.data())
+    const auto* const begin = std::to_address(trimmed.begin());
+    const auto* const end = std::to_address(trimmed.end());
+    const auto [suffixStart, errorCode] = std::from_chars(begin, end, value);
+    if (errorCode == std::errc::invalid_argument || suffixStart == begin)
     {
         return std::unexpected(fmt::format("'{}' does not start with a number", input));
     }
@@ -352,7 +354,7 @@ std::expected<size_t, std::string> parseByteSize(std::string_view input)
         return std::unexpected(fmt::format("'{}' is too large for a byte size", input));
     }
 
-    const std::string_view suffix{suffixStart, static_cast<size_t>(end - suffixStart)};
+    const auto suffix = trimmed.substr(static_cast<size_t>(suffixStart - begin));
     size_t multiplier = 1;
     if (suffix.empty() || suffix == "B")
     {
