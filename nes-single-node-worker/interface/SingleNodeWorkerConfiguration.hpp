@@ -22,6 +22,7 @@
 #include <Configurations/BaseOption.hpp>
 #include <Configurations/ScalarOption.hpp>
 #include <Configurations/Validation/EndpointValidation.hpp>
+#include <ReplayConfiguration.hpp>
 
 namespace NES
 {
@@ -57,5 +58,6 @@ protected:
 public:
     SingleNodeWorkerConfiguration() = default;
     WorkerConfiguration workerConfiguration = {"worker", "NodeEngine Configuration"};
+    ReplayConfiguration replayConfiguration = {"replay", "Replay store configuration"};
 };
 }

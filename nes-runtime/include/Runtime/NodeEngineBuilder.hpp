@@ -18,21 +18,29 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Listeners/StatisticListener.hpp>
 #include <Runtime/NodeEngine.hpp>
+#include <Util/Pointers.hpp>
 
 namespace NES
 {
+class StoreRegistry;
+
 /// Create instances of NodeEngine using the builder pattern.
 class NodeEngineBuilder
 {
 public:
     NodeEngineBuilder() = delete;
 
-    explicit NodeEngineBuilder(const WorkerConfiguration& workerConfiguration, std::shared_ptr<StatisticListener> statisticListener);
+    /// `storeRegistry` is borrowed from the worker and must outlive the engine this builds.
+    NodeEngineBuilder(
+        WorkerConfiguration workerConfiguration,
+        std::shared_ptr<StatisticListener> statisticsListener,
+        OptionalRef<StoreRegistry> storeRegistry);
 
     std::unique_ptr<NodeEngine> build(const Host& host);
 
 private:
     WorkerConfiguration workerConfiguration;
     std::shared_ptr<StatisticListener> statisticsListener;
+    OptionalRef<StoreRegistry> storeRegistry;
 };
 }

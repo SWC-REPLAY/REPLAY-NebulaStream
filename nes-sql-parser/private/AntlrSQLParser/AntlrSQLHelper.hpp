@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -80,11 +81,21 @@ public:
     std::vector<LogicalFunction> joinKeyRelationHelper;
     std::vector<std::string> joinSourceRenames;
     JoinLogicalOperator::JoinType joinType = JoinLogicalOperator::JoinType::INNER_JOIN;
-    std::optional<std::unordered_map<std::string, std::string>> storeOptions;
+    /// FOR EVENT_TIME read, normalised to a half-open [start, end) range. Both bounds empty means TIMESTAMP ALL, which
+    /// is why the presence of the clause is tracked separately from the bounds.
+    bool hasTimeTravelReadClause{false};
+    std::optional<uint64_t> timeTravelStart;
+    std::optional<uint64_t> timeTravelEnd;
 
     /// UDB specific variables
     bool hasUdbClause{false};
     std::optional<std::string> udbTraceName;
+
+    /// Replayable specific variables
+    bool hasReplayableClause{false};
+    std::string replayableStorageSize;
+    /// Store options from the clause's SET(...), already lower-cased to match the store operator's config parameters.
+    std::unordered_map<std::string, std::string> replayableOptions;
 
     /// Utility variables to keep state between enter/exit parser function calls.
     size_t opBoolean{}; ///anonymous token enum in AntlrSQLLexer.h

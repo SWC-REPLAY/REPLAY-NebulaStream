@@ -15,13 +15,18 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <concepts>
 #include <cstddef>
+#include <expected>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 #include <Util/Ranges.hpp>
 #include <fmt/format.h>
@@ -329,6 +334,54 @@ std::string_view trimCharsRight(std::string_view input, char character)
     }
     input.remove_suffix(input.size() - lastNotC - 1);
     return input;
+}
+
+std::expected<size_t, std::string> parseByteSize(std::string_view input)
+{
+    constexpr size_t kib = 1024;
+    const auto trimmed = trimWhiteSpaces(input);
+
+    size_t value = 0;
+    const auto* const begin = std::to_address(trimmed.begin());
+    const auto* const end = std::to_address(trimmed.end());
+    const auto [suffixStart, errorCode] = std::from_chars(begin, end, value);
+    if (errorCode == std::errc::invalid_argument || suffixStart == begin)
+    {
+        return std::unexpected(fmt::format("'{}' does not start with a number", input));
+    }
+    if (errorCode == std::errc::result_out_of_range)
+    {
+        return std::unexpected(fmt::format("'{}' is too large for a byte size", input));
+    }
+
+    const auto suffix = trimmed.substr(static_cast<size_t>(suffixStart - begin));
+    size_t multiplier = 1;
+    if (suffix.empty() || suffix == "B")
+    {
+        multiplier = 1;
+    }
+    else if (suffix == "KB")
+    {
+        multiplier = kib;
+    }
+    else if (suffix == "MB")
+    {
+        multiplier = kib * kib;
+    }
+    else if (suffix == "GB")
+    {
+        multiplier = kib * kib * kib;
+    }
+    else
+    {
+        return std::unexpected(fmt::format("'{}' has unknown size suffix '{}', expected one of B, KB, MB, GB", input, suffix));
+    }
+
+    if (value > std::numeric_limits<size_t>::max() / multiplier)
+    {
+        return std::unexpected(fmt::format("'{}' overflows when converted to bytes", input));
+    }
+    return value * multiplier;
 }
 
 void removeDoubleSpaces(std::string& input)

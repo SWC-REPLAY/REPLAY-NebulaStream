@@ -44,6 +44,7 @@
 #include <QueryCompiler.hpp>
 #include <QueryStatus.hpp>
 #include <SingleNodeWorkerConfiguration.hpp>
+#include <StoreRegistry.hpp>
 #include <WorkerStatus.hpp>
 
 extern void initNetworkServices(const std::string& connectionAddr, const NES::Host& host, const NES::NetworkOptions& options);
@@ -51,7 +52,15 @@ extern void initNetworkServices(const std::string& connectionAddr, const NES::Ho
 namespace NES
 {
 
-SingleNodeWorker::~SingleNodeWorker() = default;
+SingleNodeWorker::~SingleNodeWorker()
+{
+    /// The stores hold buffers from the engine's pool, so they have to go before the engine tears that pool down.
+    if (storeRegistry)
+    {
+        storeRegistry->closeAll();
+    }
+}
+
 SingleNodeWorker::SingleNodeWorker(SingleNodeWorker&& other) noexcept = default;
 SingleNodeWorker& SingleNodeWorker::operator=(SingleNodeWorker&& other) noexcept = default;
 
@@ -72,7 +81,15 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         listener->addListener(googleTracePrinter);
     }
 
-    nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener)).build(host);
+    /// The worker owns its replay stores: they hold rows that live on this node, and each is materialised here when the
+    /// pipeline that writes it starts. The registry carries the worker-level replay defaults, so a query that
+    /// configures its own store overrides them there and nothing in between has to pass them along.
+    storeRegistry = std::make_unique<StoreRegistry>(StoreConfig{
+        .memoryBufferSize = configuration.replayConfiguration.memoryBufferSize.getValue(),
+        .maxBufferCount = configuration.replayConfiguration.maxBufferCount.getValue(),
+        .storeOrder = configuration.replayConfiguration.storeOrder.getValue()});
+    const OptionalRef<StoreRegistry> borrowedStoreRegistry{*storeRegistry};
+    nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener), borrowedStoreRegistry).build(host);
     compiler = std::make_unique<QueryCompilation::QueryCompiler>(configuration.workerConfiguration.defaultQueryExecution);
 
     if (!configuration.dataAddress.getValue().empty())

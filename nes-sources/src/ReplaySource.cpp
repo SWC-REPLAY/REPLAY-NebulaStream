@@ -30,7 +30,9 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <Util/Pointers.hpp>
 #include <fmt/format.h>
 #include <ErrorHandling.hpp>
 #include <ReplayStoreReader.hpp>
@@ -41,15 +43,29 @@
 namespace NES
 {
 
-ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor)
+ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor, OptionalRef<StoreRegistry> storeRegistry)
     : filePath(
           sourceDescriptor.getConfig().contains("file_path") ? std::get<std::string>(sourceDescriptor.getConfig().at("file_path"))
                                                              : std::string())
     , storeName(
           sourceDescriptor.getConfig().contains("store_name") ? std::get<std::string>(sourceDescriptor.getConfig().at("store_name"))
                                                               : std::string())
+    , storeRegistry(storeRegistry)
     , schema(*sourceDescriptor.getLogicalSource().getSchema())
 {
+    const auto& config = sourceDescriptor.getConfig();
+    if (config.contains("replay_start_timestamp"))
+    {
+        const auto startTs = std::stoull(std::get<std::string>(config.at("replay_start_timestamp")));
+        timeRange.fieldName = "TS";
+        timeRange.start = Timestamp(startTs);
+    }
+    if (config.contains("replay_end_timestamp"))
+    {
+        const auto endTs = std::stoull(std::get<std::string>(config.at("replay_end_timestamp")));
+        timeRange.fieldName = "TS";
+        timeRange.end = Timestamp(endTs);
+    }
 }
 
 ReplaySource::~ReplaySource() = default;
@@ -58,7 +74,8 @@ void ReplaySource::open(std::shared_ptr<AbstractBufferProvider>)
 {
     if (!storeName.empty())
     {
-        auto registeredStore = StoreManager::StoreRegistry::instance().getStore(storeName);
+        PRECONDITION(storeRegistry.has_value(), "A replay source reading store '{}' needs the worker's store registry", storeName);
+        auto registeredStore = storeRegistry->get().getStore(storeName);
         if (registeredStore.has_value())
         {
             store = registeredStore.value();
@@ -68,7 +85,7 @@ void ReplaySource::open(std::shared_ptr<AbstractBufferProvider>)
     }
 
     NES_DEBUG("ReplaySource: opening file {}", filePath);
-    reader = std::make_unique<StoreManager::ReplayStoreReader>(filePath);
+    reader = std::make_unique<ReplayStoreReader>(filePath);
     reader->open();
     reader->verifySchema(schema);
     NES_DEBUG("ReplaySource: dataStartOffset={}", reader->getDataStartOffset());
@@ -90,11 +107,12 @@ void ReplaySource::close()
 Source::FillTupleBufferResult ReplaySource::fillTupleBuffer(TupleBuffer& tupleBuffer, const std::stop_token&)
 {
     PRECONDITION(store.has_value(), "Replay source requires underlying store type!");
-    if (!store->hasMore())
+    if (readComplete)
     {
         return FillTupleBufferResult::eos();
     }
-    const uint64_t tuplesWritten = store->read(tupleBuffer, schema);
+    const uint64_t tuplesWritten = store->read(tupleBuffer, schema, timeRange);
+    readComplete = true;
     if (tuplesWritten == 0)
     {
         return FillTupleBufferResult::eos();
@@ -122,7 +140,7 @@ uint32_t ReplaySource::getRowWidthBytes() const
 
 Schema ReplaySource::readSchemaFromFile(const std::string& filePath)
 {
-    return StoreManager::ReplayStoreReader::readSchemaFromFile(filePath);
+    return ReplayStoreReader::readSchemaFromFile(filePath);
 }
 
 DescriptorConfig::Config ReplaySource::validateAndFormat(std::unordered_map<std::string, std::string> config)
@@ -139,6 +157,14 @@ DescriptorConfig::Config ReplaySource::validateAndFormat(std::unordered_map<std:
     if (static_cast<unsigned int>(config.contains("store_name")) != 0U)
     {
         validated.emplace("store_name", DescriptorConfig::ConfigType(config.at("store_name")));
+    }
+    if (config.contains("replay_start_timestamp"))
+    {
+        validated.emplace("replay_start_timestamp", DescriptorConfig::ConfigType(config.at("replay_start_timestamp")));
+    }
+    if (config.contains("replay_end_timestamp"))
+    {
+        validated.emplace("replay_end_timestamp", DescriptorConfig::ConfigType(config.at("replay_end_timestamp")));
     }
     validated.emplace("number_of_buffers_in_local_pool", DescriptorConfig::ConfigType(static_cast<int64_t>(-1)));
     validated.emplace("max_inflight_buffers", DescriptorConfig::ConfigType(SourceDescriptor::INVALID_MAX_INFLIGHT_BUFFERS));
@@ -166,6 +192,6 @@ SourceValidationRegistryReturnType RegisterReplaySourceValidation(SourceValidati
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 SourceRegistryReturnType SourceGeneratedRegistrar::RegisterReplaySource(SourceRegistryArguments args)
 {
-    return std::make_unique<ReplaySource>(args.sourceDescriptor);
+    return std::make_unique<ReplaySource>(args.sourceDescriptor, args.storeRegistry);
 }
 }

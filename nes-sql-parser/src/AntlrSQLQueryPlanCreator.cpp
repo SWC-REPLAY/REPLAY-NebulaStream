@@ -17,6 +17,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -33,6 +34,7 @@
 #include <DataTypes/DataType.hpp>
 #include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
 #include <Functions/ArithmeticalFunctions/AddLogicalFunction.hpp>
 #include <Functions/ArithmeticalFunctions/DivLogicalFunction.hpp>
 #include <Functions/ArithmeticalFunctions/ModuloLogicalFunction.hpp>
@@ -62,6 +64,7 @@
 #include <Operators/Windows/JoinLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
 #include <Plans/LogicalPlanBuilder.hpp>
+#include <Traits/ReplayReadTrait.hpp>
 #include <Util/Overloaded.hpp>
 #include <Util/Strings.hpp>
 #include <WindowTypes/Measures/TimeCharacteristic.hpp>
@@ -511,6 +514,19 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
         return LogicalPlanBuilder::createLogicalPlan(helpers.top().getSource());
     }();
 
+    /// A FOR EVENT_TIME source reads from a replay store rather than from the live source. Which store can serve it is a
+    /// catalog question, so all that happens here is tagging the source with the requested range; ReplayReadBindingRule
+    /// resolves it once the store catalog is in reach.
+    if (helpers.top().hasTimeTravelReadClause)
+    {
+        const auto roots = queryPlan.getRootOperators();
+        INVARIANT(roots.size() == 1, "A primary query is built from exactly one source operator");
+        auto traitSet = roots.front().getTraitSet();
+        const bool inserted = traitSet.tryInsert(ReplayReadTrait{helpers.top().timeTravelStart, helpers.top().timeTravelEnd});
+        INVARIANT(inserted, "A freshly created source operator cannot already carry a ReplayReadTrait");
+        queryPlan = queryPlan.withRootOperators({roots.front().withTraitSet(std::move(traitSet))});
+    }
+
     for (auto whereExpr = helpers.top().getWhereClauses().rbegin(); whereExpr != helpers.top().getWhereClauses().rend(); ++whereExpr)
     {
         queryPlan = LogicalPlanBuilder::addSelection(std::move(*whereExpr), queryPlan);
@@ -538,17 +554,23 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
             queryPlan = LogicalPlanBuilder::addSelection(*havingExpr, queryPlan);
         }
     }
-    /// inject store operator into the plan before sink if TIME_TRAVEL_STORE was provided
-    if (helpers.top().storeOptions.has_value())
-    {
-        auto opts = *helpers.top().storeOptions;
-        const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-        queryPlan = LogicalPlanBuilder::addReplayStore(cfg, queryPlan);
-    }
     /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
     if (helpers.top().hasUdbClause)
     {
         queryPlan = LogicalPlanBuilder::addUdbRecording(helpers.top().udbTraceName, queryPlan);
+    }
+    /// inject replay store operator into the plan if REPLAYABLE WITH HISTORY OF was provided
+    if (helpers.top().hasReplayableClause)
+    {
+        /// No store_name here on purpose: a store's name has to be unique across queries, and once the optimizer places
+        /// store operators the parser cannot know how many there are. StoreRegistrationRule names them.
+        /// The SET options first, then the history limit, so that WITH HISTORY OF stays the authoritative spelling of
+        /// the buffer size even if the same parameter is also given as an option.
+        std::unordered_map<std::string, std::string> configMap = helpers.top().replayableOptions;
+        configMap["memory_buffer_size"] = helpers.top().replayableStorageSize;
+        auto config = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(configMap));
+        queryPlan
+            = LogicalPlanBuilder::addReplayStore(queryPlan, config, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
     }
     helpers.pop();
     if (helpers.empty())
@@ -1116,14 +1138,54 @@ void AntlrSQLQueryPlanCreator::exitModelInferenceRelation(AntlrSQLParser::ModelI
     AntlrSQLBaseListener::exitModelInferenceRelation(context);
 }
 
-void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
+void AntlrSQLQueryPlanCreator::enterTimeTravelReadClause(AntlrSQLParser::TimeTravelReadClauseContext* context)
 {
-    const auto storeName = bindIdentifier(context->storeName);
+    auto parseTimestamp = [](const std::string& text) -> uint64_t
+    {
+        auto stripped = text;
+        if (stripped.size() >= 2 && (stripped.front() == '\'' || stripped.front() == '"'))
+        {
+            stripped = stripped.substr(1, stripped.size() - 2);
+        }
+        try
+        {
+            return std::stoull(stripped);
+        }
+        catch (const std::exception&)
+        {
+            throw InvalidQuerySyntax("FOR EVENT_TIME timestamp must be an unsigned integer, got '{}'", stripped);
+        }
+    };
 
-    std::unordered_map<std::string, std::string> options;
-    options.emplace("store_name", storeName);
+    auto& helper = helpers.top();
+    helper.hasTimeTravelReadClause = true;
 
-    helpers.top().storeOptions = std::move(options);
+    /// Every syntax below is normalised to half-open [start, end) so that nothing downstream has to know which one was
+    /// written. The inclusive forms therefore gain one on their upper bound.
+    if (context->timestampValue != nullptr)
+    {
+        /// AS OF TIMESTAMP '<value>' — everything from that point on
+        helper.timeTravelStart = parseTimestamp(context->timestampValue->getText());
+    }
+    else if (context->startBetween != nullptr)
+    {
+        /// BETWEEN '<start>' AND '<end>' — both bounds inclusive
+        helper.timeTravelStart = parseTimestamp(context->startBetween->getText());
+        helper.timeTravelEnd = parseTimestamp(context->endBetween->getText()) + 1;
+    }
+    else if (context->startFrom != nullptr)
+    {
+        /// FROM '<start>' TO '<end>' — already half-open
+        helper.timeTravelStart = parseTimestamp(context->startFrom->getText());
+        helper.timeTravelEnd = parseTimestamp(context->endFrom->getText());
+    }
+    else if (context->startContained != nullptr)
+    {
+        /// CONTAINED IN ('<start>', '<end>') — both bounds inclusive
+        helper.timeTravelStart = parseTimestamp(context->startContained->getText());
+        helper.timeTravelEnd = parseTimestamp(context->endContained->getText()) + 1;
+    }
+    /// else: ALL — no bounds
 }
 
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
@@ -1133,6 +1195,38 @@ void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* 
     if (context->udbTraceName != nullptr)
     {
         helpers.top().udbTraceName = context->udbTraceName->getText();
+    }
+}
+
+void AntlrSQLQueryPlanCreator::enterReplayableClause(AntlrSQLParser::ReplayableClauseContext* context)
+{
+    helpers.top().hasReplayableClause = true;
+
+    auto stripQuotes = [](std::string text) -> std::string
+    {
+        if (text.size() >= 2 && (text.front() == '\'' || text.front() == '"'))
+        {
+            text = text.substr(1, text.size() - 2);
+        }
+        return text;
+    };
+
+    const auto* historyLimit = context->historyLimit();
+    if (historyLimit->storageSize != nullptr)
+    {
+        helpers.top().replayableStorageSize = stripQuotes(historyLimit->storageSize->getText());
+    }
+    else
+    {
+        throw InvalidQuerySyntax("Only storage-based history limits (e.g., '10GB') are currently supported");
+    }
+
+    /// SET(<value> AS REPLAY.<KEY>) configures the store this query records into. Options outside the REPLAY namespace
+    /// are dropped here and rejected by the store operator's config validation, which knows the valid parameter names.
+    if (context->optionsClause() != nullptr)
+    {
+        const auto options = bindConfigOptions(context->optionsClause()->options->namedConfigExpression());
+        helpers.top().replayableOptions = getReplayStoreConfig(options);
     }
 }
 }

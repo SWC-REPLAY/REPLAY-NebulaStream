@@ -136,6 +136,7 @@ static constexpr std::string_view DifferentialToken = "===="sv;
 static constexpr std::string_view ConfigurationToken = "CONFIGURATION"sv;
 static constexpr std::string_view GlobalConfigurationToken = "GLOBALCONFIGURATION"sv;
 static constexpr std::string_view SequentialExecutionToken = "SEQUENTIAL_EXECUTION"sv;
+static constexpr std::string_view AfterToken = "AFTER"sv;
 
 static const std::array stringToToken = std::to_array<std::pair<std::string_view, TokenType>>(
     {{CreateToken, TokenType::CREATE},
@@ -145,7 +146,8 @@ static const std::array stringToToken = std::to_array<std::pair<std::string_view
      {ConfigurationToken, TokenType::CONFIGURATION},
      {GlobalConfigurationToken, TokenType::GLOBAL_CONFIGURATION},
      {DifferentialToken, TokenType::DIFFERENTIAL},
-     {SequentialExecutionToken, TokenType::SEQUENTIAL_EXECUTION}});
+     {SequentialExecutionToken, TokenType::SEQUENTIAL_EXECUTION},
+     {AfterToken, TokenType::AFTER}});
 
 void SystestParser::registerSubstitutionRule(const SubstitutionRule& rule)
 {
@@ -237,6 +239,7 @@ void SystestParser::parse()
 {
     SystestQueryIdAssigner queryIdAssigner{};
     bool sequentialExecution = false;
+    std::optional<SystestQueryId> pendingAfterQueryId;
     while (auto token = getNextToken())
     {
         switch (token.value())
@@ -255,8 +258,9 @@ void SystestParser::parse()
                 lastParsedQueryId = queryId;
                 if (onQueryCallback)
                 {
-                    onQueryCallback(query, queryId, sequentialExecution);
+                    onQueryCallback(query, queryId, sequentialExecution, pendingAfterQueryId);
                 }
+                pendingAfterQueryId = std::nullopt;
                 break;
             }
             case TokenType::RESULT_DELIMITER: {
@@ -313,6 +317,19 @@ void SystestParser::parse()
             }
             case TokenType::SEQUENTIAL_EXECUTION: {
                 sequentialExecution = not sequentialExecution;
+                break;
+            }
+            case TokenType::AFTER: {
+                /// Parse AFTER N — sets a dependency on query N for the next query.
+                const auto& line = lines[currentLine];
+                const auto afterPos = line.find(AfterToken);
+                const auto numStr = trimWhiteSpaces(line.substr(afterPos + AfterToken.size()));
+                if (numStr.empty())
+                {
+                    throw TestException("AFTER directive must be followed by a number (e.g., AFTER 1), got: {}", line);
+                }
+                const auto queryNum = std::stoull(std::string(numStr));
+                pendingAfterQueryId = SystestQueryId{queryNum};
                 break;
             }
             case TokenType::ERROR_EXPECTATION:

@@ -14,15 +14,22 @@
 
 #include <LoweringRules/LowerToPhysical/LowerToPhysicalReplayStore.hpp>
 
+#include <cstddef>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <Configurations/Descriptor.hpp>
+#include <DataTypes/Schema.hpp>
+#include <Functions/FunctionProvider.hpp>
 #include <Interface/BufferRef/LowerSchemaProvider.hpp>
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Traits/MemoryLayoutTypeTrait.hpp>
+#include <Util/Strings.hpp>
+#include <Watermark/TimeFunction.hpp>
 #include <ErrorHandling.hpp>
 #include <LoweringRuleRegistry.hpp>
 #include <PhysicalOperator.hpp>
@@ -33,34 +40,86 @@
 namespace NES
 {
 
+namespace
+{
+/// Only what this query configured for itself; whatever stays unset is filled in by the worker's replay defaults when
+/// the store is materialised. The store operator's parameters default to empty/zero so that "the query said nothing"
+/// stays distinguishable from "the query said this".
+StoreConfig readStoreOverrides(const Descriptor& logicalCfg)
+{
+    StoreConfig overrides;
+    if (const auto sizeStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MEMORY_BUFFER_SIZE);
+        sizeStr.has_value() && !sizeStr->empty())
+    {
+        const auto parsed = parseByteSize(*sizeStr);
+        if (!parsed.has_value())
+        {
+            throw InvalidConfigParameter("Cannot parse memory buffer size '{}': {}", *sizeStr, parsed.error());
+        }
+        overrides.memoryBufferSize = *parsed;
+    }
+    if (const auto orderStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_ORDER);
+        orderStr.has_value() && !orderStr->empty())
+    {
+        overrides.storeOrder = *orderStr;
+    }
+    if (const auto maxBuf = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MAX_BUFFER_COUNT);
+        maxBuf.has_value() && *maxBuf > 0)
+    {
+        overrides.maxBufferCount = maxBuf;
+    }
+    return overrides;
+}
+
+/// The store records field names without their source qualifier.
+Schema unqualify(const Schema& schema)
+{
+    Schema storeSchema;
+    for (const auto& field : schema.getFields())
+    {
+        storeSchema.addField(field.getUnqualifiedName(), field.dataType);
+    }
+    return storeSchema;
+}
+}
+
 LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator logicalOperator)
 {
     PRECONDITION(logicalOperator.tryGetAs<ReplayStoreLogicalOperator>(), "Expected a StoreLogicalOperator");
     auto storeOp = logicalOperator.getAs<ReplayStoreLogicalOperator>();
 
     auto cfgCopy = DescriptorConfig::Config(storeOp->getConfig());
-    Descriptor logicalCfg(std::move(cfgCopy));
+    const Descriptor logicalCfg(std::move(cfgCopy));
     const auto storeName = logicalCfg.getFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_NAME);
 
     const auto outputSchema = logicalOperator.getOutputSchema();
 
-    auto registeredStore = StoreManager::StoreRegistry::instance().getStore(storeName);
-    PRECONDITION(registeredStore.has_value(), "Store '{}' must be pre-registered before lowering", storeName);
+    PRECONDITION(!storeName.empty(), "Store '{}' was not named; StoreRegistrationRule must run before lowering", storeName);
+
+    const auto physicalFunction = QueryCompilation::FunctionProvider::lowerFunction(storeOp->tsExtractionFunction);
+    EventTimeFunction timeFunction(physicalFunction, storeOp->unit);
+
+    /// The store itself is materialised on the worker when the pipeline starts; lowering only records what to build.
+    auto storeSchema = unqualify(outputSchema);
+    std::stringstream schemaStream;
+    schemaStream << storeSchema;
 
     ReplayStoreOperatorHandler::Config handlerCfg{
         .storeName = storeName,
-        .schema = outputSchema,
+        .storeSchema = storeSchema,
+        .schemaText = schemaStream.str(),
+        .storeOverrides = readStoreOverrides(logicalCfg),
     };
 
     auto handlerId = getNextOperatorHandlerId();
-    auto handler = std::make_shared<ReplayStoreOperatorHandler>(std::move(handlerCfg), std::move(*registeredStore));
+    auto handler = std::make_shared<ReplayStoreOperatorHandler>(std::move(handlerCfg));
 
     const auto inputSchema = logicalOperator.getInputSchemas()[0];
     const auto memoryLayoutTypeTrait = logicalOperator.getTraitSet().tryGet<MemoryLayoutTypeTrait>();
     PRECONDITION(memoryLayoutTypeTrait.has_value(), "Expected a memory layout type trait");
     const auto memoryLayoutType = memoryLayoutTypeTrait.value()->memoryLayout;
     auto bufferRef = LowerSchemaProvider::lowerSchema(conf.pageSize.getValue(), inputSchema, memoryLayoutType);
-    auto physicalOperator = ReplayStorePhysicalOperator(handlerId, inputSchema, std::move(bufferRef));
+    auto physicalOperator = ReplayStorePhysicalOperator(handlerId, inputSchema, std::move(bufferRef), std::move(timeFunction));
     auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
         physicalOperator,
         inputSchema,

@@ -28,7 +28,7 @@
 #include <ErrorHandling.hpp>
 #include <ReplayStoreFormat.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 ReplayStoreReader::ReplayStoreReader(std::string filePath) : filePath(std::move(filePath))

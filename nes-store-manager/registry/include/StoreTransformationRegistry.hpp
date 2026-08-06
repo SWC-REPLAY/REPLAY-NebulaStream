@@ -24,7 +24,7 @@
 namespace NES
 {
 
-using StoreTransformationRegistryReturnType = StoreManager::StoreTransformation;
+using StoreTransformationRegistryReturnType = StoreTransformation;
 
 struct StoreTransformationRegistryArguments
 {

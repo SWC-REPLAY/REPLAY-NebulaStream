@@ -16,9 +16,11 @@ add_source_files(nes-query-optimizer
         JoinImplementationTypeTrait.cpp
         MemoryLayoutTypeTrait.cpp
         OutputOriginIdsTrait.cpp
-        PlacementTrait.cpp)
+        PlacementTrait.cpp
+        ReplayReadTrait.cpp)
 
 add_unreflection_plugin(Trait JoinImplementationType)
 add_unreflection_plugin(Trait MemoryLayoutType)
 add_unreflection_plugin(Trait OutputOriginIds)
 add_unreflection_plugin(Trait Placement)
+add_unreflection_plugin(Trait ReplayRead)

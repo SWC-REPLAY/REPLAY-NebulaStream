@@ -24,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -153,7 +154,8 @@ std::pair<BackpressureController, std::unique_ptr<SourceHandle>> createFileSourc
         logicalSource.value(), "File", Host("localhost"), std::move(fileSourceConfiguration), {{"type", "CSV"}});
     INVARIANT(sourceDescriptor.has_value(), "Test File Source couldn't be created");
     auto [backpressureController, backpressureListener] = createBackpressureChannel();
-    const SourceProvider sourceProvider(numberOfRequiredSourceBuffers, std::move(sourceBufferPool));
+    /// A file source never resolves a replay store, so it needs no registry at all.
+    const SourceProvider sourceProvider(numberOfRequiredSourceBuffers, std::move(sourceBufferPool), std::nullopt);
     return {std::move(backpressureController), sourceProvider.lower(NES::OriginId(1), backpressureListener, sourceDescriptor.value())};
 }
 

@@ -18,7 +18,7 @@
 
 #include <Store.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Transformation that drains a MemoryStore and writes its TupleBuffers to a downstream Store.

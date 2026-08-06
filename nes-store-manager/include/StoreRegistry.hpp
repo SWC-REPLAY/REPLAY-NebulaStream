@@ -14,28 +14,49 @@
 
 #pragma once
 
+#include <cstddef>
+#include <memory>
 #include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
 #include <DataTypes/Schema.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 #include <Store.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
-/// Manages named store instances, allowing concurrent TIME_TRAVEL queries to each use their own store.
+/// Store configuration. Every field is optional; an unset field falls back to the registry's worker-level defaults, and
+/// where those leave it unset too, to the store type's own default.
+struct StoreConfig
+{
+    std::optional<size_t> memoryBufferSize;
+    std::optional<size_t> maxBufferCount;
+    std::optional<std::string> storeOrder;
+};
+
+/// Holds the live store instances a worker has materialised, keyed by the names the StoreCatalog assigned, plus that
+/// worker's replay defaults. Worker-owned rather than process-global: a store lives where its operator was placed.
 class StoreRegistry
 {
 public:
-    static StoreRegistry& instance();
+    /// `defaults` is the worker's replay configuration; a query that configures its own store overrides it per field.
+    explicit StoreRegistry(StoreConfig defaults);
 
     /// Register a store under a name.
     void registerStore(const std::string& storeName, Store store);
 
-    /// Register a default hierarchical store (MemoryStore -> FileStore).
-    void registerDefaultStore(const std::string& storeName, const Schema& schema, const std::string& schemaText);
+    /// Get the store, materialising it on first call. Unset fields in `overrides` fall back to the worker defaults.
+    /// Idempotent, so concurrent pipeline starts share one instance.
+    /// @throws InvalidConfigParameter on an unsupported store order.
+    Store getOrCreateStore(
+        const std::string& storeName,
+        const Schema& schema,
+        const std::string& schemaText,
+        const StoreConfig& overrides,
+        const std::shared_ptr<AbstractBufferProvider>& bufferProvider);
 
     /// Look up the store for a given name.
     [[nodiscard]] std::optional<Store> getStore(const std::string& storeName) const;
@@ -46,17 +67,21 @@ public:
     /// Clear all registrations.
     void clear();
 
+    /// Flush every store to its backing level and drop it. Must run before the buffer provider the stores were
+    /// materialised with is torn down, since a store holds buffers from it.
+    void closeAll();
+
     /// Close and delete all registered store files from disk and clear the registry.
     void clearAndDeleteFiles();
 
 private:
-    StoreRegistry() = default;
-
     /// Generate a unique file path for a store.
     static std::string generateStoreDir(const std::string& storeName);
 
     mutable std::shared_mutex mutex;
     std::unordered_map<std::string, Store> stores; /// store name -> Store instance
+    /// This worker's replay configuration, used for every parameter a query leaves unset.
+    StoreConfig defaults;
 };
 
 }

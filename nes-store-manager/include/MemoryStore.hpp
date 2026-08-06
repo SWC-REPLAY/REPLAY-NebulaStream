@@ -17,21 +17,33 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <shared_mutex>
 #include <string_view>
 #include <vector>
 
 #include <DataTypes/Schema.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
+#include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
-/// In-memory store that holds TupleBuffers. Satisfies StoreConcept.
+/// Buffer with its timestamp range (min/max timestamps of records within).
+struct TimedBuffer
+{
+    TupleBuffer buffer;
+    Timestamp minTs{Timestamp(Timestamp::INVALID_VALUE)};
+    Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
+};
+
+/// In-memory store that holds TimedBuffers. Satisfies StoreConcept.
 /// Optionally chains to a next-level store with a flush policy and transformation.
 class MemoryStore
 {
@@ -39,22 +51,24 @@ public:
     struct Config
     {
         size_t maxBufferSize = 64UZ * 1024UZ * 1024UZ; /// 64 MB default /// NOLINT(readability-magic-numbers)
+        size_t maxBufferCount = 128UZ; /// Maximum sealed buffers before wraparound evicts oldest. /// NOLINT(readability-magic-numbers)
     };
 
     /// Standalone constructor (no chaining).
-    explicit MemoryStore(const Schema& schema);
-    MemoryStore(const Schema& schema, Config config);
+    MemoryStore(const Schema& schema, std::shared_ptr<AbstractBufferProvider> bufferManager);
+    MemoryStore(const Schema& schema, Config config, std::shared_ptr<AbstractBufferProvider> bufferManager);
 
     /// Chained constructor: this store flushes to nextLevel when the policy triggers.
     /// The transformation is validated at construction to ensure the store pair is compatible.
-    MemoryStore(const Schema& schema, Config config, Store nextLevel, FlushPolicy policy);
+    MemoryStore(
+        const Schema& schema, Config config, std::shared_ptr<AbstractBufferProvider> bufferManager, Store nextLevel, FlushPolicy policy);
 
     void open();
     void close(Store& self);
     void flush(Store& self);
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& schema);
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
+    uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;
@@ -65,16 +79,23 @@ public:
     /// Check whether the buffer has reached capacity.
     [[nodiscard]] bool isFull() const;
 
-    /// Drain all stored TupleBuffers and return them. Resets internal storage.
-    std::vector<TupleBuffer> drain();
+    /// Drain all stored TimedBuffers and return them. Resets internal storage.
+    std::vector<TimedBuffer> drain();
 
 private:
+    TimedBuffer& allocateActiveBuffer();
+
     Schema schema;
     Config config;
-    std::deque<TupleBuffer> buffers;
+    std::shared_ptr<AbstractBufferProvider> bufferManager;
+    std::deque<TimedBuffer> buffers;
     uint64_t currentSize{0};
     mutable std::shared_mutex mutex;
     bool opened{false};
+
+    /// Active buffer being filled record-by-record.
+    std::optional<TimedBuffer> activeBuffer;
+    uint64_t activeWriteOffset{0}; /// byte offset into the active buffer's memory
 
     /// Chaining support (all optional — empty for standalone stores).
     std::optional<Store> nextLevel;

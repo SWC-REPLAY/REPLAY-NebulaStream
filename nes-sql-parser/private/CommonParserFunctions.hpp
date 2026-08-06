@@ -40,6 +40,9 @@ std::unordered_map<std::string, std::string> parseInputFormatterConfig(const Con
 std::unordered_map<std::string, std::string> parseOutputFormatterConfig(const ConfigMap& configOptions);
 std::unordered_map<std::string, std::string> getSourceConfig(const ConfigMap& configOptions);
 std::unordered_map<std::string, std::string> getSinkConfig(const ConfigMap& configOptions);
+/// Options given as `<value> AS REPLAY.<KEY>` on a REPLAYABLE clause, keyed by the lower-cased parameter name so they
+/// line up with ReplayStoreLogicalOperator::ConfigParameters.
+std::unordered_map<std::string, std::string> getReplayStoreConfig(const ConfigMap& configOptions);
 std::optional<Schema> getSourceSchema(ConfigMap configOptions);
 std::optional<Schema> getSinkSchema(ConfigMap configOptions);
 

@@ -15,13 +15,15 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
-#include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
 #include <Store.hpp>
+#include <StoreRegistry.hpp>
 
 namespace NES
 {
@@ -33,20 +35,26 @@ public:
     struct Config
     {
         std::string storeName;
-        Schema schema;
+        /// Unqualified schema the store records, and its rendered form for the store header.
+        Schema storeSchema;
+        std::string schemaText;
+        /// What the query configured for itself. Unset fields fall back to the worker's defaults on materialisation:
+        /// the defaults belong to the worker, not to the plan.
+        StoreConfig storeOverrides;
     };
 
-    ReplayStoreOperatorHandler(Config cfg, StoreManager::Store store);
+    explicit ReplayStoreOperatorHandler(Config cfg);
     ~ReplayStoreOperatorHandler() override = default;
 
     void start(PipelineExecutionContext& pipelineExecutionContext, uint32_t localStateVariableId) override;
     void stop(QueryTerminationType terminationType, PipelineExecutionContext& pipelineExecutionContext) override;
 
-    /// Write a TupleBuffer to the store.
-    void writeBuffer(TupleBuffer buffer);
+    /// Write a single record to the store.
+    void writeRecord(const uint8_t* data, uint32_t size, Timestamp ts);
 
 private:
-    StoreManager::Store store;
+    /// Materialised on `start` from the worker's registry, keeping the plan independent of the worker it runs on.
+    std::optional<Store> store;
     Config config;
 };
 

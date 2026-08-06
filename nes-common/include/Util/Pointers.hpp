@@ -13,11 +13,17 @@
 */
 
 #pragma once
+#include <functional>
 #include <memory>
+#include <optional>
 #include <experimental/propagate_const>
 
 namespace NES
 {
+
+/// A borrowed, possibly absent reference to an object owned elsewhere and outliving the borrower.
+template <typename T>
+using OptionalRef = std::optional<std::reference_wrapper<T>>;
 
 template <typename T>
 using SharedPtr = std::experimental::propagate_const<std::shared_ptr<T>>;

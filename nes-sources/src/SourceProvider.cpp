@@ -14,6 +14,7 @@
 
 #include <Sources/SourceProvider.hpp>
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,15 +25,18 @@
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <Util/Pointers.hpp>
 #include <BackpressureChannel.hpp>
 #include <ErrorHandling.hpp>
 #include <SourceRegistry.hpp>
+#include <StoreRegistry.hpp>
 
 namespace NES
 {
 
-SourceProvider::SourceProvider(size_t defaultMaxInflightBuffers, std::shared_ptr<AbstractBufferProvider> bufferPool)
-    : defaultMaxInflightBuffers(defaultMaxInflightBuffers), bufferPool(std::move(bufferPool))
+SourceProvider::SourceProvider(
+    size_t defaultMaxInflightBuffers, std::shared_ptr<AbstractBufferProvider> bufferPool, OptionalRef<StoreRegistry> storeRegistry)
+    : defaultMaxInflightBuffers(defaultMaxInflightBuffers), bufferPool(std::move(bufferPool)), storeRegistry(storeRegistry)
 {
 }
 
@@ -40,7 +44,7 @@ std::unique_ptr<SourceHandle>
 SourceProvider::lower(OriginId originId, BackpressureListener backpressureListener, const SourceDescriptor& sourceDescriptor) const
 {
     /// Todo #241: Get the new source identfier from the source descriptor and pass it to SourceHandle.
-    auto sourceArguments = SourceRegistryArguments(sourceDescriptor);
+    auto sourceArguments = SourceRegistryArguments(sourceDescriptor, storeRegistry);
     if (auto source = SourceRegistry::instance().create(sourceDescriptor.getSourceType(), sourceArguments))
     {
         /// The source-specific configuration of maxInflightBuffers takes priority.

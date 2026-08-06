@@ -14,22 +14,25 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 
 #include <DataTypes/Schema.hpp>
+#include <Runtime/AbstractBufferProvider.hpp>
 #include <Util/Registry.hpp>
 #include <Store.hpp>
 
 namespace NES
 {
 
-using StoreTypeRegistryReturnType = StoreManager::Store;
+using StoreTypeRegistryReturnType = Store;
 
 struct StoreTypeRegistryArguments
 {
     Schema schema;
     std::unordered_map<std::string, std::string> config;
+    std::shared_ptr<AbstractBufferProvider> bufferProvider; /// Supplied at runtime by component that materialises the store
 };
 
 class StoreTypeRegistry : public BaseRegistry<StoreTypeRegistry, std::string, StoreTypeRegistryReturnType, StoreTypeRegistryArguments>

@@ -19,4 +19,6 @@ add_source_files(nes-query-optimizer
         TypeInferenceRule.cpp
         SinkBindingRule.cpp
         InferModelResolutionRule.cpp
+        ReplayReadBindingRule.cpp
+        StoreRegistrationRule.cpp
 )

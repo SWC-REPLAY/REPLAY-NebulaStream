@@ -131,7 +131,7 @@ queryPrimary
     | '(' query ')'                                                         #subquery
     ;
 /// new layout to be closer to traditional SQL
-querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause? udbClause?;
+querySpecification: selectClause fromClause timeTravelReadClause? whereClause? windowedAggregationClause? havingClause? sinkClause? udbClause? replayableClause?;
 
 
 fromClause: FROM relation (',' relation)*;
@@ -211,8 +211,18 @@ namedExpression
 identifier: strictIdentifier;
 
 strictIdentifier
-    : IDENTIFIER #unquotedIdentifier
+    : (IDENTIFIER | nonReserved) #unquotedIdentifier
     | quotedIdentifier #quotedIdentifierAlternative;
+
+// Keywords that only carry meaning inside one specific clause and stay usable as ordinary identifiers everywhere else.
+// Every keyword added to the lexer silently takes a name away from users unless it is listed here: TIMESTAMP and
+// event_time were introduced for time travel and made those perfectly ordinary column names unparseable.
+// Only add a keyword here if it cannot also start a construct that is valid where an identifier is — otherwise the
+// grammar becomes ambiguous.
+nonReserved
+    : TIMESTAMP_KW
+    | EVENT_TIME
+    ;
 
 quotedIdentifier
     : BACKQUOTED_IDENTIFIER
@@ -332,9 +342,23 @@ inlineSink
     : type=identifier '(' parameters=namedConfigExpressionSeq ')'
     ;
 
-timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
+timeTravelReadClause
+    : FOR EVENT_TIME AS OF TIMESTAMP_KW timestampValue=STRING
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW BETWEEN startBetween=STRING AND endBetween=STRING
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW FROM startFrom=STRING TO endFrom=STRING
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW CONTAINED IN '(' startContained=STRING ',' endContained=STRING ')'
+    | FOR EVENT_TIME AS OF TIMESTAMP_KW ALL
+    ;
 
 udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
+
+replayableClause: REPLAYABLE WITH HISTORY OF historyLimit optionsClause?;
+
+historyLimit
+    : storageSize=STRING                        // '10GB', '512MB'
+    | tupleCount=INTEGER_VALUE TUPLES           // 1000 TUPLES — future
+    | timeValue=INTEGER_VALUE timeUnit          // 1 HOUR — future
+    ;
 
 nullNotnull
     : NOT? NULLTOKEN
@@ -434,6 +458,7 @@ AT: 'AT';
 BETWEEN: 'BETWEEN' | 'between';
 BY: 'BY' | 'by';
 COMMENT: 'COMMENT';
+CONTAINED: 'CONTAINED' | 'contained';
 CUBE: 'CUBE';
 DELETE: 'DELETE';
 DESC: 'DESC' | 'desc';
@@ -520,8 +545,12 @@ AT_MOST_ONCE : 'AT_MOST_ONCE';
 AT_LEAST_ONCE : 'AT_LEAST_ONCE';
 JSON: 'JSON';
 TEXT: 'TEXT';
-TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
+EVENT_TIME: 'EVENT_TIME' | 'event_time';
+TIMESTAMP_KW: 'TIMESTAMP';
 TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
+REPLAYABLE: 'REPLAYABLE' | 'replayable';
+HISTORY: 'HISTORY' | 'history';
+TUPLES: 'TUPLES' | 'tuples';
 EXPLAIN: 'EXPLAIN' | 'explain';
 MODEL: 'MODEL';
 MODELS: 'MODELS';

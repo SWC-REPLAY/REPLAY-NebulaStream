@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,6 +24,8 @@
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
+#include <Functions/LogicalFunction.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Traits/TraitSet.hpp>
@@ -36,17 +39,17 @@ namespace NES
 class ReplayStoreLogicalOperator : public ManagedByOperator
 {
 public:
-    ReplayStoreLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
-
-    explicit ReplayStoreLogicalOperator(WeakLogicalOperator self, DescriptorConfig::Config validatedConfig)
-        : ManagedByOperator(std::move(self)), config(std::move(validatedConfig))
+    ReplayStoreLogicalOperator(
+        LogicalFunction tsExtractionFunction, const Windowing::TimeUnit& unit, DescriptorConfig::Config validatedConfig)
+        : ManagedByOperator(WeakLogicalOperator{})
+        , tsExtractionFunction(std::move(tsExtractionFunction))
+        , unit(unit)
+        , config(std::move(validatedConfig))
     {
     }
 
-    explicit ReplayStoreLogicalOperator(DescriptorConfig::Config validatedConfig)
-        : ManagedByOperator(WeakLogicalOperator{}), config(std::move(validatedConfig))
-    {
-    }
+    LogicalFunction tsExtractionFunction;
+    Windowing::TimeUnit unit;
 
     [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
     [[nodiscard]] static std::string_view getName() noexcept;
@@ -67,13 +70,34 @@ public:
 
     struct ConfigParameters
     {
+        /// Empty until StoreRegistrationRule assigns one. The parser cannot name a store: names must be unique across
+        /// queries, and once the optimizer places store operators it also decides how many of them there are.
         static inline const DescriptorConfig::ConfigParameter<std::string> STORE_NAME{
             "store_name",
-            std::nullopt,
+            std::string{},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_NAME, cfg); }};
 
+        /// The store parameters default to "unset" rather than to concrete values on purpose. Config validation fills in
+        /// a default for every parameter the query did not mention, so a concrete default here would be indistinguishable
+        /// from a value the user asked for, and would silently mask the worker-level replay configuration that lowering
+        /// falls back to. Empty string and zero mean "not given by the query".
+        static inline const DescriptorConfig::ConfigParameter<std::string> MEMORY_BUFFER_SIZE{
+            "memory_buffer_size",
+            std::string{},
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(MEMORY_BUFFER_SIZE, cfg); }};
+
+        static inline const DescriptorConfig::ConfigParameter<std::string> STORE_ORDER{
+            "store_order",
+            std::string{},
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(STORE_ORDER, cfg); }};
+
+        static inline const DescriptorConfig::ConfigParameter<uint64_t> MAX_BUFFER_COUNT{
+            "max_buffer_count",
+            uint64_t{0},
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(MAX_BUFFER_COUNT, cfg); }};
+
         static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME);
+            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME, MEMORY_BUFFER_SIZE, STORE_ORDER, MAX_BUFFER_COUNT);
     };
 
     static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);
@@ -106,5 +130,7 @@ namespace NES::detail
 struct ReflectedStoreLogicalOperator
 {
     DescriptorConfig::Config config;
+    std::optional<LogicalFunction> onField;
+    Windowing::TimeUnit timeUnit;
 };
 }

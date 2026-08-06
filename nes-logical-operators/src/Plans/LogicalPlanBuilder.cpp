@@ -26,6 +26,7 @@
 
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
+#include <DataTypes/TimeUnit.hpp>
 #include <Functions/ConstantValueLogicalFunction.hpp>
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
@@ -210,9 +211,10 @@ LogicalPlan LogicalPlanBuilder::addInlineSink(
         TypedLogicalOperator<InlineSinkLogicalOperator>{std::move(type), schema, std::move(sinkConfig), std::move(formatConfig)});
 }
 
-LogicalPlan LogicalPlanBuilder::addReplayStore(const DescriptorConfig::Config& config, const LogicalPlan& queryPlan)
+LogicalPlan LogicalPlanBuilder::addReplayStore(
+    const LogicalPlan& queryPlan, const DescriptorConfig::Config& config, LogicalFunction onField, const Windowing::TimeUnit& unit)
 {
-    const auto storeOp = ReplayStoreLogicalOperator(config);
+    const auto storeOp = ReplayStoreLogicalOperator(std::move(onField), unit, config);
     return promoteOperatorToRoot(queryPlan, storeOp);
 }
 

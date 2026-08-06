@@ -1,0 +1,36 @@
+# name: operator/replay/WorkerStoreConfiguration.test
+# description: Worker-level replay.* configuration reaches the store and is overridden by per-query configuration
+# groups: [Replay]
+
+# replay.memory_buffer_size, replay.max_buffer_count and replay.store_order configure every store a worker builds.
+# They were previously registered as worker options, accepted on the command line and by systest's CONFIGURATION, and
+# then never read by anything.
+#
+# As in StoreConfiguration.test, the assertion uses a store order that cannot be built. A valid value would be
+# indistinguishable from the default and the test would pass even if the configuration were ignored again.
+
+CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, ts UINT64);
+CREATE PHYSICAL SOURCE FOR stream TYPE File;
+ATTACH INLINE
+1,1,1000
+2,1,1001
+3,1,1002
+
+CREATE SINK sinkWorkerRejected(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK sinkQueryOverrides(stream.id UINT64, stream.value UINT64, stream.ts UINT64) TYPE File;
+
+# A query that configures nothing itself inherits the worker's store order, so an unbuildable one fails it
+CONFIGURATION replay.store_order: NotAStoreType
+SELECT id, value, ts FROM stream INTO sinkWorkerRejected REPLAYABLE WITH HISTORY OF '32MB';
+----
+ERROR 1000
+
+# The same worker setting is overridden by a query that configures its own store order, which therefore succeeds
+CONFIGURATION replay.store_order: NotAStoreType
+SELECT id, value, ts FROM stream INTO sinkQueryOverrides REPLAYABLE WITH HISTORY OF '32MB' SET(
+    'MemoryStore->FileStore' AS REPLAY.STORE_ORDER
+);
+----
+1,1,1000
+2,1,1001
+3,1,1002
