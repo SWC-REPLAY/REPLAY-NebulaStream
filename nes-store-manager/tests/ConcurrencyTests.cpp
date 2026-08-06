@@ -22,6 +22,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -91,18 +92,18 @@ protected:
     static constexpr size_t TS_OFFSET = 2 * sizeof(uint64_t);
 
     /// Pack a record into the buffer matching the schema's binary layout.
-    static void packRecord(uint8_t* dest, uint64_t id, uint64_t value, uint64_t ts)
+    static void packRecord(const std::span<uint8_t> dest, uint64_t id, uint64_t value, uint64_t ts)
     {
-        std::memcpy(dest + ID_OFFSET, &id, sizeof(uint64_t));
-        std::memcpy(dest + VALUE_OFFSET, &value, sizeof(uint64_t));
-        std::memcpy(dest + TS_OFFSET, &ts, sizeof(uint64_t));
+        std::memcpy(dest.subspan(ID_OFFSET, sizeof(uint64_t)).data(), &id, sizeof(uint64_t));
+        std::memcpy(dest.subspan(VALUE_OFFSET, sizeof(uint64_t)).data(), &value, sizeof(uint64_t));
+        std::memcpy(dest.subspan(TS_OFFSET, sizeof(uint64_t)).data(), &ts, sizeof(uint64_t));
     }
 
     /// Unpack a field from a record at the given byte offset.
-    static uint64_t readField(const uint8_t* src, size_t fieldOffset)
+    static uint64_t readField(const std::span<const uint8_t> src, size_t fieldOffset)
     {
         uint64_t val = 0;
-        std::memcpy(&val, src + fieldOffset, sizeof(uint64_t));
+        std::memcpy(&val, src.subspan(fieldOffset, sizeof(uint64_t)).data(), sizeof(uint64_t));
         return val;
     }
 
@@ -120,7 +121,7 @@ protected:
         {
             for (size_t i = 0; i < TUPLES_PER_BATCH; ++i)
             {
-                packRecord(record.data(), writerId, (nextTs * VALUE_TS_MULTIPLIER) + writerId, nextTs);
+                packRecord(record, writerId, (nextTs * VALUE_TS_MULTIPLIER) + writerId, nextTs);
                 store.writeRecord(record.data(), recordSize, Timestamp(nextTs));
                 ++nextTs;
             }
@@ -171,24 +172,24 @@ protected:
                 auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
                 uint64_t prevTs = 0;
 
-                for (uint64_t t = 0; t < tuplesRead; ++t)
+                for (uint64_t tupleIdx = 0; tupleIdx < tuplesRead; ++tupleIdx)
                 {
-                    const uint8_t* row = span.data() + (t * recordSize);
+                    const auto row = span.subspan(tupleIdx * recordSize, recordSize);
                     const uint64_t id = readField(row, ID_OFFSET);
                     const uint64_t value = readField(row, VALUE_OFFSET);
                     const uint64_t ts = readField(row, TS_OFFSET);
 
-                    ASSERT_LT(id, numWriters) << "Reader " << readerId << " tuple " << t << ": id (" << id << ") out of writer range [0, "
-                                              << numWriters << ")";
+                    ASSERT_LT(id, numWriters) << "Reader " << readerId << " tuple " << tupleIdx << ": id (" << id
+                                              << ") out of writer range [0, " << numWriters << ")";
 
                     ASSERT_EQ(value, (ts * VALUE_TS_MULTIPLIER) + id)
-                        << "Reader " << readerId << " tuple " << t << ": value (" << value << ") != ts*" << VALUE_TS_MULTIPLIER << "+id ("
-                        << (ts * VALUE_TS_MULTIPLIER) + id << ") for writer " << id;
+                        << "Reader " << readerId << " tuple " << tupleIdx << ": value (" << value << ") != ts*" << VALUE_TS_MULTIPLIER
+                        << "+id (" << (ts * VALUE_TS_MULTIPLIER) + id << ") for writer " << id;
 
                     if (checkOrdering)
                     {
-                        ASSERT_GE(ts, prevTs) << "Reader " << readerId << " tuple " << t << ": ts went backwards (" << ts << " < " << prevTs
-                                              << ")";
+                        ASSERT_GE(ts, prevTs) << "Reader " << readerId << " tuple " << tupleIdx << ": ts went backwards (" << ts << " < "
+                                              << prevTs << ")";
                         prevTs = ts;
                     }
                 }
@@ -256,13 +257,13 @@ protected:
         std::this_thread::sleep_for(duration);
         stop.store(true, std::memory_order_relaxed);
 
-        for (auto& wr : writers)
+        for (auto& writer : writers)
         {
-            wr.join();
+            writer.join();
         }
-        for (auto& rd : readers)
+        for (auto& reader : readers)
         {
-            rd.join();
+            reader.join();
         }
 
         NES_INFO("Duration: {}s | Writers: {} | Readers: {}", duration.count(), config.numWriters, config.numReaders);
@@ -368,7 +369,7 @@ TEST_F(ConcurrencyTests, ConcurrentWraparoundMemoryStore)
     if (tuplesRead > 0)
     {
         /// The earliest record in the store should not be ts=1 — it must have been evicted.
-        const uint64_t firstTs = readField(readBuffer.getAvailableMemoryArea<uint8_t>().data() + TS_OFFSET, 0);
+        const uint64_t firstTs = readField(readBuffer.getAvailableMemoryArea<uint8_t>(), TS_OFFSET);
         EXPECT_GT(firstTs, 1U) << "Earliest timestamp should have been evicted by wraparound";
     }
 
@@ -419,9 +420,9 @@ TEST_F(ConcurrencyTests, ConcurrentMultiProducerWraparoundMemoryStore)
         auto span = readBuffer.getAvailableMemoryArea<uint8_t>();
         /// Find the smallest ts across all records in the read buffer.
         uint64_t minTs = std::numeric_limits<uint64_t>::max();
-        for (uint64_t t = 0; t < tuplesRead; ++t)
+        for (uint64_t tupleIdx = 0; tupleIdx < tuplesRead; ++tupleIdx)
         {
-            const uint64_t ts = readField(span.data() + (t * recordSize), TS_OFFSET);
+            const uint64_t ts = readField(span.subspan(tupleIdx * recordSize, recordSize), TS_OFFSET);
             minTs = std::min(minTs, ts);
         }
         EXPECT_GT(minTs, 1U) << "Earliest timestamp should have been evicted by wraparound";
