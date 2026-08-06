@@ -65,14 +65,10 @@ bool isPhysicalSourceExpansionOf(const LogicalOperator& op, const std::string& s
 
 /// True if `plan` records one row per row of `sourceName`, in order, for as long as it ran.
 ///
-/// Only projections are tolerated between the source and the store. A projection narrows or renames columns but emits
-/// exactly one row per input row, so the store still holds the source's full history — just fewer columns of it, which
-/// a reader asking for those columns can be served from. Anything that drops or combines rows (a selection, a window
-/// aggregation, a join) makes the recorded data a derived stream that must never be handed back as the source's
-/// history: doing so would silently return the wrong tuples rather than fail.
-///
-/// A store narrower than the read is not rejected here. Binding the read against the store's schema means a field the
-/// store does not hold simply fails to resolve downstream, which is a safe failure rather than a wrong answer.
+/// Only projections are tolerated between source and store: they emit one row per input row, so the store still holds
+/// the source's full history, just fewer columns. Anything that drops or combines rows (selection, window aggregation,
+/// join) yields a derived stream that must never be served as the source's history — it would return wrong tuples
+/// rather than fail. A store narrower than the read is fine: the missing field fails to resolve downstream.
 bool recordsHistoryOf(const LogicalOperator& op, const std::string& sourceName)
 {
     if (const auto name = logicalSourceNameOf(op); name.has_value())
@@ -109,8 +105,8 @@ StoreRegistration StoreCatalog::registerStore(StoreEntry entry)
                                                          : StoreRegistration::NameCollision;
     }
     NES_DEBUG("Registering store '{}' over source '{}' for query '{}'", entry.name, entry.sourceName, entry.queryId);
-    /// A store over an inline source has no logical source name to be found by, so it is registered but not indexed
-    /// rather than filed under an empty key nothing can look up.
+    /// A store over an inline source has no logical source name, so it is registered but not indexed rather than filed
+    /// under an empty key nothing can look up.
     if (!entry.sourceName.empty())
     {
         sourcesToStoreNames[entry.sourceName].push_back(entry.name);
@@ -158,8 +154,8 @@ std::vector<StoreEntry> StoreCatalog::findStoresForSourceHistory(const std::stri
     {
         return result;
     }
-    /// Walks the index rather than going through getStoresForSource, so that only the stores that survive the check are
-    /// copied. Each entry carries a whole LogicalPlan, so copying every candidate first is not free.
+    /// Walks the index rather than going through getStoresForSource so only surviving stores are copied — each entry
+    /// carries a whole LogicalPlan.
     for (const auto& storeName : it->second)
     {
         if (const auto store = namesToStores.find(storeName);

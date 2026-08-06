@@ -28,13 +28,9 @@
 namespace NES
 {
 
-/// Which notion of time a store's records were stamped with.
-///
-/// The store itself is indifferent: it is handed a timestamp per record and filters whatever range it is later given.
-/// The notion matters only so that a reader asking for one kind of time is never served a store that recorded another,
-/// which would return plausible but wrong rows. Adding a further notion — watermark-based, say — means adding an
-/// enumerator here and handling it wherever this type is switched on; those switches are deliberately written without a
-/// `default` so the compiler points at every site that needs a decision.
+/// Which notion of time a store's records were stamped with. Recorded so a reader asking for one kind of time is never
+/// served a store that recorded another, which would return plausible but wrong rows. Switches on this type are written
+/// without a `default` so a new enumerator makes the compiler point at every site that needs a decision.
 enum class StoreTimeType : uint8_t
 {
     /// Stamped from a value carried by the record itself.
@@ -43,10 +39,8 @@ enum class StoreTimeType : uint8_t
     IngestionTime,
 };
 
-/// Metadata describing one replay store. This is deliberately *not* the store itself: the catalog records what a store
-/// contains so that a later query can be bound against it, while the actual store instance is created per worker during
-/// lowering and resolved at runtime. Keeping the two apart is what allows a reader query to be bound before the writer
-/// query has ever run.
+/// Metadata describing one replay store, not the store itself: the instance is created per worker during lowering. That
+/// separation is what lets a reader query be bound before the writer query has ever run.
 struct StoreEntry
 {
     /// Internal name. Not user facing — readers reference the *source*, not the store.
@@ -55,21 +49,16 @@ struct StoreEntry
     /// The query that owns this store, for attribution and cleanup.
     QueryId queryId = INVALID_QUERY_ID;
 
-    /// The logical source the recorded data derives from, or empty when the recorded plan reads an inline source. This
-    /// is an index key for the common case, not the definition of the store's content — `subplan` is. A store
-    /// with no source name is registered but cannot be found by source.
+    /// The logical source the recorded data derives from, empty when the recorded plan reads an inline source. An index
+    /// key over `subplan`, not the definition of the store's content; a store without one cannot be found by source.
     std::string sourceName;
 
     /// Schema of the recorded data, i.e. the input schema of the store operator.
     Schema schema;
 
-    /// Which notion of time the store operator stamped these records with. Recorded so a reader can refuse a store that
-    /// measured time differently than the read asks for. How the timestamp was extracted is not recorded: that is the
-    /// writer's business, and the store filters on the timestamp it was handed rather than re-deriving one.
     StoreTimeType timeType{StoreTimeType::EventTime};
 
-    /// The subplan whose output this store recorded. This is the real definition of the store's content and the input
-    /// to store selection; `sourceName` is only a fast path over it.
+    /// The subplan whose output this store recorded — the real definition of its content.
     LogicalPlan subplan;
 };
 
@@ -77,21 +66,17 @@ struct StoreEntry
 enum class StoreRegistration : uint8_t
 {
     Registered,
-    /// The same query was analysed again and re-derived a store it had already registered. The existing entry already
-    /// describes it, so this is benign.
+    /// The same query was analysed again and re-derived a store it had already registered; benign.
     AlreadyRegisteredBySameQuery,
-    /// Two different queries produced the same store name. Names are derived from the query id, so this cannot happen
-    /// unless name derivation is broken — it must not be papered over, because the second store would silently read
-    /// and write the first one's rows.
+    /// Two different queries produced the same store name. Names derive from the query id, so this means name
+    /// derivation is broken — the second store would silently read and write the first one's rows.
     NameCollision,
 };
 
 /// Catalog of replay store metadata, alongside the source and sink catalogs.
 ///
-/// Store selection currently answers one question — "which store holds the history of logical source X" — because a
-/// store operator is always placed directly above the sink of a plain scan. It is expressed in terms of `findStores`
-/// taking a subplan so that the general case (a store recorded at an arbitrary cut in the plan, several stores per
-/// query, choosing between them) is a change to this one function rather than to its callers.
+/// Selection currently answers only "which store holds the history of logical source X", but is expressed in terms of a
+/// subplan so that the general case stays a change to these functions rather than to their callers.
 class StoreCatalog
 {
 public:

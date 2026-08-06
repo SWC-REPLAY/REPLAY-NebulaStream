@@ -53,9 +53,8 @@ SemanticAnalyzer::SemanticAnalyzer(
     ruleManager.addRule(InferModelResolutionRule{this->modelCatalog});
     ruleManager.addRule(TypeInferenceRule{});
     ruleManager.addRule(OriginIdInferenceRule{});
-    /// The read side runs early — it rewrites a source reference before anything resolves it. The write side runs late,
-    /// once schemas are known. Both live here rather than in a frontend so the REPL, the worker and the systests get
-    /// replay from the same path.
+    /// Read side runs early, before anything resolves the source reference it rewrites; write side runs late, once
+    /// schemas are known.
     ruleManager.addRule(ReplayReadBindingRule{this->storeCatalog, this->sourceCatalog});
     ruleManager.addRule(StoreRegistrationRule{this->storeCatalog});
 

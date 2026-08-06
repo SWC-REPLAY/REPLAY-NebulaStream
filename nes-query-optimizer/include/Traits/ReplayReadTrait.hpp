@@ -29,9 +29,9 @@ namespace NES
 
 /// Marks a source reference that came from a `FOR EVENT_TIME` clause, carrying the requested event-time range.
 ///
-/// The parser attaches this; it does not resolve anything. Deciding *which* store can answer the range needs the store
-/// catalog, so that happens in a semantic rule. The range is normalised to half-open [start, end) here so the various
-/// surface syntaxes (BETWEEN, FROM..TO, CONTAINED IN, AS OF, ALL) stop being distinguishable downstream.
+/// Attached by the parser, resolved in ReplayReadBindingRule: deciding *which* store answers the range needs the store
+/// catalog. The range is normalised to half-open [start, end) here so the surface syntaxes (BETWEEN, FROM..TO,
+/// CONTAINED IN, AS OF, ALL) stop being distinguishable downstream.
 class ReplayReadTrait final
 {
 public:

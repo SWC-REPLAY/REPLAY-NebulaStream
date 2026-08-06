@@ -60,8 +60,8 @@ std::set<std::type_index> ReplayReadBindingRule::dependsOn() const
 /// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 std::set<std::type_index> ReplayReadBindingRule::requiredBy() const
 {
-    /// This replaces a named source with an inline `Replay` source, so it has to happen before either of the rules that
-    /// would otherwise try to resolve that name against the source catalog.
+    /// Replaces a named source with an inline `Replay` source, so it must run before the rules that would resolve that
+    /// name against the source catalog.
     return {typeid(InlineSourceBindingRule), typeid(SourceInferenceRule)};
 }
 
@@ -84,8 +84,8 @@ LogicalPlan ReplayReadBindingRule::apply(LogicalPlan queryPlan) const
         const auto candidates = storeCatalog->findStoresForSourceHistory(sourceName);
         if (candidates.empty())
         {
-            /// Separating the two cases matters: one is a missing REPLAYABLE query, the other is a store that exists but
-            /// recorded something other than this source's history and must not be substituted for it.
+            /// The two cases differ: a missing REPLAYABLE query, versus a store that exists but recorded something
+            /// other than this source's history.
             if (storeCatalog->getStoresForSource(sourceName).empty())
             {
                 throw UnsupportedQuery(
@@ -106,9 +106,8 @@ LogicalPlan ReplayReadBindingRule::apply(LogicalPlan queryPlan) const
             NES_DEBUG("{} stores can serve source '{}', using '{}'", candidates.size(), sourceName, store.name);
         }
 
-        /// FOR EVENT_TIME names a notion of time, so a store that measured a different one cannot answer it — the rows
-        /// would look plausible and be wrong. Switched without a `default` on purpose: a new StoreTimeType must not
-        /// silently fall through to being accepted here.
+        /// A store that measured a different notion of time cannot answer FOR EVENT_TIME; the rows would look
+        /// plausible and be wrong. No `default`, so a new StoreTimeType cannot silently fall through to accepted.
         switch (store.timeType)
         {
             case StoreTimeType::EventTime:
@@ -131,8 +130,8 @@ LogicalPlan ReplayReadBindingRule::apply(LogicalPlan queryPlan) const
             sourceConfig["replay_end_timestamp"] = fmt::format("{}", *end);
         }
 
-        /// A replay read is served from wherever the source it replays lives. Once placement knows about stores this
-        /// becomes the placement of the store operator instead.
+        /// Served from wherever the source it replays lives; becomes the store operator's placement once placement
+        /// knows about stores.
         const auto logicalSource = sourceCatalog->getLogicalSource(sourceName);
         if (!logicalSource.has_value())
         {

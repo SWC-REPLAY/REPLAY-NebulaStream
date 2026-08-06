@@ -90,9 +90,8 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
         return queryPlan;
     }
 
-    /// Store names hang off the query id, which is normally only minted when the query is registered. A query that
-    /// records history needs a stable identity earlier than that, so mint it here; QueryManager keeps an id that is
-    /// already set.
+    /// Store names hang off the query id, normally minted only at registration. A query that records history needs a
+    /// stable identity earlier, so mint it here; QueryManager keeps an id that is already set.
     if (!queryPlan.getQueryId().isDistributed())
     {
         queryPlan.setQueryId(QueryId::createDistributed(getNextDistributedQueryId()));
@@ -104,8 +103,7 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
     {
         const auto& storeOperator = storeOperators.at(storeIndex);
 
-        /// The suffix is redundant while a query records a single cut of its plan, and is what keeps names unique once
-        /// the optimizer records several.
+        /// The suffix is redundant for a single cut, and keeps names unique once the optimizer records several.
         const auto storeName = fmt::format("{}_store_{}", queryIdText, storeIndex);
 
         const auto inputSchemas = storeOperator->getInputSchemas();
@@ -119,8 +117,8 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
             .queryId = queryId,
             .sourceName = findSourceNameBelow(children.front()),
             .schema = inputSchemas.front(),
-            /// LowerToPhysicalReplayStore builds an EventTimeFunction unconditionally, so every store records event
-            /// time today. Once the store operator carries a time characteristic of its own, read it from there.
+            /// LowerToPhysicalReplayStore builds an EventTimeFunction unconditionally. Read this from the store
+            /// operator once it carries a time characteristic of its own.
             .timeType = StoreTimeType::EventTime,
             .subplan = LogicalPlan{queryId, {children.front()}}};
 
@@ -133,8 +131,8 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
                 NES_DEBUG("Store '{}' was already registered by an earlier analysis of query '{}'", storeName, queryId);
                 break;
             case StoreRegistration::NameCollision:
-                /// Names are derived from the query id, so this means name derivation is broken rather than anything the
-                /// user did. Continuing would point two queries at one store and silently mix their rows.
+                /// Names derive from the query id, so this is broken name derivation, not user error. Continuing would
+                /// point two queries at one store and silently mix their rows.
                 INVARIANT(false, "Store name '{}' derived for query '{}' is already used by a different query", storeName, queryId);
                 break;
         }

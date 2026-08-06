@@ -38,8 +38,8 @@ public:
         /// Unqualified schema the store records, and its rendered form for the store header.
         Schema storeSchema;
         std::string schemaText;
-        /// What the query configured for itself. Unset fields fall back to the worker's defaults on materialisation,
-        /// which is why they stay unresolved here: the defaults belong to the worker, not to the plan.
+        /// What the query configured for itself. Unset fields fall back to the worker's defaults on materialisation:
+        /// the defaults belong to the worker, not to the plan.
         StoreConfig storeOverrides;
     };
 
@@ -53,8 +53,7 @@ public:
     void writeRecord(const uint8_t* data, uint32_t size, Timestamp ts);
 
 private:
-    /// Materialised on `start` from the worker's registry, so the plan this handler belongs to stays independent of
-    /// the worker it is compiled on.
+    /// Materialised on `start` from the worker's registry, keeping the plan independent of the worker it runs on.
     std::optional<Store> store;
     Config config;
 };

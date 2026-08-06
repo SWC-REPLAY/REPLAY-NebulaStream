@@ -29,12 +29,11 @@ namespace NES
 
 /// Names every replay store in the plan and records what it will contain in the StoreCatalog.
 ///
-/// Names are derived from the owning query id, so a store can always be traced back to the query that created it and
-/// two queries recording the same source never collide. The per-store suffix is already in place for the point where
-/// the optimizer decides to record more than one cut of a plan.
+/// Names derive from the owning query id, so a store traces back to the query that created it and two queries
+/// recording the same source never collide.
 ///
-/// Runs after type inference because a store's schema is the input schema of its operator, which is only known once
-/// schemas have been propagated.
+/// Runs after type inference: a store's schema is the input schema of its operator, known only once schemas have been
+/// propagated.
 class StoreRegistrationRule
 {
 public:

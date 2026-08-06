@@ -479,8 +479,8 @@ struct SystestBinder::Impl
         auto loadedSystests = loadFromSLTFile(testfile.file, testfile.name(), testfile.sourceCatalog, modelCatalog, sinkProvider);
         std::unordered_set<SystestQueryId> foundQueries;
 
-        /// Analysing a query that records history registers its store, and a later FOR EVENT_TIME query resolves against
-        /// that registration. Queries are collected in a map, so sort them back into file order before analysing them.
+        /// Queries are collected in a map, so sort them back into file order: a query may depend on state a preceding
+        /// query in the same file established during analysis.
         std::ranges::sort(
             loadedSystests, [](const auto& lhs, const auto& rhs) { return lhs.getSystemTestQueryId() < rhs.getSystemTestQueryId(); });
 

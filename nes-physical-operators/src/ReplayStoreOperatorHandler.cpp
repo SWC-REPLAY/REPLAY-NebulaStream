@@ -41,7 +41,6 @@ void ReplayStoreOperatorHandler::start(PipelineExecutionContext& pipelineExecuti
         throw StoreManagerInitFailure("Store '{}' needs a worker with replay stores configured", config.storeName);
     }
 
-    /// The buffer provider comes from the engine, so the store draws from the same pool as the rest of the pipeline.
     store = registry->get().getOrCreateStore(
         config.storeName, config.storeSchema, config.schemaText, config.storeOverrides, pipelineExecutionContext.getBufferManager());
     store->open();

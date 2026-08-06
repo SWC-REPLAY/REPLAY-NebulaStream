@@ -37,14 +37,8 @@ struct StoreConfig
     std::optional<std::string> storeOrder;
 };
 
-/// Holds the live store instances a worker has materialised, keyed by the names the StoreCatalog assigned.
-///
-/// Owned by the worker rather than process-global: a store is a physical thing that lives where its operator was
-/// placed, so in a deployment with several workers each of them holds its own. A worker also materialises a store per
-/// store operator, which is what lets one query record more than one cut of its plan.
-///
-/// The registry also holds that worker's replay defaults. They are worker-scoped exactly like the registry itself, so
-/// keeping them here spares everything in between from carrying them alongside it.
+/// Holds the live store instances a worker has materialised, keyed by the names the StoreCatalog assigned, plus that
+/// worker's replay defaults. Worker-owned rather than process-global: a store lives where its operator was placed.
 class StoreRegistry
 {
 public:
@@ -55,8 +49,7 @@ public:
     void registerStore(const std::string& storeName, Store store);
 
     /// Get the store, materialising it on first call. Unset fields in `overrides` fall back to the worker defaults.
-    /// Idempotent, so concurrent pipeline starts share one instance. `bufferProvider` comes from the caller so stores
-    /// draw from the engine's pool rather than one this registry allocates.
+    /// Idempotent, so concurrent pipeline starts share one instance.
     /// @throws InvalidConfigParameter on an unsupported store order.
     Store getOrCreateStore(
         const std::string& storeName,

@@ -42,9 +42,9 @@ namespace NES
 
 namespace
 {
-/// Only what this query configured for itself. Whatever stays unset is filled in by the worker's replay defaults when
-/// the store is materialised. The store operator's parameters default to empty/zero precisely so "the query said
-/// nothing" stays distinguishable from "the query said this".
+/// Only what this query configured for itself; whatever stays unset is filled in by the worker's replay defaults when
+/// the store is materialised. The store operator's parameters default to empty/zero so that "the query said nothing"
+/// stays distinguishable from "the query said this".
 StoreConfig readStoreOverrides(const Descriptor& logicalCfg)
 {
     StoreConfig overrides;

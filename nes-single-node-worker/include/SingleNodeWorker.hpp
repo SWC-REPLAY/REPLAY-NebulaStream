@@ -41,8 +41,8 @@ class StoreRegistry;
 /// The Class itself is NonCopyable, but Movable, it owns the QueryCompiler, the NodeEngine and its replay stores.
 class SingleNodeWorker
 {
-    /// The worker owns its replay stores: they hold rows that live on this node. Declared before the engine, which
-    /// borrows it, so that it is destroyed after it. The stores themselves are released earlier, in the destructor.
+    /// The worker owns its replay stores. Declared before the engine, which borrows it, so it is destroyed after it;
+    /// the stores themselves are released earlier, in the destructor.
     UniquePtr<StoreRegistry> storeRegistry;
     SharedPtr<CompositeStatisticListener> listener;
     SharedPtr<NodeEngine> nodeEngine;

@@ -28,17 +28,12 @@
 namespace NES
 {
 
-/// Turns a `FOR EVENT_TIME` source reference into a read of a replay store.
+/// Turns a `FOR EVENT_TIME` source reference into a read of a replay store, rewriting it into an inline `Replay` source
+/// carrying the store name and range. Picking a store is a catalog question, which is why the parser only marks the
+/// source with a ReplayReadTrait and leaves the resolution here.
 ///
-/// The parser marks such a source with a ReplayReadTrait but cannot resolve it: picking a store is a catalog question.
-/// This rule answers it and rewrites the source into an inline `Replay` source carrying the store name and the range.
-///
-/// It deliberately does not touch the StoreRegistry. Only the store's *metadata* is needed to build a plan; the store
-/// instance itself is created per worker during lowering and looked up at runtime. That is what lets a reader query be
-/// bound before the writer query has ever produced a row.
-///
-/// Store selection is a single store today. When the optimizer starts placing several stores per query and recreating
-/// the read from them, the choice made here is the thing that grows.
+/// Reads only the store's metadata, never the StoreRegistry — the instance is created per worker during lowering. That
+/// is what lets a reader query be bound before the writer query has produced a row.
 class ReplayReadBindingRule
 {
 public:
