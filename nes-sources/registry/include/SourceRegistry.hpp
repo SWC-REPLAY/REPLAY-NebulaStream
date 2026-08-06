@@ -22,13 +22,10 @@
 #include <Util/Pointers.hpp>
 #include <Util/Registry.hpp>
 
-namespace NES::StoreManager
-{
-class StoreRegistry;
-}
-
 namespace NES
 {
+class StoreRegistry;
+
 
 using SourceRegistryReturnType = std::unique_ptr<Source>;
 
@@ -37,7 +34,7 @@ struct SourceRegistryArguments
     SourceDescriptor sourceDescriptor;
     /// The store registry of the worker this source runs on, borrowed and outliving the source. A replay source resolves
     /// its store from it; every other source ignores it, and it is empty on a worker without replay stores.
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
+    OptionalRef<StoreRegistry> storeRegistry;
 };
 
 class SourceRegistry : public BaseRegistry<SourceRegistry, std::string, SourceRegistryReturnType, SourceRegistryArguments>

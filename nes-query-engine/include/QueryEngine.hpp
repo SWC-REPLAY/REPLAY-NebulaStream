@@ -23,13 +23,10 @@
 #include <QueryEngineStatisticListener.hpp>
 #include <QueryId.hpp>
 
-namespace NES::StoreManager
-{
-class StoreRegistry;
-}
-
 namespace NES
 {
+class StoreRegistry;
+
 /// Forward declaration so that only the QueryEngine can be included
 class QueryCatalog;
 class ThreadPool;
@@ -42,7 +39,7 @@ public:
         std::shared_ptr<QueryEngineStatisticListener> statListener,
         std::shared_ptr<AbstractQueryStatusListener> listener,
         std::shared_ptr<BufferManager> bm,
-        OptionalRef<StoreManager::StoreRegistry> storeRegistry,
+        OptionalRef<StoreRegistry> storeRegistry,
         const Host& host);
     void stop(QueryId queryId);
     void start(std::unique_ptr<ExecutableQueryPlan> executableQueryPlan);

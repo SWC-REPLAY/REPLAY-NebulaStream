@@ -31,7 +31,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 BinaryStoreWriter::BinaryStoreWriter(Config cfg) : config(std::move(cfg))

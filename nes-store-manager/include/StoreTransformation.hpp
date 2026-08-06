@@ -21,7 +21,7 @@
 
 #include <Store.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 namespace detail

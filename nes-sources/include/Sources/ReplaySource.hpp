@@ -33,14 +33,10 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 class ReplayStoreReader;
 class StoreRegistry;
-}
-
-namespace NES
-{
 
 /// Reads rows from a Store or a binary file, delegating I/O as appropriate.
 class ReplaySource final : public Source
@@ -48,7 +44,7 @@ class ReplaySource final : public Source
 public:
     static constexpr std::string_view NAME = "Replay";
     /// `storeRegistry` is borrowed from the worker this source runs on and must outlive it.
-    ReplaySource(const SourceDescriptor& sourceDescriptor, OptionalRef<StoreManager::StoreRegistry> storeRegistry);
+    ReplaySource(const SourceDescriptor& sourceDescriptor, OptionalRef<StoreRegistry> storeRegistry);
     ~ReplaySource() override;
 
     void open(std::shared_ptr<AbstractBufferProvider> bufferProvider) override;
@@ -71,9 +67,9 @@ private:
     std::string storeName;
     /// The registry of the worker this source runs on, borrowed; the named store is resolved from it when the source
     /// opens.
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
-    std::optional<StoreManager::Store> store;
-    std::unique_ptr<StoreManager::ReplayStoreReader> reader;
+    OptionalRef<StoreRegistry> storeRegistry;
+    std::optional<Store> store;
+    std::unique_ptr<ReplayStoreReader> reader;
     Schema schema;
     TimeRange timeRange;
     bool readComplete{false};

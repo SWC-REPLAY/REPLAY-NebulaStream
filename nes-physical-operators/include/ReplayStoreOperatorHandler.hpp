@@ -45,7 +45,7 @@ public:
         std::string schemaText;
         /// What the query configured for itself. Unset fields fall back to the worker's defaults on materialisation,
         /// which is why they stay unresolved here: the defaults belong to the worker, not to the plan.
-        StoreManager::StoreConfig storeOverrides;
+        StoreConfig storeOverrides;
     };
 
     explicit ReplayStoreOperatorHandler(Config cfg);
@@ -60,7 +60,7 @@ public:
 private:
     /// Materialised on `start` from the worker's registry, so the plan this handler belongs to stays independent of
     /// the worker it is compiled on.
-    std::optional<StoreManager::Store> store;
+    std::optional<Store> store;
     Config config;
 };
 

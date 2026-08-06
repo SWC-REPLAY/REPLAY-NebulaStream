@@ -25,13 +25,10 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Util/Pointers.hpp>
 
-namespace NES::StoreManager
-{
-class StoreRegistry;
-}
-
 namespace NES
 {
+class StoreRegistry;
+
 class PipelineExecutionContext
 {
 public:
@@ -68,7 +65,7 @@ public:
 
     /// This worker's replay stores, empty on a worker without any. Worker-scoped like the buffer manager above; an
     /// operator handler resolves its store from it when the pipeline starts.
-    [[nodiscard]] virtual OptionalRef<StoreManager::StoreRegistry> getStoreRegistry() const { return std::nullopt; }
+    [[nodiscard]] virtual OptionalRef<StoreRegistry> getStoreRegistry() const { return std::nullopt; }
 
     /// TODO #30 Remove OperatorHandler from the pipeline execution context
     virtual std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& getOperatorHandlers() = 0;

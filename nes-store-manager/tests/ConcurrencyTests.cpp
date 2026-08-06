@@ -42,7 +42,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class ConcurrencyTests : public ::testing::Test

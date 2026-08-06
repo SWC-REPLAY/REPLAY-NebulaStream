@@ -30,7 +30,7 @@
 #include <StoreTransformation.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// File-backed store wrapping BinaryStoreWriter/ReplayStoreReader. Satisfies StoreConcept.

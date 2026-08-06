@@ -43,7 +43,7 @@
 namespace NES
 {
 
-ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor, OptionalRef<StoreManager::StoreRegistry> storeRegistry)
+ReplaySource::ReplaySource(const SourceDescriptor& sourceDescriptor, OptionalRef<StoreRegistry> storeRegistry)
     : filePath(
           sourceDescriptor.getConfig().contains("file_path") ? std::get<std::string>(sourceDescriptor.getConfig().at("file_path"))
                                                              : std::string())
@@ -85,7 +85,7 @@ void ReplaySource::open(std::shared_ptr<AbstractBufferProvider>)
     }
 
     NES_DEBUG("ReplaySource: opening file {}", filePath);
-    reader = std::make_unique<StoreManager::ReplayStoreReader>(filePath);
+    reader = std::make_unique<ReplayStoreReader>(filePath);
     reader->open();
     reader->verifySchema(schema);
     NES_DEBUG("ReplaySource: dataStartOffset={}", reader->getDataStartOffset());
@@ -140,7 +140,7 @@ uint32_t ReplaySource::getRowWidthBytes() const
 
 Schema ReplaySource::readSchemaFromFile(const std::string& filePath)
 {
-    return StoreManager::ReplayStoreReader::readSchemaFromFile(filePath);
+    return ReplayStoreReader::readSchemaFromFile(filePath);
 }
 
 DescriptorConfig::Config ReplaySource::validateAndFormat(std::unordered_map<std::string, std::string> config)

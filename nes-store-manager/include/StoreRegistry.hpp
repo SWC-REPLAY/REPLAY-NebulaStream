@@ -25,7 +25,7 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Store.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Store configuration. Every field is optional; an unset field falls back to the registry's worker-level defaults, and

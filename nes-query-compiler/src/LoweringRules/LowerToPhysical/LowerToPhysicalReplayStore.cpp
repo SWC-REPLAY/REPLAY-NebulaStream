@@ -69,9 +69,9 @@ size_t parseSizeString(const std::string& s)
 /// Only what this query configured for itself. Whatever stays unset is filled in by the worker's replay defaults when
 /// the store is materialised. The store operator's parameters default to empty/zero precisely so "the query said
 /// nothing" stays distinguishable from "the query said this".
-StoreManager::StoreConfig readStoreOverrides(const Descriptor& logicalCfg)
+StoreConfig readStoreOverrides(const Descriptor& logicalCfg)
 {
-    StoreManager::StoreConfig overrides;
+    StoreConfig overrides;
     if (const auto sizeStr = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::MEMORY_BUFFER_SIZE);
         sizeStr.has_value() && !sizeStr->empty())
     {

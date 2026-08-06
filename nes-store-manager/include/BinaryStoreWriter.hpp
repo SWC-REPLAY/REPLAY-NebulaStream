@@ -20,7 +20,7 @@
 #include <string>
 #include <unistd.h>
 
-namespace NES::StoreManager
+namespace NES
 {
 /// POSIX-based binary file writer for the Replay store format.
 class BinaryStoreWriter

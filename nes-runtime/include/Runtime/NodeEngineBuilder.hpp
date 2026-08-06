@@ -20,13 +20,10 @@
 #include <Runtime/NodeEngine.hpp>
 #include <Util/Pointers.hpp>
 
-namespace NES::StoreManager
-{
-class StoreRegistry;
-}
-
 namespace NES
 {
+class StoreRegistry;
+
 /// Create instances of NodeEngine using the builder pattern.
 class NodeEngineBuilder
 {
@@ -37,13 +34,13 @@ public:
     NodeEngineBuilder(
         WorkerConfiguration workerConfiguration,
         std::shared_ptr<StatisticListener> statisticsListener,
-        OptionalRef<StoreManager::StoreRegistry> storeRegistry);
+        OptionalRef<StoreRegistry> storeRegistry);
 
     std::unique_ptr<NodeEngine> build(const Host& host);
 
 private:
     WorkerConfiguration workerConfiguration;
     std::shared_ptr<StatisticListener> statisticsListener;
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
+    OptionalRef<StoreRegistry> storeRegistry;
 };
 }

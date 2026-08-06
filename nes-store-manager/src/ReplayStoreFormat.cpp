@@ -27,7 +27,7 @@
 #include <Util/FNV.hpp>
 #include <ErrorHandling.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 std::string serializeHeader(const std::string& schemaText, uint64_t minTs, uint64_t maxTs)

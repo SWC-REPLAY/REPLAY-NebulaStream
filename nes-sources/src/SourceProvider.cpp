@@ -35,9 +35,7 @@ namespace NES
 {
 
 SourceProvider::SourceProvider(
-    size_t defaultMaxInflightBuffers,
-    std::shared_ptr<AbstractBufferProvider> bufferPool,
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry)
+    size_t defaultMaxInflightBuffers, std::shared_ptr<AbstractBufferProvider> bufferPool, OptionalRef<StoreRegistry> storeRegistry)
     : defaultMaxInflightBuffers(defaultMaxInflightBuffers), bufferPool(std::move(bufferPool)), storeRegistry(storeRegistry)
 {
 }

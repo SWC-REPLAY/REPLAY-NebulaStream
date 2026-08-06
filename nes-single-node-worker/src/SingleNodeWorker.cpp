@@ -84,11 +84,11 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
     /// The worker owns its replay stores: they hold rows that live on this node, and each is materialised here when the
     /// pipeline that writes it starts. The registry carries the worker-level replay defaults, so a query that
     /// configures its own store overrides them there and nothing in between has to pass them along.
-    storeRegistry = std::make_unique<StoreManager::StoreRegistry>(StoreManager::StoreConfig{
+    storeRegistry = std::make_unique<StoreRegistry>(StoreConfig{
         .memoryBufferSize = configuration.replayConfiguration.memoryBufferSize.getValue(),
         .maxBufferCount = configuration.replayConfiguration.maxBufferCount.getValue(),
         .storeOrder = configuration.replayConfiguration.storeOrder.getValue()});
-    const OptionalRef<StoreManager::StoreRegistry> borrowedStoreRegistry{*storeRegistry};
+    const OptionalRef<StoreRegistry> borrowedStoreRegistry{*storeRegistry};
     nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener), borrowedStoreRegistry).build(host);
     compiler = std::make_unique<QueryCompilation::QueryCompiler>(configuration.workerConfiguration.defaultQueryExecution);
 

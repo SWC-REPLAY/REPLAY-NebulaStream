@@ -37,7 +37,7 @@
 #include <StoreTypeRegistry.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 MemoryStore::MemoryStore(const Schema& schema, std::shared_ptr<AbstractBufferProvider> bufferManager)
@@ -54,8 +54,8 @@ MemoryStore::MemoryStore(
     const Schema& schema, const Config config, std::shared_ptr<AbstractBufferProvider> bufferManager, Store nextLevel, FlushPolicy policy)
     : schema(schema), config(config), bufferManager(std::move(bufferManager)), nextLevel(std::move(nextLevel)), flushPolicy(policy)
 {
-    auto foundTransformation = StoreTransformationRegistry::instance().findTransformation(
-        NES::StoreManager::MemoryStore::typeName(), this->nextLevel->typeName());
+    auto foundTransformation
+        = StoreTransformationRegistry::instance().findTransformation(NES::MemoryStore::typeName(), this->nextLevel->typeName());
     INVARIANT(
         foundTransformation.has_value(), "No transformation registered for '{}' -> '{}'", this->typeName(), this->nextLevel->typeName());
     transformation = std::move(*foundTransformation);
@@ -362,13 +362,9 @@ std::vector<TimedBuffer> MemoryStore::drain()
     return result;
 }
 
-}
-
-namespace NES
-{
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterMemoryStoreStoreType(StoreTypeRegistryArguments args)
 {
-    return StoreManager::makeStore<StoreManager::MemoryStore>(std::move(args.schema), std::move(args.bufferProvider));
+    return makeStore<MemoryStore>(std::move(args.schema), std::move(args.bufferProvider));
 }
 }

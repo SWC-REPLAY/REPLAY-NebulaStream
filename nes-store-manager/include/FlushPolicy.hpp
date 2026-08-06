@@ -17,7 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Policy that determines when to trigger a flush from one level to the next.

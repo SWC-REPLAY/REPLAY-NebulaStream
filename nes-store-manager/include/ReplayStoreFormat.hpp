@@ -23,7 +23,7 @@
 
 #include <DataTypes/Schema.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 constexpr std::array<char, 8> MAGIC = {'N', 'E', 'S', 'S', 'T', 'O', 'R', 'E'};

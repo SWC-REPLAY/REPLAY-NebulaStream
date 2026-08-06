@@ -207,7 +207,7 @@ struct DefaultPEC final : PipelineExecutionContext
     std::function<bool(const TupleBuffer& tb, ContinuationPolicy)> handler;
     std::function<void(const TupleBuffer& tb, std::chrono::milliseconds duration)> repeatHandler;
     std::shared_ptr<AbstractBufferProvider> bm;
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
+    OptionalRef<StoreRegistry> storeRegistry;
     size_t numberOfThreads;
     WorkerThreadId threadId;
     PipelineId pipelineId;
@@ -224,7 +224,7 @@ struct DefaultPEC final : PipelineExecutionContext
         WorkerThreadId threadId,
         PipelineId pipelineId,
         std::shared_ptr<AbstractBufferProvider> bm,
-        OptionalRef<StoreManager::StoreRegistry> storeRegistry,
+        OptionalRef<StoreRegistry> storeRegistry,
         std::function<bool(const TupleBuffer& tb, ContinuationPolicy)> handler,
         std::function<void(const TupleBuffer& tb, std::chrono::milliseconds)> repeatHandler)
         : handler(std::move(handler))
@@ -237,7 +237,7 @@ struct DefaultPEC final : PipelineExecutionContext
     {
     }
 
-    [[nodiscard]] OptionalRef<StoreManager::StoreRegistry> getStoreRegistry() const override { return storeRegistry; }
+    [[nodiscard]] OptionalRef<StoreRegistry> getStoreRegistry() const override { return storeRegistry; }
 
     [[nodiscard]] WorkerThreadId getWorkerThreadId() const override
     {
@@ -415,7 +415,7 @@ public:
         std::shared_ptr<AbstractQueryStatusListener> listener,
         std::shared_ptr<QueryEngineStatisticListener> stats,
         std::shared_ptr<AbstractBufferProvider> bufferProvider,
-        OptionalRef<StoreManager::StoreRegistry> storeRegistry,
+        OptionalRef<StoreRegistry> storeRegistry,
         const size_t admissionQueueSize)
         : listener(std::move(listener))
         , statistic(std::move(stats))
@@ -466,7 +466,7 @@ private:
     std::shared_ptr<AbstractQueryStatusListener> listener;
     std::shared_ptr<QueryEngineStatisticListener> statistic;
     std::shared_ptr<AbstractBufferProvider> bufferProvider;
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
+    OptionalRef<StoreRegistry> storeRegistry;
     std::atomic<TaskId::Underlying> taskIdCounter;
 
     TaskQueue<Task> taskQueue;
@@ -783,7 +783,7 @@ QueryEngine::QueryEngine(
     std::shared_ptr<QueryEngineStatisticListener> statListener,
     std::shared_ptr<AbstractQueryStatusListener> listener,
     std::shared_ptr<BufferManager> bm,
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry,
+    OptionalRef<StoreRegistry> storeRegistry,
     const Host& host)
     : bufferManager(std::move(bm))
     , statusListener(std::move(listener))

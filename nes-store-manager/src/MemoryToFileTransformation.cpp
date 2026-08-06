@@ -24,7 +24,7 @@
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 void MemoryToFileTransformation::execute(Store& source, Store& dest)
@@ -71,13 +71,9 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
     fileStore.updateFileTimestamps(overallMin, overallMax);
 }
 
-}
-
-namespace NES
-{
 StoreTransformationRegistryReturnType
 StoreTransformationGeneratedRegistrar::RegisterMemoryStore_to_FileStoreStoreTransformation(StoreTransformationRegistryArguments)
 {
-    return StoreManager::MemoryToFileTransformation{};
+    return MemoryToFileTransformation{};
 }
 }

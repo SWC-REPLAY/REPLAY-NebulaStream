@@ -26,7 +26,7 @@
 namespace NES
 {
 
-using StoreTypeRegistryReturnType = StoreManager::Store;
+using StoreTypeRegistryReturnType = Store;
 
 struct StoreTypeRegistryArguments
 {

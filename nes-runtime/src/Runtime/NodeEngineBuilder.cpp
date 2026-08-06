@@ -33,7 +33,7 @@ namespace NES
 NodeEngineBuilder::NodeEngineBuilder(
     WorkerConfiguration workerConfiguration,
     std::shared_ptr<StatisticListener> statisticsListener,
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry)
+    OptionalRef<StoreRegistry> storeRegistry)
     : workerConfiguration(std::move(workerConfiguration)), statisticsListener(std::move(statisticsListener)), storeRegistry(storeRegistry)
 {
 }

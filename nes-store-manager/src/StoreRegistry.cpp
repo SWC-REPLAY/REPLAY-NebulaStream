@@ -38,7 +38,7 @@
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 namespace

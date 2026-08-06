@@ -28,7 +28,7 @@
 #include <TimeRange.hpp>
 #include <nameof.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 namespace detail

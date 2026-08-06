@@ -23,7 +23,7 @@
 #include <DataTypes/Schema.hpp>
 #include <ReplayStoreFormat.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Reads binary store files produced by the Replay store writer.

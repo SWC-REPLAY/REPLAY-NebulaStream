@@ -23,13 +23,9 @@
 #include <Util/Pointers.hpp>
 #include <BackpressureChannel.hpp>
 
-namespace NES::StoreManager
-{
-class StoreRegistry;
-}
-
 namespace NES
 {
+class StoreRegistry;
 
 /// Takes a SourceDescriptor and in exchange returns a SourceHandle.
 /// The SourceThread spawns an independent thread for data ingestion and it manages the pipeline and task logic.
@@ -39,15 +35,13 @@ class SourceProvider
     size_t defaultMaxInflightBuffers;
     std::shared_ptr<AbstractBufferProvider> bufferPool;
     /// Borrowed from the worker, handed to every source this provider creates. Only a replay source looks at it.
-    OptionalRef<StoreManager::StoreRegistry> storeRegistry;
+    OptionalRef<StoreRegistry> storeRegistry;
 
 public:
     /// Constructor that can be configured with various options. `storeRegistry` is borrowed from the worker and must
     /// outlive the sources this creates; null is fine for a worker that has no replay stores.
     SourceProvider(
-        size_t defaultMaxInflightBuffers,
-        std::shared_ptr<AbstractBufferProvider> bufferPool,
-        OptionalRef<StoreManager::StoreRegistry> storeRegistry);
+        size_t defaultMaxInflightBuffers, std::shared_ptr<AbstractBufferProvider> bufferPool, OptionalRef<StoreRegistry> storeRegistry);
 
     /// Returning a shared pointer, because sources may be shared by multiple executable query plans (qeps).
     [[nodiscard]] std::unique_ptr<SourceHandle>

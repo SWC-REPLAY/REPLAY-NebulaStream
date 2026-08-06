@@ -32,7 +32,7 @@
 #include <StoreTransformation.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Buffer with its timestamp range (min/max timestamps of records within).

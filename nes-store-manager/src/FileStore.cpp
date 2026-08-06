@@ -40,7 +40,7 @@
 #include <StoreTypeRegistry.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 namespace
@@ -335,11 +335,6 @@ uint32_t FileStore::calculateRowWidth(const Schema& schema)
     return width;
 }
 
-}
-
-namespace NES
-{
-
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterFileStoreStoreType(StoreTypeRegistryArguments args)
 {
@@ -350,7 +345,7 @@ StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterFileStoreStoreT
     const auto filePath = args.config.at("store_dir");
     const auto storeName = args.config.at("store_name");
     const auto schemaText = args.config.at("schema_text");
-    return StoreManager::makeStore<StoreManager::FileStore>(
-        StoreManager::FileStore::Config{.storeName = storeName, .storeDir = filePath, .schemaText = schemaText}, std::move(args.schema));
+    return makeStore<FileStore>(
+        FileStore::Config{.storeName = storeName, .storeDir = filePath, .schemaText = schemaText}, std::move(args.schema));
 }
 }
