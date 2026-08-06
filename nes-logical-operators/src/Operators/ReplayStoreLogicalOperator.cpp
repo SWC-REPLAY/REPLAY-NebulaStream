@@ -151,6 +151,7 @@ TypedLogicalOperator<ReplayStoreLogicalOperator> Unreflector<TypedLogicalOperato
     const Reflected& reflected, const ReflectionContext& context [[maybe_unused]]) const
 {
     auto [config, onField, timeUnit] = context.unreflect<detail::ReflectedStoreLogicalOperator>(reflected);
+    INVARIANT(onField.has_value(), "Reflected ReplayStore operator must carry a timestamp extraction function");
     return ReplayStoreLogicalOperator(std::move(onField.value()), timeUnit, std::move(config));
 }
 
