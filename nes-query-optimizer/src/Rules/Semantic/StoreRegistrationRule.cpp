@@ -97,7 +97,8 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
     {
         queryPlan.setQueryId(QueryId::createDistributed(getNextDistributedQueryId()));
     }
-    const auto queryId = queryPlan.getQueryId().getDistributedQueryId().getRawValue();
+    const auto queryId = queryPlan.getQueryId();
+    const auto queryIdText = queryId.getDistributedQueryId().getRawValue();
 
     for (size_t storeIndex = 0; storeIndex < storeOperators.size(); ++storeIndex)
     {
@@ -105,7 +106,7 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
 
         /// The suffix is redundant while a query records a single cut of its plan, and is what keeps names unique once
         /// the optimizer records several.
-        const auto storeName = fmt::format("{}_store_{}", queryId, storeIndex);
+        const auto storeName = fmt::format("{}_store_{}", queryIdText, storeIndex);
 
         const auto inputSchemas = storeOperator->getInputSchemas();
         INVARIANT(inputSchemas.size() == 1, "A replay store records exactly one input stream");
@@ -121,7 +122,7 @@ LogicalPlan StoreRegistrationRule::apply(LogicalPlan queryPlan) const
             /// LowerToPhysicalReplayStore builds an EventTimeFunction unconditionally, so every store records event
             /// time today. Once the store operator carries a time characteristic of its own, read it from there.
             .timeType = StoreTimeType::EventTime,
-            .viewDefinition = LogicalPlan{queryPlan.getQueryId(), {children.front()}}};
+            .subplan = LogicalPlan{queryId, {children.front()}}};
 
         switch (storeCatalog->registerStore(std::move(entry)))
         {

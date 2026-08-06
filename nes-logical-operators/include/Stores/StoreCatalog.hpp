@@ -23,6 +23,7 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Plans/LogicalPlan.hpp>
+#include <QueryId.hpp>
 
 namespace NES
 {
@@ -51,11 +52,11 @@ struct StoreEntry
     /// Internal name. Not user facing — readers reference the *source*, not the store.
     std::string name;
 
-    /// The query that owns this store, for attribution and cleanup. Empty for stores whose query had no id.
-    std::string queryId;
+    /// The query that owns this store, for attribution and cleanup.
+    QueryId queryId = INVALID_QUERY_ID;
 
     /// The logical source the recorded data derives from, or empty when the recorded plan reads an inline source. This
-    /// is an index key for the common case, not the definition of the store's content — `viewDefinition` is. A store
+    /// is an index key for the common case, not the definition of the store's content — `subplan` is. A store
     /// with no source name is registered but cannot be found by source.
     std::string sourceName;
 
@@ -69,7 +70,7 @@ struct StoreEntry
 
     /// The subplan whose output this store recorded. This is the real definition of the store's content and the input
     /// to store selection; `sourceName` is only a fast path over it.
-    LogicalPlan viewDefinition;
+    LogicalPlan subplan;
 };
 
 /// Outcome of registering a store, distinguishing the two ways a name can already be taken.

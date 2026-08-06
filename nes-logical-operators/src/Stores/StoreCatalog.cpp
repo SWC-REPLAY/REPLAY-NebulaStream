@@ -163,7 +163,7 @@ std::vector<StoreEntry> StoreCatalog::findStoresForSourceHistory(const std::stri
     for (const auto& storeName : it->second)
     {
         if (const auto store = namesToStores.find(storeName);
-            store != namesToStores.end() && recordsHistoryOf(store->second.viewDefinition, sourceName))
+            store != namesToStores.end() && recordsHistoryOf(store->second.subplan, sourceName))
         {
             result.push_back(store->second);
         }
