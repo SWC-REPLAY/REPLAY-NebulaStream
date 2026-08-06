@@ -14,6 +14,7 @@
 
 #include <ReplayStorePhysicalOperator.hpp>
 
+#include <bit>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -128,15 +129,15 @@ void ReplayStorePhysicalOperator::execute(ExecutionContext& executionCtx, Record
     auto tsRaw = ts.convertToValue();
     auto tupleSize = nautilus::val<uint32_t>(static_cast<uint32_t>(bufferRef->getTupleSize()));
     nautilus::invoke(
-        +[](const int8_t* data, const uint32_t size, const uint64_t tsVal, OperatorHandler* h)
+        +[](const int8_t* data, const uint32_t size, const uint64_t tsVal, OperatorHandler* opHandler)
         {
-            if (!data || !h)
+            if (!data || !opHandler)
             {
                 return;
             }
-            if (auto* storeHandler = dynamic_cast<ReplayStoreOperatorHandler*>(h))
+            if (auto* storeHandler = dynamic_cast<ReplayStoreOperatorHandler*>(opHandler))
             {
-                storeHandler->writeRecord(reinterpret_cast<const uint8_t*>(data), size, Timestamp(tsVal));
+                storeHandler->writeRecord(std::bit_cast<const uint8_t*>(data), size, Timestamp(tsVal));
             }
         },
         memArea,
