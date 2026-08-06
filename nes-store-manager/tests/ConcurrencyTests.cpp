@@ -70,6 +70,7 @@ protected:
     /// a longer run buys interleavings, not coverage.
     static std::chrono::seconds getTestDuration()
     {
+        /// NOLINTNEXTLINE(concurrency-mt-unsafe): read from the test body before any writer or reader thread is started.
         if (const char* env = std::getenv("TEST_DURATION_SECONDS"))
         {
             const std::string_view text{env};
