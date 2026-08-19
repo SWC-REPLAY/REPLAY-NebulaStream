@@ -16,6 +16,7 @@
 
 #include <memory>
 
+#include <Configurations/Descriptor.hpp>
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/UdbRecordingLogicalOperator.hpp>
@@ -40,8 +41,10 @@ LoweringRuleResultSubgraph LowerToPhysicalUdbRecording::apply(LogicalOperator lo
     PRECONDITION(memoryLayoutTypeTrait.has_value(), "Expected a memory layout type trait");
     const auto memoryLayoutType = memoryLayoutTypeTrait.value()->memoryLayout;
 
-    auto physicalOperator = UdbRecordingPhysicalOperator(
-        Udb::RecordingConfig{.traceName = udbOp->getOptions().traceName, .traceSize = udbOp->getOptions().traceSize});
+    const Descriptor logicalCfg{DescriptorConfig::Config(udbOp->getConfig())};
+    auto physicalOperator = UdbRecordingPhysicalOperator(RecordingConfig{
+        .traceName = logicalCfg.getFromConfig(UdbRecordingLogicalOperator::ConfigParameters::TRACE_NAME),
+        .traceSize = logicalCfg.getFromConfig(UdbRecordingLogicalOperator::ConfigParameters::TRACE_SIZE)});
     auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
         physicalOperator,
         inputSchema,

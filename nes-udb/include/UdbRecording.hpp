@@ -14,19 +14,18 @@
 
 #pragma once
 
-#include <optional>
 #include <string>
 #include <sys/types.h>
 
-namespace NES::Udb
+namespace NES
 {
 
 struct RecordingConfig
 {
-    /// Without the .undo suffix; unset lets udb derive one.
-    std::optional<std::string> traceName;
+    /// Without the .undo suffix.
+    std::string traceName;
     /// History bound, as SIZE[KB|MB|GB].
-    std::optional<std::string> traceSize;
+    std::string traceSize;
 };
 
 /// RAII owner of the udb process that records this NES process.

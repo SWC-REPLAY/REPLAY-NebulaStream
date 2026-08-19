@@ -216,9 +216,9 @@ LogicalPlan LogicalPlanBuilder::addReplayStore(const DescriptorConfig::Config& c
     return promoteOperatorToRoot(queryPlan, storeOp);
 }
 
-LogicalPlan LogicalPlanBuilder::addUdbRecording(UdbRecordingOptions options, const LogicalPlan& queryPlan)
+LogicalPlan LogicalPlanBuilder::addUdbRecording(const DescriptorConfig::Config& config, const LogicalPlan& queryPlan)
 {
-    return promoteOperatorToRoot(queryPlan, UdbRecordingLogicalOperator(std::move(options)));
+    return promoteOperatorToRoot(queryPlan, UdbRecordingLogicalOperator(config));
 }
 
 LogicalPlan

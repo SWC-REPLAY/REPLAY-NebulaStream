@@ -334,7 +334,7 @@ inlineSink
 
 timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
 
-udbClause: TIME_TRAVEL_UDB udbTraceName=identifier? (TRACE_SIZE udbTraceSize=traceSize)?;
+udbClause: TIME_TRAVEL_UDB udbTraceName=identifier TRACE_SIZE udbTraceSize=traceSize;
 
 traceSize: INTEGER_VALUE (KILOBYTES | MEGABYTES | GIGABYTES)?;
 

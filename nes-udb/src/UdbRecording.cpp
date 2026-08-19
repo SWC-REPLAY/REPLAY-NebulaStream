@@ -40,7 +40,7 @@
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 
-namespace NES::Udb
+namespace NES
 {
 
 namespace
@@ -120,18 +120,18 @@ pid_t spawnLiveRecorder(const RecordingConfig& config)
 
     /// Build every string before fork() - malloc is not async-signal-safe in the child.
     const std::string pidStr = std::to_string(static_cast<int>(::getpid()));
-    /// Without a name, point live-record at the store dir and let it derive one from the program and pid.
-    const char* const recordingFlag = config.traceName.has_value() ? "--recording-file" : "--recording-dir";
-    const std::string recordingArg = config.traceName.has_value() ? (storeDir / (*config.traceName + ".undo")).string() : storeDir.string();
+    const std::string recordingPath = (storeDir / (config.traceName + ".undo")).string();
 
     /// Same for the argv itself.
-    std::vector<const char*> execArgs{udbBin.c_str(), "--pid", pidStr.c_str(), recordingFlag, recordingArg.c_str()};
-    if (config.traceSize.has_value())
-    {
-        execArgs.push_back("--max-event-log-size");
-        execArgs.push_back(config.traceSize->c_str());
-    }
-    execArgs.push_back(nullptr);
+    const std::vector<const char*> execArgs{
+        udbBin.c_str(),
+        "--pid",
+        pidStr.c_str(),
+        "--recording-file",
+        recordingPath.c_str(),
+        "--max-event-log-size",
+        config.traceSize.c_str(),
+        nullptr};
 
     NES_DEBUG("Spawning live-record (binary={}, pid={})", udbBin, pidStr);
 

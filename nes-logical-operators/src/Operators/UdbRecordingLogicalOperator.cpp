@@ -15,11 +15,14 @@
 #include <Operators/UdbRecordingLogicalOperator.hpp>
 
 #include <ranges>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
@@ -37,11 +40,10 @@ std::string UdbRecordingLogicalOperator::explain(ExplainVerbosity verbosity, Ope
 {
     if (verbosity == ExplainVerbosity::Debug)
     {
-        return fmt::format(
-            "UDB_RECORDING(opId: {}, traceName: {}, traceSize: {})",
-            id,
-            options.traceName.value_or("<auto>"),
-            options.traceSize.value_or("<default>"));
+        std::stringstream cfg;
+        Descriptor tmp{DescriptorConfig::Config(config)};
+        cfg << &tmp;
+        return fmt::format("UDB_RECORDING(opId: {}, config: {})", id, cfg.str());
     }
     return {"UDB_RECORDING"};
 }
@@ -96,7 +98,19 @@ UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withInferredSchema(cons
 
 bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& rhs) const
 {
-    return traitSet == rhs.traitSet && options == rhs.options;
+    return traitSet == rhs.traitSet && config == rhs.config;
+}
+
+UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withConfig(DescriptorConfig::Config validatedConfig) const
+{
+    auto copy = *this;
+    copy.config = std::move(validatedConfig);
+    return copy;
+}
+
+DescriptorConfig::Config UdbRecordingLogicalOperator::validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs)
+{
+    return DescriptorConfig::validateAndFormat<ConfigParameters>(std::move(configPairs), std::string(NAME));
 }
 
 }
@@ -107,14 +121,14 @@ namespace NES
 Reflected
 Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const TypedLogicalOperator<UdbRecordingLogicalOperator>& op) const
 {
-    return reflect(op->getOptions());
+    return reflect(detail::ReflectedUdbRecordingLogicalOperator{.config = op->getConfig()});
 }
 
 TypedLogicalOperator<UdbRecordingLogicalOperator> Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(
     const Reflected& reflected, const ReflectionContext& context) const
 {
-    auto options = context.unreflect<UdbRecordingOptions>(reflected);
-    return TypedLogicalOperator<UdbRecordingLogicalOperator>{UdbRecordingLogicalOperator(std::move(options))};
+    auto [config] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(reflected);
+    return TypedLogicalOperator<UdbRecordingLogicalOperator>{UdbRecordingLogicalOperator(std::move(config))};
 }
 
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
