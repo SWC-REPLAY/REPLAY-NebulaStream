@@ -605,6 +605,19 @@
           '';
         };
 
+        systestDistributedRunner = pkgs.writeShellApplication {
+          name = "nes-systest-distributed";
+          runtimeInputs = [
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.gnugrep
+            pkgs.gnused
+            pkgs.yq-go
+            pkgs.nix
+          ];
+          text = builtins.readFile ./.nix/systest-distributed.sh;
+        };
+
         clionSetupScript = pkgs.writeShellApplication {
           name = "clion-setup";
           runtimeInputs = [ pkgs.coreutils ];
@@ -882,6 +895,10 @@
           format = {
             type = "app";
             program = "${formatRunner}/bin/nes-format";
+          };
+          systest-distributed = {
+            type = "app";
+            program = "${systestDistributedRunner}/bin/nes-systest-distributed";
           };
         };
 

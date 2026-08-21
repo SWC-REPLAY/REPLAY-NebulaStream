@@ -358,3 +358,40 @@ The Docker approach provides the most realistic testing environment for distribu
 
 > [!NOTE]
 > If you are using a Docker-based development environment, you must provide access to the Docker daemon (e.g., by mounting the Docker socket). Otherwise, Docker-based tests are disabled.
+
+#### Native Multi-Process Testing (Nix)
+
+To run a *single* test across real worker processes without Docker, use the Nix app. It starts one `nes-single-node-worker` process per topology worker on loopback, runs systest in `--remote` mode, and tears everything down afterwards. Topology files use Docker Compose hostnames (`sink-node:8080`, ...); the app rewrites these onto free loopback ports automatically, so no manual editing is needed.
+
+```bash
+nix run .#systest-distributed -- -t nes-systests/function/arithmetical/FunctionAdd.test:1
+```
+
+Pass any topology with `-c`; everything else is forwarded verbatim to `systest`, including a trailing `--` worker-config block:
+
+```bash
+nix run .#systest-distributed -- \
+    -c nes-systests/configs/topologies/8-node.yaml \
+    -t nes-systests/operator/Filter.test \
+    -- --worker.query_engine.number_of_worker_threads=2
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-c, --clusterConfig <path>` | Topology to run (default: `nes-systests/configs/topologies/two-node.yaml`) |
+| `--base-port <n>` | First gRPC port to allocate (default: `8080`) |
+| `--data-base-port <n>` | First data-plane port to allocate (default: `9090`) |
+| `--run-dir <path>` | Artifact directory (default: `$NES_BUILD_DIR/nes-systests/systest-distributed-run`) |
+| `--keep` | Leave the workers running after the test, for repeated runs |
+
+Binaries are taken from `$NES_BUILD_DIR` (default `cmake-build-debug`), so build them first:
+
+```bash
+cmake --build cmake-build-debug -j --target systest nes-single-node-worker
+```
+
+The run directory collects `topology.yaml` (rewritten), `systest.log`, and a `worker-N.log` per worker; on failure the app prints the tail of every worker log.
+
+Only exercises loopback; use the Docker workflow to validate cross-host networking, DNS, or container isolation.
