@@ -669,6 +669,13 @@
           rustc
           cargo
           rustfmt
+          (bats.withLibraries (libs: [
+            libs.bats-support
+            libs.bats-assert
+            libs.bats-file
+          ]))
+          yq-go
+          criu
         ];
 
         # LLVM toolchain with versioned symlinks for vcpkg
