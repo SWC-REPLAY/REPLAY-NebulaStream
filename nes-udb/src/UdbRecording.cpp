@@ -14,7 +14,9 @@
 
 #include <UdbRecording.hpp>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -28,8 +30,10 @@
 #include <thread>
 #include <vector>
 #include <fcntl.h>
-#include <stdlib.h>
-#include <signal.h>
+/// The POSIX spellings alongside <csignal>/<cstdlib>: kill, SIGKILL and the W* status macros are
+/// POSIX, not standard C++, so include-cleaner will not accept the C++ headers as their provider.
+#include <signal.h> /// NOLINT(modernize-deprecated-headers)
+#include <stdlib.h> /// NOLINT(modernize-deprecated-headers)
 #include <unistd.h>
 #include <linux/prctl.h>
 #include <sys/prctl.h>
@@ -38,7 +42,9 @@
 
 #include <Util/Files.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <Util/Strings.hpp>
 #include <ErrorHandling.hpp>
+#include <Thread.hpp>
 
 namespace NES
 {
@@ -64,17 +70,21 @@ pid_t currentTracerPid()
         constexpr std::string_view prefix = "TracerPid:";
         if (line.starts_with(prefix))
         {
-            return static_cast<pid_t>(std::strtol(line.c_str() + prefix.size(), nullptr, 10));
+            return NES::from_chars<pid_t>(std::string_view{line}.substr(prefix.size())).value_or(0);
         }
     }
     return 0;
 }
 
+/// Whether some live Recording already owns this process. See Recording::Recording. The claim is
+/// process-wide because the invariant it guards is: Linux permits one tracer per process.
+std::atomic<bool> processIsRecording{false}; /// NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+
 /// Prerequisite: UDB_BINARY_PATH must point to the live-record executable, e.g. via direnv:
 ///     export UDB_BINARY_PATH=/path/to/live-record
 std::string udbBinaryPath()
 {
-    const char* udbBinEnv = std::getenv("UDB_BINARY_PATH");
+    const char* udbBinEnv = std::getenv("UDB_BINARY_PATH"); /// NOLINT(concurrency-mt-unsafe)
     if (udbBinEnv == nullptr)
     {
         throw UdbRecordingFailure("UDB_BINARY_PATH is not set");
@@ -83,9 +93,17 @@ std::string udbBinaryPath()
     return {udbBinEnv};
 }
 
+/// Traces are separated per worker node. UDB_RECORDING_STORE_DIR is compiled in, so every worker
+/// process built from the same tree shares it, and two nodes recording one distributed query would
+/// otherwise write the same trace file. The node id is thread-local and inherited from the worker
+/// thread that runs the operator's setup(), so it is already correct here.
 std::filesystem::path recordingStoreDir()
 {
-    std::filesystem::path storeDir{UDB_RECORDING_STORE_DIR};
+    auto node = Thread::getThisWorkerNodeId().getRawValue();
+    /// ':' is a legal path character on Linux, but a hostname:port directory trips up enough tooling
+    /// to be worth avoiding.
+    std::ranges::replace(node, ':', '_');
+    const std::filesystem::path storeDir = std::filesystem::path{UDB_RECORDING_STORE_DIR} / ("node-" + node);
     std::error_code errorCode;
     std::filesystem::create_directories(storeDir, errorCode);
     if (errorCode)
@@ -147,7 +165,7 @@ pid_t spawnLiveRecorder(const RecordingConfig& config)
     if (child == 0)
     {
         /// POSIX guarantees execv does not modify argv, hence the cast away from const.
-        ::execv(udbBin.c_str(), const_cast<char* const*>(execArgs.data()));
+        ::execv(udbBin.c_str(), const_cast<char* const*>(execArgs.data())); /// NOLINT(cppcoreguidelines-pro-type-const-cast)
 
         /// execv only returns on failure - only async-signal-safe calls allowed here.
         const char errByte = 1;
@@ -260,22 +278,65 @@ void waitUntilSaved(const pid_t udbPid) noexcept
 
 Recording::Recording(const RecordingConfig& config)
 {
+    /// Linux permits one tracer per process, and a distributed plan places a recording operator on
+    /// every node - which is several operators in one process whenever those nodes are embedded
+    /// workers rather than separate processes. Claim the process here so exactly one construction
+    /// records it and the rest become no-ops.
+    ///
+    /// waitUntilNotTraced alone cannot do this: it only sees tracers that have already attached, so
+    /// two constructions racing between spawn and attach both observe an untraced process, both
+    /// spawn, and the loser later fails to save its trace.
+    if (bool unclaimed = false; not processIsRecording.compare_exchange_strong(unclaimed, true))
+    {
+        NES_DEBUG("Process is already being recorded; skipping redundant recording '{}'", config.traceName);
+        return;
+    }
+
+    /// Hands the claim back if the spawn or the attach throws, so one failed recording does not lock
+    /// the process out of every later one.
+    struct ClaimGuard
+    {
+        bool armed = true;
+
+        ClaimGuard() = default;
+        ClaimGuard(const ClaimGuard&) = delete;
+        ClaimGuard(ClaimGuard&&) = delete;
+        ClaimGuard& operator=(const ClaimGuard&) = delete;
+        ClaimGuard& operator=(ClaimGuard&&) = delete;
+
+        ~ClaimGuard()
+        {
+            if (armed)
+            {
+                processIsRecording.store(false);
+            }
+        }
+    } claimGuard;
+
     /// Must precede the spawn: a still-attached previous recorder would make this one fail to attach.
     waitUntilNotTraced();
-    /// NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer) a member initializer would spawn before the wait.
     udbPid = spawnLiveRecorder(config);
     waitUntilAttached(udbPid);
+    claimGuard.armed = false;
 }
 
 Recording::~Recording()
 {
+    /// A construction that found the process already claimed owns no udb process to save or reap.
+    if (udbPid == -1)
+    {
+        return;
+    }
+
     if (::kill(udbPid, SIGUSR1) != 0)
     {
         NES_ERROR("Failed to signal live-record process {} to save the recording: {}", udbPid, getErrorMessageFromERRNO());
         ::waitpid(udbPid, nullptr, WNOHANG);
+        processIsRecording.store(false);
         return;
     }
     waitUntilSaved(udbPid);
+    processIsRecording.store(false);
 }
 
 }

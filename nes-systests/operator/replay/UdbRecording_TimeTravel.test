@@ -5,9 +5,8 @@
 # Only one tracer per process, so recordings must not overlap.
 SEQUENTIAL_EXECUTION
 
-# INTERPRETER skips query compilation, whose latency would otherwise mask a regression in the
-# attach barrier: without it a fast pipeline finishes before udb attaches and the trace is empty.
-GlobalConfiguration worker.default_query_execution.execution_mode: INTERPRETER
+# Needs INTERPRETER (compiling would mask a regression in the attach barrier); not pinned via
+# GlobalConfiguration because that makes runQueriesAtRemoteWorker silently skip the test instead.
 
 CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, timestamp UINT64);
 CREATE PHYSICAL SOURCE FOR stream TYPE File;

@@ -34,6 +34,12 @@ struct RecordingConfig
 /// Destruction saves the trace, waits for it to be written, and reaps udb. A live object therefore
 /// means "this process is being recorded" - there is no idle state.
 ///
+/// Only the first live object does the recording. Linux permits one tracer per process, and a
+/// distributed plan places a recording operator on every node - which is several operators in one
+/// process whenever those nodes are embedded workers rather than separate ones. Constructing while
+/// another object already owns the process succeeds and does nothing, so callers never have to know
+/// how nodes map onto processes.
+///
 /// Neither copyable nor movable: the pid must be signalled and reaped exactly once. Construct it in
 /// place (e.g. std::optional::emplace) inside whatever owns the recording's lifetime.
 class Recording
@@ -51,7 +57,8 @@ public:
     Recording& operator=(Recording&&) = delete;
 
 private:
-    /// pid of the udb process. Always valid for a live object: construction either attaches or throws.
+    /// pid of the udb process, or -1 when another object already owned the process at construction
+    /// and this one records nothing.
     pid_t udbPid{-1};
 };
 
