@@ -27,6 +27,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -144,8 +145,10 @@ void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Time
 
     NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
 
-    /// One record is a one-row buffer as far as segmentation is concerned, so this path builds
-    /// exactly the same segments as the bulk one and nothing has to special-case it.
+    /// Accumulated into the segment being filled, exactly as MemoryStore accumulates a record
+    /// into the buffer being filled. A record does NOT become a segment of its own -- the
+    /// segment seals when it reaches `segmentSize`, so this path builds the same segments the
+    /// bulk path does and nothing has to special-case it.
     appendBuffer(recordData, recordSize, 1, ts, ts);
 
     /// Check flush policy and flush to next level if triggered (mirrors MemoryStore::writeRecord).
@@ -312,79 +315,87 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     const uint32_t tupleSize = calculateRowWidth(readSchema);
     PRECONDITION(tupleSize > 0, "Schema must have at least one field to compute row width");
 
-    /// The middle level, between dismissing the whole file above and filtering rows below:
-    /// skip segments whose range cannot overlap the query. Mirrors what MemoryStore does with
-    /// its buffers -- the first byte offset worth reading from is the first segment that
-    /// survives, and everything before it is never touched.
-    uint64_t readFrom = dataStartOffset;
-    uint64_t readUpTo = writer.size();
+    /// The field the range filters on, resolved once rather than per segment.
+    std::optional<uint32_t> tsOffset;
     if (!range.isUnbounded())
     {
+        tsOffset = findFieldOffset(readSchema, range.fieldName);
+        PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
+    }
+
+    /// Snapshot the divisions under the lock, then read them without holding it: pread is
+    /// position-independent, and a concurrent writer only ever appends past what is snapshotted.
+    ///
+    /// The segment still being filled is included as a division of its own. It has no descriptor
+    /// in the header yet, but its rows are already on disk and a read must see them.
+    std::vector<SegmentDescriptor> divisions;
+    {
         const std::shared_lock lock(mutex);
-        if (!segments.empty())
+        divisions = segments;
+        if (activeSegment.byteLength > 0)
         {
-            bool found = false;
-            for (const auto& segment : segments)
-            {
-                if (!range.overlaps(Timestamp(segment.minTs), Timestamp(segment.maxTs)))
-                {
-                    continue;
-                }
-                if (!found)
-                {
-                    readFrom = dataStartOffset + segment.byteOffset;
-                    found = true;
-                }
-                readUpTo = dataStartOffset + segment.byteOffset + segment.byteLength;
-            }
-            if (!found)
-            {
-                NES_DEBUG("FileStore::read: no segment of {} overlaps the query range", filePath);
-                return 0;
-            }
+            divisions.push_back(activeSegment);
         }
     }
 
-    /// Read the current write frontier (atomic) and compute how many complete rows exist.
-    const uint64_t currentTail = std::min(readUpTo, writer.size());
-    if (currentTail <= readFrom)
+    auto destSpan = buffer.getAvailableMemoryArea<char>();
+    const uint64_t capacity = destSpan.size() / tupleSize;
+    uint64_t destTuples = 0;
+
+    /// Three decisions per division, exactly as MemoryStore makes them per buffer: skip it, take
+    /// all of it, or inspect its rows. Deciding per division is what makes the skip real -- a
+    /// span from the first match to the last would read everything in between, and segments are
+    /// held in write order, so a late arrival puts a non-matching one between two matches.
+    for (const auto& division : divisions)
     {
-        return 0;
+        if (destTuples >= capacity)
+        {
+            break;
+        }
+
+        /// 1. Its range cannot meet the query: never touched.
+        if (!range.isUnbounded() && !range.overlaps(Timestamp(division.minTs), Timestamp(division.maxTs)))
+        {
+            continue;
+        }
+
+        const uint64_t rowsInDivision = division.byteLength / tupleSize;
+        const uint64_t rowsToRead = std::min(rowsInDivision, capacity - destTuples);
+        if (rowsToRead == 0)
+        {
+            continue;
+        }
+
+        char* dest = destSpan.data() + (destTuples * tupleSize);
+        const ssize_t bytesRead
+            = writer.readAt(dest, rowsToRead * tupleSize, dataStartOffset + division.byteOffset);
+        if (bytesRead <= 0)
+        {
+            continue;
+        }
+        const auto rowsRead = static_cast<uint64_t>(bytesRead) / tupleSize;
+
+        /// 2. Wholly inside the query: every row qualifies, so none of them is examined.
+        if (range.isUnbounded() || (division.minTs >= range.start.getRawValue() && division.maxTs < range.end.getRawValue()))
+        {
+            destTuples += rowsRead;
+            continue;
+        }
+
+        /// 3. Straddling a bound: the only case that reads timestamps. Filtering compacts the
+        /// survivors in place, so the next division continues straight after them.
+        destTuples += filterBufferRows(dest, rowsRead, tupleSize, *tsOffset, range);
     }
 
-    const uint64_t availableBytes = currentTail - readFrom;
-    const uint64_t completeRows = availableBytes / tupleSize;
-    const uint64_t capacity = buffer.getBufferSize() / tupleSize;
-    const uint64_t rowsToRead = std::min(completeRows, capacity);
+    NES_DEBUG(
+        "FileStore::read: {} of {} divisions considered, {} tuples, file={}",
+        divisions.size(),
+        segments.size(),
+        destTuples,
+        filePath);
 
-    if (rowsToRead == 0)
-    {
-        return 0;
-    }
-
-    const uint64_t bytesToRead = rowsToRead * tupleSize;
-    const auto dest = buffer.getAvailableMemoryArea<char>();
-
-    /// pread is position-independent and thread-safe — no lock needed.
-    const ssize_t bytesRead = writer.readAt(dest.data(), bytesToRead, readFrom);
-    if (bytesRead <= 0)
-    {
-        return 0;
-    }
-
-    uint64_t totalTuples = static_cast<uint64_t>(bytesRead) / tupleSize;
-    NES_DEBUG("FileStore::read: totalTuples={}, tupleSize={}, capacity={}, file={}", totalTuples, tupleSize, capacity, filePath);
-
-    /// Apply row-level filtering if a time range is specified
-    if (!range.isUnbounded())
-    {
-        const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
-        PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
-        totalTuples = filterBufferRows(dest, totalTuples, tupleSize, *tsOffset, range);
-    }
-
-    buffer.setNumberOfTuples(totalTuples);
-    return totalTuples;
+    buffer.setNumberOfTuples(destTuples);
+    return destTuples;
 }
 
 bool FileStore::hasMore() const

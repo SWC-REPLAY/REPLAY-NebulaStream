@@ -36,10 +36,10 @@ void FileToCompressedTransformation::execute(Store& source, Store& dest)
         return; /// nothing to move
     }
 
-    /// 2. Hand each segment's bytes and its own range to the CompressedStore, which seals
-    ///    everything it has been given into one compressed segment on the following flush.
-    ///    It does not divide its file the way the lossy tier does, so it simply unions the
-    ///    ranges as they arrive -- giving it a per-segment layout is a separate change.
+    /// 2. Hand each segment down with the range its rows already carry. The CompressedStore
+    ///    accumulates them into blocks of its own size and seals on its own threshold, so a
+    ///    block's range is the union of the segments inside it -- not one span over the whole
+    ///    drain. That is what lets its read() skip a block without decompressing it.
     auto typedDest = dest.getAs<CompressedStore>();
     auto& compressedStore = typedDest.getMutable();
     for (const auto& segment : segments)
@@ -49,8 +49,8 @@ void FileToCompressedTransformation::execute(Store& source, Store& dest)
             continue;
         }
         NES_DEBUG("FileToCompressedTransformation: moving a {}-byte segment from FileStore", segment.bytes.size());
-        compressedStore.appendRawBytes(segment.bytes.data(), segment.bytes.size());
-        compressedStore.updateTimestamps(segment.minTs, segment.maxTs);
+        compressedStore.appendSegment(
+            segment.bytes.data(), segment.bytes.size(), segment.rowCount, segment.minTs, segment.maxTs);
     }
 }
 

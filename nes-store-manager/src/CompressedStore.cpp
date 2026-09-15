@@ -137,25 +137,17 @@ void CompressedStore::writeRecord(
     }
 }
 
-void CompressedStore::appendRawBytes(const uint8_t* data, size_t len)
+void CompressedStore::appendSegment(
+    const uint8_t* data, const size_t len, const uint64_t rowCount, const Timestamp minTs, const Timestamp maxTs)
 {
     const std::unique_lock lock(mutex);
     if (len == 0)
     {
         return;
     }
-    /// Accumulate into the active buffer; the following flush() seals + compresses it.
-    activeBuffer.insert(activeBuffer.end(), data, data + len);
-    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
-    if (rowWidth > 0)
-    {
-        activeRowCount += len / rowWidth;
-    }
-}
 
-void CompressedStore::updateTimestamps(Timestamp minTs, Timestamp maxTs)
-{
-    const std::unique_lock lock(mutex);
+    /// Same three steps as writeRecord, with a segment where it has a row.
+    activeBuffer.insert(activeBuffer.end(), data, data + len);
     if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < activeMinTs)
     {
         activeMinTs = minTs;
@@ -163,6 +155,15 @@ void CompressedStore::updateTimestamps(Timestamp minTs, Timestamp maxTs)
     if (maxTs.getRawValue() != Timestamp::INITIAL_VALUE && maxTs > activeMaxTs)
     {
         activeMaxTs = maxTs;
+    }
+    activeRowCount += rowCount;
+
+    /// Seal on this store's own threshold, not on the boundaries of what came in. A
+    /// segment from above is never split: it is either wholly in this block or wholly
+    /// in the next, so the block's range stays the exact union of the segments in it.
+    if (activeBuffer.size() >= config.segmentSize)
+    {
+        sealActiveSegment();
     }
 }
 
@@ -452,6 +453,18 @@ uint64_t CompressedStore::debugSegmentCount() const
 {
     const std::shared_lock lock(mutex);
     return static_cast<uint64_t>(segments.size());
+}
+
+std::vector<std::pair<uint64_t, uint64_t>> CompressedStore::debugSegmentRanges() const
+{
+    const std::shared_lock lock(mutex);
+    std::vector<std::pair<uint64_t, uint64_t>> ranges;
+    ranges.reserve(segments.size());
+    for (const auto& segment : segments)
+    {
+        ranges.emplace_back(segment.header.minTs, segment.header.maxTs);
+    }
+    return ranges;
 }
 
 }

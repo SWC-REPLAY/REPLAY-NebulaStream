@@ -113,9 +113,18 @@ public:
     [[nodiscard]] const std::string& getFilePath() const { return filePath; }
 
     /// ---- bulk ingest from a prior layer (used by a transformation) ---------
-    /// Mirrors FileStore::appendRawBytes / updateFileTimestamps.
-    void appendRawBytes(const uint8_t* data, size_t len);
-    void updateTimestamps(Timestamp minTs, Timestamp maxTs);
+    /// Take one whole segment from the tier above, carrying the range its rows already
+    /// have. This is writeRecord's path with a segment in place of a row: the bytes go
+    /// into the active block, the range is unioned into the active block's range, and
+    /// the block seals once it reaches config.segmentSize.
+    ///
+    /// The tiers do NOT share a segment size, and should not. Each one picks the unit
+    /// that suits it -- FileStore 64 KB because that is its transfer and index
+    /// granularity, this store 1 MB because that is what zstd compresses at once and a
+    /// larger block compresses better. So several segments from above accumulate into
+    /// one block here, and that block's range is the union of theirs: narrow enough to
+    /// prune on, which is all read() needs.
+    void appendSegment(const uint8_t* data, size_t len, uint64_t rowCount, Timestamp minTs, Timestamp maxTs);
     /// ----------------------------------------------------------------------
 
     /// Read every sealed segment out (decompressing each), plus the pending active
@@ -127,6 +136,8 @@ public:
     /// test introspection
     [[nodiscard]] uint64_t debugActiveRowCount() const;
     [[nodiscard]] uint64_t debugSegmentCount() const;
+    /// The [minTs, maxTs] of each sealed segment, in seal order. Mirrors LossyStore::debugGroupRanges.
+    [[nodiscard]] std::vector<std::pair<uint64_t, uint64_t>> debugSegmentRanges() const;
 
 private:
     /// Points at one sealed segment already written to disk: its file offset

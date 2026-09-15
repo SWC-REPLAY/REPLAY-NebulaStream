@@ -147,6 +147,55 @@ TEST_F(SegmentedFileStoreTest, ASegmentSpansEveryBufferThatFilledIt)
     fileStore.removeFile();
 }
 
+/// writeRecord must accumulate into the segment being filled, exactly as MemoryStore
+/// accumulates records into the buffer being filled. A segment per record would make the
+/// division meaningless -- the descriptor would cost more than the row it describes -- and it
+/// would differ from the bulk path for no reason.
+TEST_F(SegmentedFileStoreTest, WriteRecordAccumulatesIntoTheActiveSegment)
+{
+    const Schema schema = makeSchema();
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes(); /// 16
+
+    /// 64 rows per segment.
+    Store store = makeStore<FileStore>(cfgFor("accumulate", rowWidth * 64), schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    /// Well short of a full segment: nothing may seal yet.
+    for (uint64_t i = 0; i < 10; ++i)
+    {
+        const auto row = makeRows(1, 1000 + i);
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+    }
+    EXPECT_EQ(fileStore.debugSegmentCount(), 0U) << "ten records is not a segment each";
+
+    /// Reaching exactly one segment's worth seals exactly one.
+    for (uint64_t i = 10; i < 64; ++i)
+    {
+        const auto row = makeRows(1, 1000 + i);
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+    }
+    EXPECT_EQ(fileStore.debugSegmentCount(), 1U);
+
+    /// And the next 64 seal the second, not 64 more.
+    for (uint64_t i = 64; i < 128; ++i)
+    {
+        const auto row = makeRows(1, 1000 + i);
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+    }
+    EXPECT_EQ(fileStore.debugSegmentCount(), 2U);
+
+    const auto segments = fileStore.drainSegments();
+    ASSERT_EQ(segments.size(), 2U);
+    EXPECT_EQ(segments[0].rowCount, 64U);
+    EXPECT_EQ(segments[0].minTs.getRawValue(), 1000U);
+    EXPECT_EQ(segments[0].maxTs.getRawValue(), 1063U);
+    EXPECT_EQ(segments[1].rowCount, 64U);
+    EXPECT_EQ(segments[1].minTs.getRawValue(), 1064U);
+
+    fileStore.removeFile();
+}
+
 /// A partially filled segment is not lost: draining seals it first.
 TEST_F(SegmentedFileStoreTest, DrainSealsThePartialSegment)
 {
@@ -198,6 +247,100 @@ TEST_F(SegmentedFileStoreTest, SegmentTableIsPersistedInTheHeader)
     EXPECT_EQ(header.segments[0].byteOffset, 0U);
     EXPECT_EQ(header.segments[1].byteOffset, early.size());
     EXPECT_EQ(dataStart, dataStartOffsetFor(header.schemaText.size(), header.maxSegments));
+
+    fileStore.removeFile();
+}
+
+/// Segments are held in write order, not time order, so a late arrival puts a segment whose
+/// range misses the query BETWEEN two that match. Each segment has to be decided on its own:
+/// narrowing to a span from the first match to the last would read the one in the middle and
+/// then discard its rows.
+TEST_F(SegmentedFileStoreTest, NonMatchingSegmentBetweenTwoMatchesIsSkipped)
+{
+    const Schema schema = makeSchema();
+    const auto early = makeRows(64, 1000); /// ts 1000..1063  -- matches
+    const auto late = makeRows(64, 9000); /// ts 9000..9063  -- arrives second, does NOT match
+    const auto alsoEarly = makeRows(64, 1100); /// ts 1100..1163  -- matches, written last
+
+    Store store = makeStore<FileStore>(cfgFor("interleaved", early.size()), schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    fileStore.appendBuffer(early.data(), early.size(), 64, Timestamp(1000), Timestamp(1063));
+    fileStore.appendBuffer(late.data(), late.size(), 64, Timestamp(9000), Timestamp(9063));
+    fileStore.appendBuffer(alsoEarly.data(), alsoEarly.size(), 64, Timestamp(1100), Timestamp(1163));
+    ASSERT_EQ(fileStore.debugSegmentCount(), 3U);
+
+    /// Room for exactly the 128 matching rows and not one more. This is what makes the test
+    /// distinguish skipping from filtering: reading a span from the first match to the last
+    /// would pull in the middle segment's 64 rows too, fill the buffer with the first 128 rows
+    /// read, and then discard half of them -- returning 64. Only skipping the middle segment
+    /// outright fits both matching ones.
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+    auto bufferManager = BufferManager::create(rowWidth * 128, 8);
+    auto buffer = bufferManager->getBufferBlocking();
+
+    /// Spans the first and third segments; the second sits between them in write order but its
+    /// range is far outside.
+    const TimeRange window{.fieldName = "ts", .start = Timestamp(1000), .end = Timestamp(1200)};
+    const uint64_t got = store.read(buffer, schema, window);
+
+    /// 64 from the first plus 64 from the third, and nothing from the middle one.
+    ASSERT_EQ(got, 128U);
+
+    const auto area = buffer.getAvailableMemoryArea<const uint8_t>();
+    for (uint64_t i = 0; i < got; ++i)
+    {
+        uint64_t ts = 0;
+        std::memcpy(&ts, area.data() + (i * rowWidth), sizeof(ts));
+        EXPECT_LT(ts, 2000U) << "row " << i << " came from the segment that should have been skipped";
+    }
+
+    fileStore.removeFile();
+}
+
+/// A division wholly inside the query needs no row inspected: every row in it qualifies.
+TEST_F(SegmentedFileStoreTest, SegmentWhollyInsideTheRangeIsTakenEntire)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(64, 1000); /// ts 1000..1063
+
+    Store store = makeStore<FileStore>(cfgFor("inside", rows.size()), schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+    fileStore.appendBuffer(rows.data(), rows.size(), 64, Timestamp(1000), Timestamp(1063));
+
+    auto bufferManager = BufferManager::create(16384, 8);
+    auto buffer = bufferManager->getBufferBlocking();
+
+    /// Comfortably containing the segment on both sides.
+    const TimeRange window{.fieldName = "ts", .start = Timestamp(500), .end = Timestamp(5000)};
+    EXPECT_EQ(store.read(buffer, schema, window), 64U);
+
+    fileStore.removeFile();
+}
+
+/// Rows written but not yet sealed into a segment must still be readable.
+TEST_F(SegmentedFileStoreTest, RowsInTheUnsealedSegmentAreVisibleToReads)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(16, 7000);
+
+    /// Segment size far larger than what is written, so nothing seals.
+    Store store = makeStore<FileStore>(cfgFor("unsealed", 64UZ * 1024UZ), schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+    fileStore.appendBuffer(rows.data(), rows.size(), 16, Timestamp(7000), Timestamp(7015));
+    ASSERT_EQ(fileStore.debugSegmentCount(), 0U) << "nothing should have sealed";
+
+    auto bufferManager = BufferManager::create(16384, 8);
+    auto buffer = bufferManager->getBufferBlocking();
+
+    const TimeRange window{.fieldName = "ts", .start = Timestamp(7000), .end = Timestamp(7008)};
+    EXPECT_EQ(store.read(buffer, schema, window), 8U) << "the segment being filled is still data";
+
+    auto buffer2 = bufferManager->getBufferBlocking();
+    EXPECT_EQ(store.read(buffer2, schema, TimeRange{}), 16U);
 
     fileStore.removeFile();
 }
