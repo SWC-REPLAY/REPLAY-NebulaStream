@@ -37,22 +37,13 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
     auto buffers = memStore.drain();
     NES_DEBUG("MemoryToFileTransformation: drained {} buffers from MemoryStore", buffers.size());
 
-    /// Scan min/max timestamps across all drained buffers
-    Timestamp overallMin(Timestamp::INVALID_VALUE);
-    Timestamp overallMax(Timestamp::INITIAL_VALUE);
-    for (const auto& timedBuf : buffers)
-    {
-        if (timedBuf.minTs < overallMin)
-        {
-            overallMin = timedBuf.minTs;
-        }
-        if (timedBuf.maxTs > overallMax)
-        {
-            overallMax = timedBuf.maxTs;
-        }
-    }
-
-    /// Write all buffer data to the FileStore using bulk append
+    /// Each buffer carries its own range down; nothing is pooled across them.
+    ///
+    /// Collapsing every buffer's range into one for the whole drain is what this used to do,
+    /// and it was where the information died: each segment, and then each group the lossy tier
+    /// cut from it, inherited the same span covering everything, so no read could skip
+    /// anything. The ranges already exist -- MemoryStore computed them from the timestamps
+    /// handed to writeRecord -- so they are carried, never recomputed from the row bytes.
     auto typedDest = dest.getAs<FileStore>();
     auto& fileStore = typedDest.getMutable();
     for (auto& timedBuf : buffers)
@@ -64,11 +55,9 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
         }
         auto srcSpan = timedBuf.buffer.getAvailableMemoryArea<uint8_t>();
         NES_DEBUG("MemoryToFileTransformation: writing {} tuples, {} bytes", numTuples, static_cast<size_t>(numTuples) * rowWidth);
-        fileStore.appendRawBytes(srcSpan.data(), static_cast<size_t>(numTuples) * rowWidth);
+        fileStore.appendBuffer(
+            srcSpan.data(), static_cast<size_t>(numTuples) * rowWidth, numTuples, timedBuf.minTs, timedBuf.maxTs);
     }
-
-    /// Update the file header with the scanned overall min/max timestamps
-    fileStore.updateFileTimestamps(overallMin, overallMax);
 }
 
 StoreTransformationRegistryReturnType

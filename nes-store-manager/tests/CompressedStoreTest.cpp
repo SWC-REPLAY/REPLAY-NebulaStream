@@ -305,6 +305,53 @@ TEST_F(CompressedStoreTest, ReadRowLevelFilterNullableTsField)
     EXPECT_EQ(got, 3U);
 }
 
+TEST_F(CompressedStoreTest, DrainResetsStore)
+{
+    const Schema schema = makeSchema();
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+
+    Store store = makeStore<CompressedStore>(cfgFor("drain_test"), schema);
+    store.open();
+
+    /// Seal one segment...
+    for (uint64_t i = 0; i < 3; ++i)
+    {
+        const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x10 + i));
+        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i), schema);
+    }
+    store.flush();
+    ASSERT_EQ(concrete(store).debugSegmentCount(), 1U);
+
+    /// ...then leave a few more rows unsealed in the active buffer.
+    for (uint64_t i = 0; i < 2; ++i)
+    {
+        const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x20 + i));
+        store.writeRecord(row.data(), rowWidth, Timestamp(200 + i), schema);
+    }
+    ASSERT_EQ(concrete(store).debugActiveRowCount(), 2U);
+
+    auto drained = store.getAs<CompressedStore>().getMutable().drain();
+
+    ASSERT_EQ(drained.bytes.size(), 5U * rowWidth);
+    for (uint64_t i = 0; i < 5; ++i)
+    {
+        const uint8_t expectedFill = i < 3 ? static_cast<uint8_t>(0x10 + i) : static_cast<uint8_t>(0x20 + (i - 3));
+        for (uint32_t b = 0; b < rowWidth; ++b)
+        {
+            EXPECT_EQ(drained.bytes[(i * rowWidth) + b], expectedFill);
+        }
+    }
+    EXPECT_EQ(drained.minTs, Timestamp(100));
+    EXPECT_EQ(drained.maxTs, Timestamp(201));
+
+    EXPECT_EQ(concrete(store).debugSegmentCount(), 0U);
+    EXPECT_EQ(concrete(store).debugActiveRowCount(), 0U);
+
+    auto bufferManager = BufferManager::create();
+    TupleBuffer out = bufferManager->getBufferBlocking();
+    EXPECT_EQ(store.read(out, schema, TimeRange{}), 0U);
+}
+
 TEST_F(CompressedStoreTest, ReadRowLevelFilterMixedNullability)
 {
     const Schema schema = makeSchemaMixedNullability();

@@ -28,6 +28,7 @@
 
 #include <DataTypes/DataType.hpp>
 #include <ErrorHandling.hpp>
+#include <ReplayStoreFormat.hpp>
 #include <StoreTransformationRegistry.hpp>
 
 namespace NES::StoreManager
@@ -87,6 +88,7 @@ void CompressedStore::open()
         fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
         writer.open();
         writer.ensureHeader();
+        dataStartOffset = HEADER_FIXED_BYTES + sizeof(uint32_t) + config.schemaText.size();
         writerOpened = true;
         opened = true;
     }
@@ -125,7 +127,8 @@ void CompressedStore::writeRecord(
         sealActiveSegment();
     }
 
-    /// Push downstream if the flush policy trips (mirrors MemoryStore lines 197-201).
+    /// Push downstream if the flush policy trips (mirrors MemoryStore lines 197-201),
+    /// all segments byte size bigger than size threshold in flush policy
     const bool doFlush = flushPolicy && flushPolicy->shouldFlush(currentSizeLocked());
     if (doFlush)
     {
@@ -388,6 +391,55 @@ void CompressedStore::removeFile()
     segments.clear();
     activeBuffer.clear();
     activeRowCount = 0;
+}
+
+CompressedStore::DrainedData CompressedStore::drain()
+{
+    const std::unique_lock lock(mutex);
+
+    DrainedData out;
+    out.minTs = fileMinTs;
+    out.maxTs = fileMaxTs;
+
+    for (const auto& seg : segments)
+    {
+        std::vector<uint8_t> compressed(seg.header.compressedBytes);
+        const auto payloadOffset = seg.offset + SEGMENT_HEADER_BYTES;
+        const ssize_t got = writer.readAt(compressed.data(), seg.header.compressedBytes, payloadOffset);
+        PRECONDITION(got == static_cast<ssize_t>(seg.header.compressedBytes), "Short read of compressed segment payload while draining");
+
+        std::vector<uint8_t> raw = codec.decompress(compressed.data(), seg.header.compressedBytes, seg.header.uncompressedBytes);
+        out.bytes.insert(out.bytes.end(), raw.begin(), raw.end());
+    }
+
+    /// The active buffer is already raw row-major bytes — append as-is, no
+    /// compress-then-immediately-decompress round trip.
+    if (!activeBuffer.empty())
+    {
+        out.bytes.insert(out.bytes.end(), activeBuffer.begin(), activeBuffer.end());
+        if (activeMinTs.getRawValue() != Timestamp::INVALID_VALUE
+            && (out.minTs.getRawValue() == Timestamp::INVALID_VALUE || activeMinTs < out.minTs))
+        {
+            out.minTs = activeMinTs;
+        }
+        if (activeMaxTs.getRawValue() != Timestamp::INITIAL_VALUE
+            && (out.maxTs.getRawValue() == Timestamp::INITIAL_VALUE || activeMaxTs > out.maxTs))
+        {
+            out.maxTs = activeMaxTs;
+        }
+    }
+
+    /// Let go of the data: cut the file back to the header, reset all in-memory state.
+    segments.clear();
+    activeBuffer.clear();
+    activeRowCount = 0;
+    activeMinTs = Timestamp(Timestamp::INVALID_VALUE);
+    activeMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
+    fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
+    fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
+    writer.truncateTo(dataStartOffset);
+
+    return out;
 }
 
 uint64_t CompressedStore::debugActiveRowCount() const

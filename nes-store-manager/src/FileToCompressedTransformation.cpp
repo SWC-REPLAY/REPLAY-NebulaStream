@@ -25,25 +25,33 @@ namespace NES::StoreManager
 
 void FileToCompressedTransformation::execute(Store& source, Store& dest)
 {
-    /// 1. Drain the FileStore: read all its rows off disk and truncate its file.
-    ///    (drain() empties the source, so the data has genuinely moved down a tier.)
+    /// 1. Drain the FileStore: read its segments off disk and truncate its file.
+    ///    (drainSegments() empties the source, so the data has genuinely moved down a tier.)
     auto typedSource = source.getAs<FileStore>();
     auto& fileStore = typedSource.getMutable();
-    auto drained = fileStore.drain();
+    auto segments = fileStore.drainSegments();
 
-    if (drained.bytes.empty())
+    if (segments.empty())
     {
         return; /// nothing to move
     }
-    NES_DEBUG("FileToCompressedTransformation: draining {} bytes from FileStore", drained.bytes.size());
 
-    /// 2. Hand the raw bytes + timestamp range to the CompressedStore. The
-    ///    subsequent nextLevel->flush() (issued by FileStore::flush) seals them
-    ///    into one compressed segment.
+    /// 2. Hand each segment's bytes and its own range to the CompressedStore, which seals
+    ///    everything it has been given into one compressed segment on the following flush.
+    ///    It does not divide its file the way the lossy tier does, so it simply unions the
+    ///    ranges as they arrive -- giving it a per-segment layout is a separate change.
     auto typedDest = dest.getAs<CompressedStore>();
     auto& compressedStore = typedDest.getMutable();
-    compressedStore.appendRawBytes(drained.bytes.data(), drained.bytes.size());
-    compressedStore.updateTimestamps(drained.minTs, drained.maxTs);
+    for (const auto& segment : segments)
+    {
+        if (segment.bytes.empty())
+        {
+            continue;
+        }
+        NES_DEBUG("FileToCompressedTransformation: moving a {}-byte segment from FileStore", segment.bytes.size());
+        compressedStore.appendRawBytes(segment.bytes.data(), segment.bytes.size());
+        compressedStore.updateTimestamps(segment.minTs, segment.maxTs);
+    }
 }
 
 }

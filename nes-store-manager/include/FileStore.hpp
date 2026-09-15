@@ -26,6 +26,7 @@
 #include <Time/Timestamp.hpp>
 #include <BinaryStoreWriter.hpp>
 #include <FlushPolicy.hpp>
+#include <ReplayStoreFormat.hpp>
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
 #include <TimeRange.hpp>
@@ -43,12 +44,24 @@ public:
         std::string storeName;
         std::string storeDir;
         std::string schemaText;
+
+        /// Bytes per segment. Buffers accumulate into the segment being filled; once it reaches
+        /// this size the segment seals and its descriptor is written into the header.
+        ///
+
+        size_t segmentSize = 64UZ * 1024UZ;
+
+        /// How much data the file may hold before the flush policy drains it. Fixes how many
+        /// descriptor slots the header preallocates.
+        size_t totalSize = 64UZ * 1024UZ * 1024UZ;
     };
 
-
-    struct DrainedData
+    /// One segment handed to the tier below: its bytes, and the range of the rows inside them.
+    ///
+    struct DrainedSegment
     {
         std::vector<uint8_t> bytes;
+        uint64_t rowCount{0};
         Timestamp minTs{Timestamp(Timestamp::INVALID_VALUE)};
         Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
     };
@@ -72,11 +85,10 @@ public:
 
     void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
 
-    /// Bulk append raw bytes to the file (used by MemoryToFileTransformation).
-    void appendRawBytes(const uint8_t* data, size_t len);
+    /// Append one sealed buffer together with the range of the rows in it (used by
+    /// MemoryToFileTransformation).
+    void appendBuffer(const uint8_t* data, size_t len, uint64_t rowCount, Timestamp minTs, Timestamp maxTs);
 
-    /// Update the file header's min/max timestamps (used by MemoryToFileTransformation).
-    void updateFileTimestamps(Timestamp minTs, Timestamp maxTs);
     uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
 
@@ -92,12 +104,19 @@ public:
     /// Calculate packed row width from schema (no padding, matching binary format).
     static uint32_t calculateRowWidth(const Schema& schema);
 
-    /// Read all rows out of the file, then truncate it back to just the header.
-    /// The store is left empty (data has moved to the next tier).
-    [[nodiscard]] DrainedData drain();
+    /// Read every sealed segment out of the file, then truncate it back to just the header.
+    /// The store is left empty (data has moved to the next tier). A partially filled segment is
+    /// sealed first, so nothing is left behind.
+    [[nodiscard]] std::vector<DrainedSegment> drainSegments();
 
+    /// test introspection
+    [[nodiscard]] size_t debugSegmentCount() const;
 
 private:
+    /// Write the active segment's descriptor into its preallocated slot and start a new one.
+    /// PRECONDITION: the caller holds `mutex`.
+    void sealActiveSegment();
+
     Config config;
     Schema schema;
     std::string filePath;
@@ -107,6 +126,12 @@ private:
     uint64_t dataStartOffset{0};
     bool writerOpened{false};
     mutable std::shared_mutex mutex;
+
+    /// Sealed segments,this one exists so reads and drains need no parsing.
+    std::vector<SegmentDescriptor> segments;
+    /// The segment being filled. Sealed once it reaches `config.segmentSize`, or at flush.
+    SegmentDescriptor activeSegment{};
+    uint32_t maxSegments{0};
 
     /// Chaining support (all optional — empty for standalone/tail stores).
     std::optional<Store> nextLevel;

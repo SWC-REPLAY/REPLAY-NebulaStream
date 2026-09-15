@@ -100,7 +100,7 @@ void BinaryStoreWriter::ensureHeader()
         return;
     }
 
-    auto buf = serializeHeader(config.schemaText, HEADER_UNSET_TS, HEADER_UNSET_TS);
+    auto buf = serializeHeader(config.schemaText, HEADER_UNSET_TS, HEADER_UNSET_TS, config.segmentSize, config.maxSegments);
 
     const uint64_t off = tail.fetch_add(buf.size(), std::memory_order_relaxed);
     if (off != 0)
@@ -131,6 +131,19 @@ void BinaryStoreWriter::append(const uint8_t* data, size_t len)
     {
         const int err = errno;
         throw CannotOpenSink("pwrite failed: errno={} {}", err, std::generic_category().message(err));
+    }
+}
+
+void BinaryStoreWriter::writeAt(const void* src, size_t len, uint64_t offset) const
+{
+    if (fd < 0)
+    {
+        throw CannotOpenSink("ReplayStoreWriter not started; fd is invalid");
+    }
+    const ssize_t written = ::pwrite(fd, src, len, static_cast<off_t>(offset));
+    if (written < 0 || static_cast<size_t>(written) != len)
+    {
+        throw CannotOpenSink("pwrite at offset {} failed: errno={} {}", offset, errno, std::strerror(errno));
     }
 }
 

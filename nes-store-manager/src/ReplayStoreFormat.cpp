@@ -50,12 +50,34 @@ void readField(std::ifstream& ifs, T& field)
 }
 }
 
-std::string serializeHeader(const std::string& schemaText, uint64_t minTs, uint64_t maxTs)
+size_t sealedCountOffset(const size_t schemaTextLen)
+{
+    return HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaTextLen + sizeof(uint64_t) + sizeof(uint32_t);
+}
+
+size_t segmentTableOffset(const size_t schemaTextLen)
+{
+    return HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaTextLen + SEGMENT_HEADER_EXTENSION_BYTES;
+}
+
+size_t segmentSlotOffset(const size_t schemaTextLen, const uint32_t index)
+{
+    return segmentTableOffset(schemaTextLen) + (static_cast<size_t>(index) * SEGMENT_DESCRIPTOR_BYTES);
+}
+
+size_t dataStartOffsetFor(const size_t schemaTextLen, const uint32_t maxSegments)
+{
+    return segmentTableOffset(schemaTextLen) + (static_cast<size_t>(maxSegments) * SEGMENT_DESCRIPTOR_BYTES);
+}
+
+std::string serializeHeader(
+    const std::string& schemaText, uint64_t minTs, uint64_t maxTs, uint64_t segmentSize, uint32_t maxSegments)
 {
     const uint64_t fingerprint = fnv1a64(schemaText.c_str(), schemaText.size());
     const auto schemaLen = static_cast<uint32_t>(schemaText.size());
 
-    const size_t headerSize = HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaLen;
+    /// The table is written out zeroed; each slot is filled in place as its segment seals.
+    const size_t headerSize = dataStartOffsetFor(schemaLen, maxSegments);
     std::string buf;
     buf.resize(headerSize);
     const std::span bufSpan{buf};
@@ -72,6 +94,13 @@ std::string serializeHeader(const std::string& schemaText, uint64_t minTs, uint6
     writeBytes(bufSpan, off, &schemaLen, sizeof(uint32_t));
     writeBytes(bufSpan, off, schemaText.data(), schemaLen);
 
+    /// Segment fields, in the order sealedCountOffset() and segmentTableOffset() assume.
+    writeBytes(bufSpan, off, &segmentSize, sizeof(uint64_t));
+    writeBytes(bufSpan, off, &maxSegments, sizeof(uint32_t));
+    const uint32_t sealedCount = 0;
+    writeBytes(bufSpan, off, &sealedCount, sizeof(uint32_t));
+
+    /// The remainder of `buf` is the preallocated table, already zeroed by resize().
     return buf;
 }
 
@@ -105,8 +134,37 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
         throw CannotOpenSink("Failed to read schema text from header");
     }
 
-    const uint64_t dataStartOffset = HEADER_FIXED_BYTES + sizeof(uint32_t) + schemaLen;
-    return {header, dataStartOffset};
+    ifs.read(reinterpret_cast<char*>(&header.segmentSize), sizeof(header.segmentSize));
+    ifs.read(reinterpret_cast<char*>(&header.maxSegments), sizeof(header.maxSegments));
+    ifs.read(reinterpret_cast<char*>(&header.sealedCount), sizeof(header.sealedCount));
+    if (!ifs)
+    {
+        throw CannotOpenSink("Failed to read segment header extension");
+    }
+
+    /// Only the sealed slots carry anything; the rest are still zeroed.
+    PRECONDITION(
+        header.sealedCount <= header.maxSegments,
+        "header claims {} sealed segments out of {} slots",
+        header.sealedCount,
+        header.maxSegments);
+
+    header.segments.resize(header.sealedCount);
+    for (uint32_t i = 0; i < header.sealedCount; ++i)
+    {
+        auto& segment = header.segments[i];
+        ifs.read(reinterpret_cast<char*>(&segment.byteOffset), sizeof(segment.byteOffset));
+        ifs.read(reinterpret_cast<char*>(&segment.byteLength), sizeof(segment.byteLength));
+        ifs.read(reinterpret_cast<char*>(&segment.rowCount), sizeof(segment.rowCount));
+        ifs.read(reinterpret_cast<char*>(&segment.minTs), sizeof(segment.minTs));
+        ifs.read(reinterpret_cast<char*>(&segment.maxTs), sizeof(segment.maxTs));
+    }
+    if (!ifs)
+    {
+        throw CannotOpenSink("Failed to read segment table");
+    }
+
+    return {header, dataStartOffsetFor(schemaLen, header.maxSegments)};
 }
 
 Schema parseSchemaFromText(const std::string& schemaText)

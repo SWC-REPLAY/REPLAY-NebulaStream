@@ -60,7 +60,12 @@ FileStore::FileStore(Config config, const Schema& schema)
     : config(std::move(config))
     , schema(schema)
     , filePath(generateFilePath(this->config))
-    , writer(BinaryStoreWriter::Config{.storeName = this->config.storeName, .filePath = filePath, .schemaText = this->config.schemaText})
+    , writer(BinaryStoreWriter::Config{
+          .storeName = this->config.storeName,
+          .filePath = filePath,
+          .schemaText = this->config.schemaText,
+          .segmentSize = this->config.segmentSize,
+          .maxSegments = static_cast<uint32_t>((this->config.totalSize + this->config.segmentSize - 1) / this->config.segmentSize)})
 {
 }
 
@@ -68,7 +73,12 @@ FileStore::FileStore(Config config, const Schema& schema, Store nextLevel, Store
     : config(std::move(config))
     , schema(schema)
     , filePath(generateFilePath(this->config))
-    , writer(BinaryStoreWriter::Config{.storeName = this->config.storeName, .filePath = filePath, .schemaText = this->config.schemaText})
+    , writer(BinaryStoreWriter::Config{
+          .storeName = this->config.storeName,
+          .filePath = filePath,
+          .schemaText = this->config.schemaText,
+          .segmentSize = this->config.segmentSize,
+          .maxSegments = static_cast<uint32_t>((this->config.totalSize + this->config.segmentSize - 1) / this->config.segmentSize)})
     , nextLevel(std::move(nextLevel))
     , transformation(std::move(transformation))
     , flushPolicy(policy)
@@ -84,7 +94,10 @@ void FileStore::open()
     fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
     writer.open();
     writer.ensureHeader();
-    dataStartOffset = HEADER_FIXED_BYTES + sizeof(uint32_t) + config.schemaText.size();
+    maxSegments = static_cast<uint32_t>((config.totalSize + config.segmentSize - 1) / config.segmentSize);
+    dataStartOffset = dataStartOffsetFor(config.schemaText.size(), maxSegments);
+    segments.clear();
+    activeSegment = SegmentDescriptor{};
     writerOpened = true;
     lock.unlock();
     if (nextLevel)
@@ -127,29 +140,13 @@ void FileStore::flush([[maybe_unused]] Store& self)
 
 void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, [[maybe_unused]] Store& self)
 {
-    Timestamp currentMin{Timestamp(Timestamp::INVALID_VALUE)};
-    Timestamp currentMax{Timestamp(Timestamp::INITIAL_VALUE)};
-    {
-        const std::unique_lock lock(mutex);
-        PRECONDITION(writerOpened, "FileStore must be opened before writing");
-        PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
-
-        if (ts < fileMinTs)
-        {
-            fileMinTs = ts;
-        }
-        if (ts > fileMaxTs)
-        {
-            fileMaxTs = ts;
-        }
-        currentMin = fileMinTs;
-        currentMax = fileMaxTs;
-    }
-    /// These calls are thread-safe (atomic tail + pwrite).
-    writer.updateTimestamps(currentMin.getRawValue(), currentMax.getRawValue());
+    PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
 
     NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
-    writer.append(recordData, recordSize);
+
+    /// One record is a one-row buffer as far as segmentation is concerned, so this path builds
+    /// exactly the same segments as the bulk one and nothing has to special-case it.
+    appendBuffer(recordData, recordSize, 1, ts, ts);
 
     /// Check flush policy and flush to next level if triggered (mirrors MemoryStore::writeRecord).
     if (flushPolicy && flushPolicy->shouldFlush(writer.size() - dataStartOffset))
@@ -158,26 +155,88 @@ void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Time
     }
 }
 
-void FileStore::appendRawBytes(const uint8_t* data, const size_t len)
+void FileStore::appendBuffer(
+    const uint8_t* data, const size_t len, const uint64_t rowCount, const Timestamp minTs, const Timestamp maxTs)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
+    if (len == 0)
+    {
+        return;
+    }
+
+    /// Serialises the whole append: the segment being filled, the file-wide range and the
+    /// append frontier have to move together, or a concurrent writer could land its bytes
+    /// inside another's segment.
+    const std::unique_lock lock(mutex);
+
+    /// The first buffer of a segment fixes where it starts.
+    if (activeSegment.byteLength == 0)
+    {
+        activeSegment.byteOffset = writer.size() - dataStartOffset;
+    }
     writer.append(data, len);
+
+    activeSegment.byteLength += len;
+    activeSegment.rowCount += rowCount;
+
+    /// Union rather than overwrite: a segment spans every buffer that went into it. This is the
+    /// whole point -- the range is carried down from where it was measured, never recomputed by
+    /// reading the rows back.
+    if (minTs.getRawValue() != Timestamp::INVALID_VALUE)
+    {
+        activeSegment.minTs = std::min(activeSegment.minTs, minTs.getRawValue());
+        activeSegment.maxTs = std::max(activeSegment.maxTs, maxTs.getRawValue());
+
+        if (minTs < fileMinTs)
+        {
+            fileMinTs = minTs;
+        }
+        if (maxTs > fileMaxTs)
+        {
+            fileMaxTs = maxTs;
+        }
+        /// Kept so a read can dismiss the whole file before looking at any segment -- the
+        /// coarsest of the three levels.
+        writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
+    }
+
+    if (activeSegment.byteLength >= config.segmentSize)
+    {
+        sealActiveSegment();
+    }
 }
 
-void FileStore::updateFileTimestamps(const Timestamp minTs, const Timestamp maxTs)
+void FileStore::sealActiveSegment()
 {
-    PRECONDITION(
-        minTs.getRawValue() != Timestamp::INVALID_VALUE && maxTs.getRawValue() != Timestamp::INITIAL_VALUE,
-        "updating file timestamps requires valid timestamps!");
-    if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < fileMinTs)
+    if (activeSegment.byteLength == 0)
     {
-        fileMinTs = minTs;
+        return;
     }
-    if (maxTs.getRawValue() != Timestamp::INITIAL_VALUE && maxTs > fileMaxTs)
+
+    const auto index = static_cast<uint32_t>(segments.size());
+
+    /// The table is preallocated from `totalSize`, which a chained store never exceeds because
+    /// the flush policy drains it first. A store with no tier below it has nothing to drain into
+    /// and can outgrow the table -- so running out of slots stops persisting descriptors rather
+    /// than failing the write. Reads and drains use the in-memory copy either way; only a reader
+    /// opening the file fresh loses the ranges past that point, and it can still scan.
+    if (index < maxSegments)
     {
-        fileMaxTs = maxTs;
+        /// Fill the preallocated slot in place. Appends continue past the end of the file
+        /// untouched, so the table stays at the front where a single read reaches all of it.
+        writer.writeAt(&activeSegment, SEGMENT_DESCRIPTOR_BYTES, segmentSlotOffset(config.schemaText.size(), index));
+        const uint32_t sealedCount = index + 1;
+        writer.writeAt(&sealedCount, sizeof(sealedCount), sealedCountOffset(config.schemaText.size()));
     }
-    writer.updateTimestamps(fileMinTs.getRawValue(), fileMaxTs.getRawValue());
+
+    segments.push_back(activeSegment);
+    activeSegment = SegmentDescriptor{};
+}
+
+size_t FileStore::debugSegmentCount() const
+{
+    const std::shared_lock lock(mutex);
+    return segments.size();
 }
 
 namespace
@@ -191,7 +250,11 @@ std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string&
         const auto& field = schema.getFieldAt(i);
         if (field.getUnqualifiedName() == fieldName)
         {
-            return offset;
+            /// Past the null indicator when the field has one. Returning the field's start
+            /// instead and assuming an indicator unconditionally reads a value straddling two
+            /// fields on a non-nullable schema, which matches nothing and silently drops every
+            /// row.
+            return offset + (field.dataType.nullable ? 1 : 0);
         }
         offset += field.dataType.isType(DataType::Type::VARSIZED) ? sizeof(uint32_t) : field.dataType.getSizeInBytesWithNull();
     }
@@ -207,8 +270,8 @@ uint64_t filterBufferRows(const std::span<char> data, uint64_t numRows, uint32_t
     {
         const auto row = data.subspan(i * rowWidth, rowWidth);
         uint64_t tsValue = 0;
-        /// Skip the 1-byte null indicator before the actual value
-        const auto tsBytes = row.subspan(tsFieldOffset + 1, sizeof(uint64_t));
+        /// tsFieldOffset already points past any null indicator.
+        const auto tsBytes = row.subspan(tsFieldOffset, sizeof(uint64_t));
         std::memcpy(&tsValue, tsBytes.data(), tsBytes.size());
         if (range.contains(Timestamp(tsValue)))
         {
@@ -249,14 +312,47 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     const uint32_t tupleSize = calculateRowWidth(readSchema);
     PRECONDITION(tupleSize > 0, "Schema must have at least one field to compute row width");
 
+    /// The middle level, between dismissing the whole file above and filtering rows below:
+    /// skip segments whose range cannot overlap the query. Mirrors what MemoryStore does with
+    /// its buffers -- the first byte offset worth reading from is the first segment that
+    /// survives, and everything before it is never touched.
+    uint64_t readFrom = dataStartOffset;
+    uint64_t readUpTo = writer.size();
+    if (!range.isUnbounded())
+    {
+        const std::shared_lock lock(mutex);
+        if (!segments.empty())
+        {
+            bool found = false;
+            for (const auto& segment : segments)
+            {
+                if (!range.overlaps(Timestamp(segment.minTs), Timestamp(segment.maxTs)))
+                {
+                    continue;
+                }
+                if (!found)
+                {
+                    readFrom = dataStartOffset + segment.byteOffset;
+                    found = true;
+                }
+                readUpTo = dataStartOffset + segment.byteOffset + segment.byteLength;
+            }
+            if (!found)
+            {
+                NES_DEBUG("FileStore::read: no segment of {} overlaps the query range", filePath);
+                return 0;
+            }
+        }
+    }
+
     /// Read the current write frontier (atomic) and compute how many complete rows exist.
-    const uint64_t currentTail = writer.size();
-    if (currentTail <= dataStartOffset)
+    const uint64_t currentTail = std::min(readUpTo, writer.size());
+    if (currentTail <= readFrom)
     {
         return 0;
     }
 
-    const uint64_t availableBytes = currentTail - dataStartOffset;
+    const uint64_t availableBytes = currentTail - readFrom;
     const uint64_t completeRows = availableBytes / tupleSize;
     const uint64_t capacity = buffer.getBufferSize() / tupleSize;
     const uint64_t rowsToRead = std::min(completeRows, capacity);
@@ -270,7 +366,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     const auto dest = buffer.getAvailableMemoryArea<char>();
 
     /// pread is position-independent and thread-safe — no lock needed.
-    const ssize_t bytesRead = writer.readAt(dest.data(), bytesToRead, dataStartOffset);
+    const ssize_t bytesRead = writer.readAt(dest.data(), bytesToRead, readFrom);
     if (bytesRead <= 0)
     {
         return 0;
@@ -323,25 +419,35 @@ void FileStore::removeFile()
     writer.removeFile();
 }
 
-FileStore::DrainedData FileStore::drain()
+std::vector<FileStore::DrainedSegment> FileStore::drainSegments()
 {
     std::unique_lock lock(mutex);
 
-    DrainedData out;
-    out.minTs = fileMinTs;
-    out.maxTs = fileMaxTs;
+    /// Anything still accumulating goes down too, so the drain leaves nothing behind.
+    sealActiveSegment();
 
-    const uint64_t tail = writer.size();
-    if (tail > dataStartOffset)
+    std::vector<DrainedSegment> out;
+    out.reserve(segments.size());
+    for (const auto& descriptor : segments)
     {
-        const uint64_t len = tail - dataStartOffset;
-        out.bytes.resize(len);
-        const ssize_t got = writer.readAt(out.bytes.data(), len, dataStartOffset);
-        out.bytes.resize(got > 0 ? static_cast<size_t>(got) : 0);
+        DrainedSegment segment;
+        segment.rowCount = descriptor.rowCount;
+        segment.minTs = Timestamp(descriptor.minTs);
+        segment.maxTs = Timestamp(descriptor.maxTs);
+        segment.bytes.resize(descriptor.byteLength);
+        const ssize_t got
+            = writer.readAt(segment.bytes.data(), descriptor.byteLength, dataStartOffset + descriptor.byteOffset);
+        segment.bytes.resize(got > 0 ? static_cast<size_t>(got) : 0);
+        out.push_back(std::move(segment));
     }
 
-    /// Let go of the data: cut the file back to the header, reset the ts range.
+    /// Let go of the data: cut the file back past the header and the (now stale) table, and
+    /// reset both the table and the file-wide range.
     writer.truncateTo(dataStartOffset);
+    const uint32_t sealedCount = 0;
+    writer.writeAt(&sealedCount, sizeof(sealedCount), sealedCountOffset(config.schemaText.size()));
+    segments.clear();
+    activeSegment = SegmentDescriptor{};
     fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
     fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
 

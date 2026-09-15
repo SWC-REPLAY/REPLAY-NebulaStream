@@ -147,7 +147,13 @@ Store StoreRegistry::getOrCreateStore(
         const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
 
         auto fileStore = makeStore<FileStore>(
-            FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText},
+            FileStore::Config{
+                .storeName = storeName,
+                .storeDir = storeDir,
+                .schemaText = schemaText,
+                /// The segment table is preallocated from this, and the flush policy
+                /// drains the file at the same figure -- so the slots always suffice.
+                .totalSize = bufferSize},
             schema,
             std::move(compressedStore),
             *fileToCompressed,
@@ -195,7 +201,13 @@ Store StoreRegistry::getOrCreateStore(
         const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
 
         auto headStore = makeStore<FileStore>(
-            FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText},
+            FileStore::Config{
+                .storeName = storeName,
+                .storeDir = storeDir,
+                .schemaText = schemaText,
+                /// The segment table is preallocated from this, and the flush policy
+                /// drains the file at the same figure -- so the slots always suffice.
+                .totalSize = bufferSize},
             schema,
             std::move(compressedStore),
             *transformation,

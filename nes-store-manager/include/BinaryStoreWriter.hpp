@@ -31,6 +31,11 @@ public:
         std::string storeName;
         std::string filePath;
         std::string schemaText;
+
+        /// Segment table geometry, written into the header by ensureHeader(). Both zero for a
+        /// store that does not divide its file into segments, which leaves an empty table.
+        uint64_t segmentSize{0};
+        uint32_t maxSegments{0};
     };
 
     explicit BinaryStoreWriter(Config cfg);
@@ -58,6 +63,13 @@ public:
 
     /// Update the min/max timestamps in the file header using pwrite to fixed offsets.
     void updateTimestamps(uint64_t minTs, uint64_t maxTs) const;
+
+    /// Write `len` bytes at `offset` without moving the append frontier.
+    ///
+    /// The general form of updateTimestamps above: it exists so a segment descriptor can be
+    /// filled into its preallocated slot when the segment seals, while appends continue past
+    /// the end of the file.
+    void writeAt(const void* src, size_t len, uint64_t offset) const;
 
     /// Read up to `len` bytes from file offset `offset` into `dest` using pread (thread-safe).
     ssize_t readAt(void* dest, size_t len, uint64_t offset) const;

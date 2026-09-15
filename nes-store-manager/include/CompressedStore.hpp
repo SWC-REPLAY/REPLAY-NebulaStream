@@ -69,6 +69,17 @@ public:
         size_t segmentSize = 1UZ * 1024UZ * 1024UZ; /// 1 MB
     };
 
+    /// Raw row-major bytes read off of every sealed segment (decompressed) plus the
+    /// still-pending active buffer, handed to whatever tier drains this store. Every
+    /// transformation boundary in this store chain speaks row-major bytes matching the
+    /// schema's packed layout, regardless of how a given tier stores them internally.
+    struct DrainedData
+    {
+        std::vector<uint8_t> bytes;
+        Timestamp minTs{Timestamp(Timestamp::INVALID_VALUE)};
+        Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
+    };
+
     /// Standalone (tail) store — no next level.
     CompressedStore(Config config, const Schema& schema);
 
@@ -107,6 +118,12 @@ public:
     void updateTimestamps(Timestamp minTs, Timestamp maxTs);
     /// ----------------------------------------------------------------------
 
+    /// Read every sealed segment out (decompressing each), plus the pending active
+    /// buffer, as one row-major byte blob, then reset this store back to empty (segments
+    /// cleared, file truncated to just its header). Used by a transformation to hand this
+    /// store's data down to the next tier (e.g. ColumnStore), mirroring FileStore::drain().
+    [[nodiscard]] DrainedData drain();
+
     /// test introspection
     [[nodiscard]] uint64_t debugActiveRowCount() const;
     [[nodiscard]] uint64_t debugSegmentCount() const;
@@ -144,6 +161,9 @@ private:
     std::string filePath;
     BinaryStoreWriter writer;
     bool writerOpened{false};
+    /// Byte offset where segment data begins (i.e. just past the file header). Computed
+    /// once in open(); drain() truncates the file back to this offset.
+    uint64_t dataStartOffset{0};
     Timestamp fileMinTs{Timestamp(Timestamp::INVALID_VALUE)};
     Timestamp fileMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
 

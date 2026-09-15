@@ -211,7 +211,10 @@ std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string&
         const auto& field = schema.getFieldAt(i);
         if (field.getUnqualifiedName() == fieldName)
         {
-            return offset;
+            /// Past the null indicator when the field has one. Returning the field's start and
+            /// then assuming an indicator unconditionally reads a value straddling two fields on
+            /// a non-nullable schema, which matches nothing and silently drops every row.
+            return offset + (field.dataType.nullable ? 1 : 0);
         }
         offset += field.dataType.isType(DataType::Type::VARSIZED) ? sizeof(uint32_t) : field.dataType.getSizeInBytesWithNull();
     }
@@ -272,8 +275,8 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
         {
             const auto row = srcSpan.subspan(i * rowWidth, rowWidth);
             uint64_t tsValue = 0;
-            /// Skip the 1-byte null indicator before the actual value
-            const auto tsBytes = row.subspan(*tsOffset + 1, sizeof(uint64_t));
+            /// tsOffset already points past any null indicator.
+            const auto tsBytes = row.subspan(*tsOffset, sizeof(uint64_t));
             std::memcpy(&tsValue, tsBytes.data(), tsBytes.size());
             if (range.contains(Timestamp(tsValue)))
             {
