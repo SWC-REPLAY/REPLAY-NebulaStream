@@ -35,6 +35,7 @@
 #include <ErrorHandling.hpp>
 #include <FileStore.hpp>
 #include <FlushPolicy.hpp>
+#include <LossyStore.hpp>
 #include <MemoryStore.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
@@ -73,10 +74,10 @@ std::vector<std::string> parseStoreOrder(const std::string& storeOrder)
 
     for (const auto& name : storeNames)
     {
-        if (name != "MemoryStore" && name != "FileStore" && name != "CompressedStore")
+        if (name != "MemoryStore" && name != "FileStore" && name != "CompressedStore" && name != "LossyStore")
         {
             throw InvalidConfigParameter(
-                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore or CompressedStore, chained with '->'",
+                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore, CompressedStore or LossyStore, chained with '->'",
                 name,
                 storeOrder);
         }
@@ -90,7 +91,9 @@ StoreConfig mergeOverDefaults(const StoreConfig& overrides, const StoreConfig& d
     return StoreConfig{
         .memoryBufferSize = overrides.memoryBufferSize.has_value() ? overrides.memoryBufferSize : defaults.memoryBufferSize,
         .maxBufferCount = overrides.maxBufferCount.has_value() ? overrides.maxBufferCount : defaults.maxBufferCount,
-        .storeOrder = overrides.storeOrder.has_value() ? overrides.storeOrder : defaults.storeOrder};
+        .storeOrder = overrides.storeOrder.has_value() ? overrides.storeOrder : defaults.storeOrder,
+        .accuracyBoundPercent
+        = overrides.accuracyBoundPercent.has_value() ? overrides.accuracyBoundPercent : defaults.accuracyBoundPercent};
 }
 }
 
@@ -127,10 +130,29 @@ Store StoreRegistry::getOrCreateStore(
 
     /// Build the store chain bottom-up (last in the order is the tail).
     /// Supported chains: "MemoryStore->FileStore->CompressedStore", "MemoryStore->FileStore",
-    /// "FileStore->CompressedStore", "MemoryStore", "FileStore", "CompressedStore"
+    /// "FileStore->CompressedStore", "MemoryStore->FileStore->LossyStore", "FileStore->LossyStore",
+    /// "MemoryStore", "FileStore", "CompressedStore", "LossyStore"
     const bool hasMemoryStore = std::ranges::find(storeNames, "MemoryStore") != storeNames.end();
     const bool hasFileStore = std::ranges::find(storeNames, "FileStore") != storeNames.end();
     const bool hasCompressedStore = std::ranges::find(storeNames, "CompressedStore") != storeNames.end();
+    const bool hasLossyStore = std::ranges::find(storeNames, "LossyStore") != storeNames.end();
+
+    /// The lossy tier columnarises row-major bytes handed to it by a FileStore. There is no
+    /// CompressedStore -> LossyStore transformation, so reject the combination rather than
+    /// silently dropping one of the two tiers.
+    PRECONDITION(
+        !(hasCompressedStore && hasLossyStore),
+        "CompressedStore and LossyStore cannot appear in the same store order '{}'",
+        storeOrder);
+
+    /// A group is one segment handed down by the FileStore, carrying the range measured where
+    /// the timestamps were actually known. Nothing here has to name a timestamp column.
+    const LossyStore::Config lossyConfig{
+        .storeName = storeName,
+        .storeDir = storeDir,
+        .schemaText = schemaText,
+        /// Unset means lossless, which is what every chain gets unless a budget was asked for.
+        .accuracyBoundPercent = config.accuracyBoundPercent.value_or(0.0)};
 
     if (hasMemoryStore && hasFileStore && hasCompressedStore)
     {
@@ -163,6 +185,41 @@ Store StoreRegistry::getOrCreateStore(
             schema,
             MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
             bufferProvider,
+            std::move(fileStore),
+            policy);
+
+        return stores.emplace(storeName, headStore).first->second;
+    }
+    if (hasMemoryStore && hasFileStore && hasLossyStore)
+    {
+        auto memoryToFile = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
+        PRECONDITION(memoryToFile.has_value(), "No transformation registered for 'MemoryStore' -> 'FileStore'");
+        auto fileToLossy = StoreTransformationRegistry::instance().findTransformation("FileStore", "LossyStore");
+        PRECONDITION(fileToLossy.has_value(), "No transformation registered for 'FileStore' -> 'LossyStore'");
+
+        auto lossyStore = makeStore<LossyStore>(lossyConfig, schema);
+
+        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
+        const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
+        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+
+        auto fileStore = makeStore<FileStore>(
+            FileStore::Config{
+                .storeName = storeName,
+                .storeDir = storeDir,
+                .schemaText = schemaText,
+                /// The segment table is preallocated from this, and the flush policy
+                /// drains the file at the same figure -- so the slots always suffice.
+                .totalSize = bufferSize},
+            schema,
+            std::move(lossyStore),
+            *fileToLossy,
+            policy);
+
+        auto headStore = makeStore<MemoryStore>(
+            schema,
+            MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
+            bufferManager,
             std::move(fileStore),
             policy);
 
@@ -215,6 +272,31 @@ Store StoreRegistry::getOrCreateStore(
 
         return stores.emplace(storeName, headStore).first->second;
     }
+    if (hasFileStore && hasLossyStore)
+    {
+        auto transformation = StoreTransformationRegistry::instance().findTransformation("FileStore", "LossyStore");
+        PRECONDITION(transformation.has_value(), "No transformation registered for 'FileStore' -> 'LossyStore'");
+
+        auto lossyStore = makeStore<LossyStore>(lossyConfig, schema);
+
+        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
+        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+
+        auto headStore = makeStore<FileStore>(
+            FileStore::Config{
+                .storeName = storeName,
+                .storeDir = storeDir,
+                .schemaText = schemaText,
+                /// The segment table is preallocated from this, and the flush policy
+                /// drains the file at the same figure -- so the slots always suffice.
+                .totalSize = bufferSize},
+            schema,
+            std::move(lossyStore),
+            *transformation,
+            policy);
+
+        return stores.emplace(storeName, headStore).first->second;
+    }
     if (hasMemoryStore)
     {
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
@@ -227,6 +309,11 @@ Store StoreRegistry::getOrCreateStore(
     {
         auto headStore = makeStore<CompressedStore>(
             CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+        return stores.emplace(storeName, headStore).first->second;
+    }
+    if (hasLossyStore)
+    {
+        auto headStore = makeStore<LossyStore>(lossyConfig, schema);
         return stores.emplace(storeName, headStore).first->second;
     }
     auto headStore

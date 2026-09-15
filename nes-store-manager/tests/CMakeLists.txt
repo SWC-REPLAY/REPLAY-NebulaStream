@@ -18,11 +18,24 @@ target_link_libraries(store-compressed-tests nes-store-manager nes-test-util)
 
 add_nes_test(store-file-to-compressed-chain-tests FileToCompressedChainTest.cpp)
 target_link_libraries(store-file-to-compressed-chain-tests nes-store-manager nes-test-util)
+
+add_nes_test(store-lossy-tests LossyStoreTest.cpp)
+target_link_libraries(store-lossy-tests nes-store-manager nes-test-util)
+add_nes_test(store-lossy-primitives-tests PrimitivesTest.cpp)
+target_link_libraries(store-lossy-primitives-tests nes-store-manager nes-test-util)
+add_nes_test(store-lossy-codec-tests ColumnCodecTest.cpp)
+target_link_libraries(store-lossy-codec-tests nes-store-manager nes-test-util)
+add_nes_test(store-lossy-stats-tests ColumnStatsTest.cpp)
+target_link_libraries(store-lossy-stats-tests nes-store-manager nes-test-util)
+
 add_nes_test(store-segmented-file-tests SegmentedFileStoreTest.cpp)
 target_link_libraries(store-segmented-file-tests nes-store-manager nes-test-util)
 
 add_nes_test(store-memory-range-tests MemoryStoreRangeTest.cpp)
 target_link_libraries(store-memory-range-tests nes-store-manager nes-test-util)
+
+add_nes_test(store-chain-lossy-tests MemoryToFileToLossyChainTest.cpp)
+target_link_libraries(store-chain-lossy-tests nes-store-manager nes-test-util)
 
 add_nes_test(store-compressed-chain-config-tests CompressedChainConfigTest.cpp)
 target_link_libraries(store-compressed-chain-config-tests nes-store-manager nes-test-util)

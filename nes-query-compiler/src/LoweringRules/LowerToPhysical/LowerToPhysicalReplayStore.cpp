@@ -68,6 +68,13 @@ StoreConfig readStoreOverrides(const Descriptor& logicalCfg)
     {
         overrides.maxBufferCount = maxBuf;
     }
+    /// Left unset when zero, so that "no bound was asked for" and "a bound of zero" stay the
+    /// same thing all the way down: both leave the store lossless.
+    if (const auto bound = logicalCfg.tryGetFromConfig(ReplayStoreLogicalOperator::ConfigParameters::ACCURACY_BOUND_PERCENT);
+        bound.has_value() && *bound > 0.0)
+    {
+        overrides.accuracyBoundPercent = *bound;
+    }
     return overrides;
 }
 

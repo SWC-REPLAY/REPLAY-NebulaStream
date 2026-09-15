@@ -568,6 +568,10 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
         /// the buffer size even if the same parameter is also given as an option.
         std::unordered_map<std::string, std::string> configMap = helpers.top().replayableOptions;
         configMap["memory_buffer_size"] = helpers.top().replayableStorageSize;
+        if (helpers.top().replayAccuracyBoundPercent.has_value())
+        {
+            configMap["accuracy_bound_percent"] = fmt::format("{}", *helpers.top().replayAccuracyBoundPercent);
+        }
         auto config = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(configMap));
         queryPlan
             = LogicalPlanBuilder::addReplayStore(queryPlan, config, FieldAccessLogicalFunction("TS"), Windowing::TimeUnit::Milliseconds());
@@ -1219,6 +1223,29 @@ void AntlrSQLQueryPlanCreator::enterReplayableClause(AntlrSQLParser::ReplayableC
     else
     {
         throw InvalidQuerySyntax("Only storage-based history limits (e.g., '10GB') are currently supported");
+    }
+
+    /// WITH ACCURACY BOUND X% -- the store's licence to round floating-point measurements.
+    ///
+    /// Range-checked here rather than deeper down, so a bound the store could never honour
+    /// fails as a query error instead of as a runtime failure once rows are already flowing.
+    if (const auto* accuracyBound = context->accuracyBoundClause(); accuracyBound != nullptr)
+    {
+        const auto text = accuracyBound->bound->getText();
+        double percent = 0.0;
+        try
+        {
+            percent = std::stod(text);
+        }
+        catch (const std::exception&)
+        {
+            throw InvalidQuerySyntax("ACCURACY BOUND '{}' is not a number", text);
+        }
+        if (!(percent > 0.0) || !(percent < 100.0))
+        {
+            throw InvalidQuerySyntax("ACCURACY BOUND must be greater than 0% and less than 100%, got {}%", text);
+        }
+        helpers.top().replayAccuracyBoundPercent = percent;
     }
 
     /// SET(<value> AS REPLAY.<KEY>) configures the store this query records into. Options outside the REPLAY namespace

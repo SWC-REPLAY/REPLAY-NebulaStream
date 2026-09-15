@@ -352,13 +352,19 @@ timeTravelReadClause
 
 udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
 
-replayableClause: REPLAYABLE WITH HISTORY OF historyLimit optionsClause?;
+replayableClause: REPLAYABLE WITH HISTORY OF historyLimit accuracyBoundClause? optionsClause?;
 
 historyLimit
     : storageSize=STRING                        // '10GB', '512MB'
     | tupleCount=INTEGER_VALUE TUPLES           // 1000 TUPLES — future
     | timeValue=INTEGER_VALUE timeUnit          // 1 HOUR — future
     ;
+
+// Permits the column-oriented tier to round floating-point measurements. Every value comes back
+// within this percentage OF ITSELF -- not of the column's range, and not of the dataset. Integer
+// columns are never affected whatever is set here, so a key or a timestamp cannot be rounded.
+// Omitted, the store is lossless end to end.
+accuracyBoundClause: WITH ACCURACY BOUND bound=(INTEGER_VALUE | FLOAT_LITERAL) PERCENT;
 
 nullNotnull
     : NOT? NULLTOKEN
@@ -551,6 +557,8 @@ TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
 REPLAYABLE: 'REPLAYABLE' | 'replayable';
 HISTORY: 'HISTORY' | 'history';
 TUPLES: 'TUPLES' | 'tuples';
+ACCURACY: 'ACCURACY' | 'accuracy';
+BOUND: 'BOUND' | 'bound';
 EXPLAIN: 'EXPLAIN' | 'explain';
 MODEL: 'MODEL';
 MODELS: 'MODELS';

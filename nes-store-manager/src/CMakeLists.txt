@@ -21,10 +21,17 @@ add_source_files(nes-store-manager
         CompressionCodec.cpp
         CompressedStore.cpp
         FileToCompressedTransformation.cpp
+        lossy/ColumnCodec.cpp
+        lossy/ColumnStats.cpp
+        lossy/Primitives.cpp
+        lossy/Quantize.cpp
+        lossy/LossyGroupFormat.cpp
 )
 
 add_plugin(MemoryStore StoreType MemoryStore.cpp)
 add_plugin(FileStore StoreType FileStore.cpp)
+add_plugin(LossyStore StoreType LossyStore.cpp)
 add_plugin(MemoryStore_to_FileStore StoreTransformation MemoryToFileTransformation.cpp)
 add_plugin(FileStore_to_CompressedStore StoreTransformation FileToCompressedTransformation.cpp)
+add_plugin(FileStore_to_LossyStore StoreTransformation FileToLossyTransformation.cpp)
 

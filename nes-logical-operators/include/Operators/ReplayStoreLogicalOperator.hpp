@@ -96,8 +96,21 @@ public:
             uint64_t{0},
             [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(MAX_BUFFER_COUNT, cfg); }};
 
+        /// Accuracy bound as a percentage, from WITH ACCURACY BOUND X%.
+        ///
+        /// Pointwise relative: every floating-point value comes back within this percentage of
+        /// itself. Zero -- the default -- keeps the whole store lossless. It reaches
+        /// floating-point columns only, so it cannot round a key, an id or a timestamp
+        /// whatever it is set to.
+        static inline const DescriptorConfig::ConfigParameter<double> ACCURACY_BOUND_PERCENT{
+            "accuracy_bound_percent",
+            0.0,
+            [](const std::unordered_map<std::string, std::string>& cfg)
+            { return DescriptorConfig::tryGet(ACCURACY_BOUND_PERCENT, cfg); }};
+
         static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-            = DescriptorConfig::createConfigParameterContainerMap(STORE_NAME, MEMORY_BUFFER_SIZE, STORE_ORDER, MAX_BUFFER_COUNT);
+            = DescriptorConfig::createConfigParameterContainerMap(
+                STORE_NAME, MEMORY_BUFFER_SIZE, STORE_ORDER, MAX_BUFFER_COUNT, ACCURACY_BOUND_PERCENT);
     };
 
     static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);

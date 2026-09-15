@@ -35,6 +35,13 @@ struct StoreConfig
     std::optional<size_t> memoryBufferSize;
     std::optional<size_t> maxBufferCount;
     std::optional<std::string> storeOrder;
+
+    /// Error budget for the column-oriented tier, as a percentage of a column's value range
+    /// within a group. Unset -- the default -- keeps the whole chain lossless.
+    ///
+    /// This is what turns the lossy step on; nothing else does. It reaches floating-point
+    /// columns only, so setting it cannot round a key or a timestamp.
+    std::optional<double> accuracyBoundPercent;
 };
 
 /// Holds the live store instances a worker has materialised, keyed by the names the StoreCatalog assigned, plus that

@@ -726,6 +726,50 @@ TEST_F(StatementBinderTest, BindReplayableQueryDifferentSize)
     ASSERT_EQ(std::get<std::string>(replayOps.front()->getConfig().at("memory_buffer_size")), "128MB");
 }
 
+/// Omitting the clause must leave the store lossless -- the default has to be the safe one.
+TEST_F(StatementBinderTest, ReplayableQueryWithoutAccuracyBoundIsLossless)
+{
+    const std::string queryString = "SELECT a FROM inputStream INTO outputStream REPLAYABLE WITH HISTORY OF '64MB'";
+    const auto statement = binder->parseAndBindSingle(queryString);
+    ASSERT_TRUE(statement.has_value()) << statement.error();
+
+    const auto plan = std::get<QueryStatement>(*statement).plan;
+    const auto replayOps = getOperatorByType<ReplayStoreLogicalOperator>(plan);
+    ASSERT_EQ(replayOps.size(), 1);
+    EXPECT_EQ(std::get<double>(replayOps.front()->getConfig().at("accuracy_bound_percent")), 0.0);
+}
+
+TEST_F(StatementBinderTest, BindReplayableQueryWithAccuracyBound)
+{
+    for (const auto& [text, expected] :
+         std::vector<std::pair<std::string, double>>{{"1%", 1.0}, {"0.1%", 0.1}, {"5%", 5.0}, {"0.01%", 0.01}})
+    {
+        const std::string queryString
+            = "SELECT a FROM inputStream INTO outputStream REPLAYABLE WITH HISTORY OF '64MB' WITH ACCURACY BOUND " + text;
+        const auto statement = binder->parseAndBindSingle(queryString);
+        ASSERT_TRUE(statement.has_value()) << text << ": " << statement.error();
+
+        const auto plan = std::get<QueryStatement>(*statement).plan;
+        const auto replayOps = getOperatorByType<ReplayStoreLogicalOperator>(plan);
+        ASSERT_EQ(replayOps.size(), 1) << text;
+        EXPECT_DOUBLE_EQ(std::get<double>(replayOps.front()->getConfig().at("accuracy_bound_percent")), expected) << text;
+        /// The history limit still binds alongside it.
+        EXPECT_EQ(std::get<std::string>(replayOps.front()->getConfig().at("memory_buffer_size")), "64MB");
+    }
+}
+
+/// A bound the store could never honour is a query error, not a runtime failure once rows are
+/// already flowing.
+TEST_F(StatementBinderTest, ReplayableQueryRejectsOutOfRangeAccuracyBound)
+{
+    for (const auto& text : {std::string{"0%"}, std::string{"100%"}, std::string{"150%"}})
+    {
+        const std::string queryString
+            = "SELECT a FROM inputStream INTO outputStream REPLAYABLE WITH HISTORY OF '64MB' WITH ACCURACY BOUND " + text;
+        EXPECT_FALSE(binder->parseAndBindSingle(queryString).has_value()) << text << " should not bind";
+    }
+}
+
 TEST_F(StatementBinderTest, BindTimeTravelReadAllQuery)
 {
     const std::string queryString = "SELECT a FROM inputStream FOR EVENT_TIME AS OF TIMESTAMP ALL INTO outputStream";

@@ -195,4 +195,34 @@ TEST_F(CompressedChainConfigTest, TimeRangeThroughCompressedTailIsExact)
     store.close();
 }
 
+/// Both tails must remain selectable; naming one must not have broken the other.
+TEST_F(CompressedChainConfigTest, BothTailsAreConfigurable)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(schema, 128, 7000);
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+
+    for (const auto& [name, order] : std::vector<std::pair<std::string, std::string>>{
+             {"tail_compressed", "MemoryStore->FileStore->CompressedStore"},
+             {"tail_lossy", "MemoryStore->FileStore->LossyStore"}})
+    {
+        auto store = chainFor(name, order, schema);
+        store.open();
+        for (uint64_t i = 0; i < 128; ++i)
+        {
+            store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(7000 + i), schema);
+        }
+        store.flush();
+
+        /// No accuracy bound was configured, so the lossy tail is bit-exact too: both orders
+        /// must return every row unchanged.
+        const auto all = readTimestamps(store, schema, TimeRange{}, 512);
+        ASSERT_EQ(all.size(), 128U) << order;
+        EXPECT_EQ(all.front(), 7000U) << order;
+        EXPECT_EQ(all.back(), 7127U) << order;
+
+        store.close();
+    }
+}
+
 }
