@@ -19,5 +19,5 @@
 
 std::vector<NES::BaseOption*> NES::ReplayConfiguration::getOptions()
 {
-    return {&memoryBufferSize, &maxBufferCount, &storeOrder};
+    return {&memoryBufferSize, &maxBufferCount, &storeOrder, &accuracyBoundPercent};
 }

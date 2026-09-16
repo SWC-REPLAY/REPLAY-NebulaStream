@@ -88,9 +88,7 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         .memoryBufferSize = configuration.replayConfiguration.memoryBufferSize.getValue(),
         .maxBufferCount = configuration.replayConfiguration.maxBufferCount.getValue(),
         .storeOrder = configuration.replayConfiguration.storeOrder.getValue(),
-        /// Not worker-level configuration: the accuracy bound comes from the query's
-        /// REPLAYABLE ... WITH ACCURACY BOUND clause, and unset means lossless.
-        .accuracyBoundPercent = std::nullopt});
+        .accuracyBoundPercent = configuration.replayConfiguration.accuracyBoundPercent.getValue()});
     const OptionalRef<StoreRegistry> borrowedStoreRegistry{*storeRegistry};
     nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener), borrowedStoreRegistry).build(host);
     compiler = std::make_unique<QueryCompilation::QueryCompiler>(configuration.workerConfiguration.defaultQueryExecution);

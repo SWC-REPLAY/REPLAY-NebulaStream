@@ -39,6 +39,11 @@ public:
     /// Store chain order, e.g. "MemoryStore->FileStore". Default: "MemoryStore->FileStore".
     ScalarOption<std::string> storeOrder = {"store_order", "MemoryStore->FileStore", "Store chain order, e.g. MemoryStore->FileStore"};
 
+    /// Error budget for the lossy tier as a percentage. Default: 0, which keeps every store this
+    /// worker builds lossless. A query's WITH ACCURACY BOUND overrides it for that query only.
+    FloatOption accuracyBoundPercent
+        = {"accuracy_bound_percent", "0", "Lossy tier error budget as a percentage; 0 (the default) keeps stores lossless"};
+
 private:
     std::vector<BaseOption*> getOptions() override;
 };
