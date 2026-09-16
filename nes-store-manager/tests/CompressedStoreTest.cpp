@@ -35,7 +35,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Test fixture — inheriting BaseUnitTest sets up logging and the test environment.
@@ -131,9 +131,9 @@ TEST_F(CompressedStoreTest, FlushSealsOneSegment)
     store.open();
 
     const auto row = makeRow(rowWidth, 0xAB);
-    store.writeRecord(row.data(), rowWidth, Timestamp(100), schema);
-    store.writeRecord(row.data(), rowWidth, Timestamp(110), schema);
-    store.writeRecord(row.data(), rowWidth, Timestamp(120), schema);
+    store.writeRecord(row.data(), rowWidth, Timestamp(100));
+    store.writeRecord(row.data(), rowWidth, Timestamp(110));
+    store.writeRecord(row.data(), rowWidth, Timestamp(120));
 
     EXPECT_EQ(concrete(store).debugSegmentCount(), 0U);
     EXPECT_EQ(concrete(store).debugActiveRowCount(), 3U);
@@ -156,7 +156,7 @@ TEST_F(CompressedStoreTest, CompressionReducesSize)
     const uint64_t numRows = 1000;
     for (uint64_t i = 0; i < numRows; ++i)
     {
-        store.writeRecord(row.data(), rowWidth, Timestamp(i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(i));
     }
     store.flush();
 
@@ -177,7 +177,7 @@ TEST_F(CompressedStoreTest, AutoSealsAtSegmentSize)
     const auto row = makeRow(rowWidth, 0x01);
     for (uint64_t i = 0; i < 6; ++i)
     {
-        store.writeRecord(row.data(), rowWidth, Timestamp(i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(i));
     }
 
     EXPECT_GE(concrete(store).debugSegmentCount(), 2U);
@@ -195,7 +195,7 @@ TEST_F(CompressedStoreTest, ReadUnboundedRoundTrip)
     for (uint64_t i = 0; i < numRows; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x10 + i));
-        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i));
     }
     store.flush();
 
@@ -226,14 +226,14 @@ TEST_F(CompressedStoreTest, ReadPrunesByTimeRange)
     for (uint64_t ts : {100U, 110U, 120U})
     {
         const auto row = makeRow(rowWidth, 0x0A);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
     store.flush();
 
     for (uint64_t ts : {500U, 510U, 520U})
     {
         const auto row = makeRow(rowWidth, 0x0B);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
     store.flush();
 
@@ -262,7 +262,7 @@ TEST_F(CompressedStoreTest, ReadRowLevelFilter)
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
     {
         const auto row = makeRowWithTs(schema, ts);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
     store.flush();
 
@@ -289,7 +289,7 @@ TEST_F(CompressedStoreTest, ReadRowLevelFilterNullableTsField)
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
     {
         const auto row = makeRowWithTs(schema, ts);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
     store.flush();
 
@@ -317,7 +317,7 @@ TEST_F(CompressedStoreTest, DrainResetsStore)
     for (uint64_t i = 0; i < 3; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x10 + i));
-        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i));
     }
     store.flush();
     ASSERT_EQ(concrete(store).debugSegmentCount(), 1U);
@@ -326,7 +326,7 @@ TEST_F(CompressedStoreTest, DrainResetsStore)
     for (uint64_t i = 0; i < 2; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x20 + i));
-        store.writeRecord(row.data(), rowWidth, Timestamp(200 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(200 + i));
     }
     ASSERT_EQ(concrete(store).debugActiveRowCount(), 2U);
 
@@ -363,7 +363,7 @@ TEST_F(CompressedStoreTest, ReadRowLevelFilterMixedNullability)
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
     {
         const auto row = makeRowWithTs(schema, ts);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
     store.flush();
 

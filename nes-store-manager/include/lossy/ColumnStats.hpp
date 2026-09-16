@@ -23,7 +23,7 @@
 #include <DataTypes/DataType.hpp>
 #include <lossy/ColumnCodec.hpp>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 /// What one pass over a column reveals about it.

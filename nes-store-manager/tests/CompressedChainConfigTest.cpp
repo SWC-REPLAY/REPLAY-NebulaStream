@@ -43,7 +43,7 @@
 #include <StoreRegistry.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class CompressedChainConfigTest : public Testing::BaseUnitTest
@@ -54,6 +54,14 @@ public:
 
 namespace
 {
+
+/// Upstream made StoreRegistry worker-owned rather than process-global, so this file holds one
+/// instance: a store materialised in one helper stays visible to the next.
+StoreRegistry& testRegistry()
+{
+    static StoreRegistry registry{StoreConfig{}};
+    return registry;
+}
 
 Schema makeSchema()
 {
@@ -102,8 +110,8 @@ Store chainFor(const std::string& storeName, const std::string& storeOrder, cons
     StoreConfig config;
     config.storeOrder = storeOrder;
 
-    auto& registry = StoreRegistry::instance();
-    registry.registerConfiguredStore(storeName, schema, SCHEMA_TEXT, config);
+    auto& registry = testRegistry();
+    std::ignore = registry.getOrCreateStore(storeName, schema, SCHEMA_TEXT, config, BufferManager::create());
     auto store = registry.getStore(storeName);
     EXPECT_TRUE(store.has_value()) << storeOrder << " did not register";
     return *store;
@@ -123,7 +131,7 @@ TEST_F(CompressedChainConfigTest, MemoryToFileToCompressedRoundTrips)
 
     for (uint64_t i = 0; i < 512; ++i)
     {
-        store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(1000 + i), schema);
+        store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(1000 + i));
     }
     store.flush();
 
@@ -149,7 +157,7 @@ TEST_F(CompressedChainConfigTest, FileToCompressedRoundTrips)
 
     for (uint64_t i = 0; i < 256; ++i)
     {
-        store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(4000 + i), schema);
+        store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(4000 + i));
     }
     store.flush();
 
@@ -175,7 +183,7 @@ TEST_F(CompressedChainConfigTest, TimeRangeThroughCompressedTailIsExact)
 
     for (uint64_t i = 0; i < 512; ++i)
     {
-        store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(1000 + i), schema);
+        store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(1000 + i));
     }
     store.flush();
 
@@ -210,7 +218,7 @@ TEST_F(CompressedChainConfigTest, BothTailsAreConfigurable)
         store.open();
         for (uint64_t i = 0; i < 128; ++i)
         {
-            store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(7000 + i), schema);
+            store.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(7000 + i));
         }
         store.flush();
 

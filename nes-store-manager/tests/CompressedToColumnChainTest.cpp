@@ -35,7 +35,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class CompressedToColumnChainTest : public Testing::BaseUnitTest
@@ -90,7 +90,7 @@ TEST_F(CompressedToColumnChainTest, CompressedFlushesIntoColumn)
     for (uint64_t i = 0; i < numRows; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x60 + i));
-        compressed.writeRecord(row.data(), rowWidth, Timestamp(400 + i), schema);
+        compressed.writeRecord(row.data(), rowWidth, Timestamp(400 + i));
     }
     EXPECT_GE(compressed.getAs<CompressedStore>().get().debugSegmentCount(), 2U);
 

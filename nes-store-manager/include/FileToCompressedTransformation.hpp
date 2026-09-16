@@ -18,7 +18,7 @@
 
 #include <Store.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Transformation that drains a FileStore and writes its rows into a downstream

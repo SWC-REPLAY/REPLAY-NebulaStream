@@ -31,7 +31,7 @@
 #include <ReplayStoreFormat.hpp>
 #include <StoreTransformationRegistry.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 namespace
@@ -98,16 +98,10 @@ void CompressedStore::open()
     }
 }
 
-void CompressedStore::writeRecord(
-    const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self)
+void CompressedStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self)
 {
     std::unique_lock lock(mutex);
     PRECONDITION(opened, "CompressedStore must be opened before writing");
-
-    if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
-    {
-        schema = writeSchema;
-    }
 
     /// Append the record and widen the active segment's timestamp range.
     activeBuffer.insert(activeBuffer.end(), recordData, recordData + recordSize);

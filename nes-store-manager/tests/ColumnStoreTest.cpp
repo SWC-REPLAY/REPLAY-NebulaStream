@@ -34,7 +34,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Test fixture — inheriting BaseUnitTest sets up logging and the test environment.
@@ -151,13 +151,13 @@ TEST_F(ColumnStoreTest, RowGroupSealsAtRowCountThreshold)
     store.open();
 
     const auto row = makeRow(rowWidth, 0xAB);
-    store.writeRecord(row.data(), rowWidth, Timestamp(100), schema);
-    store.writeRecord(row.data(), rowWidth, Timestamp(110), schema);
+    store.writeRecord(row.data(), rowWidth, Timestamp(100));
+    store.writeRecord(row.data(), rowWidth, Timestamp(110));
 
     EXPECT_EQ(concrete(store).debugRowGroupCount(), 0U);
     EXPECT_EQ(concrete(store).debugActiveRowCount(), 2U);
 
-    store.writeRecord(row.data(), rowWidth, Timestamp(120), schema);
+    store.writeRecord(row.data(), rowWidth, Timestamp(120));
 
     EXPECT_EQ(concrete(store).debugRowGroupCount(), 1U);
     EXPECT_EQ(concrete(store).debugActiveRowCount(), 0U);
@@ -177,7 +177,7 @@ TEST_F(ColumnStoreTest, TransposeDetransposeRoundTrip)
     for (uint64_t i = 0; i < numRows; ++i)
     {
         const auto row = makeStructuredRow(/*id=*/i, /*value=*/(i * 7) + 3, /*ts=*/1000 + i);
-        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
     }
     /// Exactly one seal should have happened (rowGroupRows == numRows).
     EXPECT_EQ(concrete(store).debugRowGroupCount(), 1U);
@@ -212,7 +212,7 @@ TEST_F(ColumnStoreTest, MultipleRowGroupsPreserveOrderAndContent)
     for (uint64_t i = 0; i < numRows; ++i)
     {
         const auto row = makeStructuredRow(i, (i * 3) + 1, 2000 + i);
-        store.writeRecord(row.data(), rowWidth, Timestamp(2000 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(2000 + i));
     }
     EXPECT_EQ(concrete(store).debugRowGroupCount(), 2U);
     EXPECT_EQ(concrete(store).debugActiveRowCount(), 2U);
@@ -248,12 +248,12 @@ TEST_F(ColumnStoreTest, TimeRangeRowGroupPruning)
     for (uint64_t ts : {100U, 110U, 120U})
     {
         const auto row = makeRow(rowWidth, 0x0A);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
     for (uint64_t ts : {500U, 510U, 520U})
     {
         const auto row = makeRow(rowWidth, 0x0B);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
 
     EXPECT_EQ(concrete(store).debugRowGroupCount(), 2U);
@@ -283,7 +283,7 @@ TEST_F(ColumnStoreTest, ReadRowLevelFilter)
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
     {
         const auto row = makeRowWithTs(schema, ts);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
 
     auto bufferManager = BufferManager::create();
@@ -311,7 +311,7 @@ TEST_F(ColumnStoreTest, ReadRowLevelFilterNullableTsField)
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
     {
         const auto row = makeRowWithTs(schema, ts);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
 
     auto bufferManager = BufferManager::create();
@@ -339,7 +339,7 @@ TEST_F(ColumnStoreTest, ReadRowLevelFilterMixedNullability)
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
     {
         const auto row = makeRowWithTs(schema, ts);
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
 
     auto bufferManager = BufferManager::create();
@@ -368,7 +368,7 @@ TEST_F(ColumnStoreTest, ReadUnboundedRoundTripPreservesBytes)
     for (uint64_t i = 0; i < numRows; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x10 + i));
-        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i));
     }
 
     auto bufferManager = BufferManager::create();
@@ -401,7 +401,7 @@ TEST_F(ColumnStoreTest, DrainReturnsRowMajorBytesAndResetsSelf)
     for (uint64_t i = 0; i < 3; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x10 + i));
-        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(100 + i));
     }
     ASSERT_EQ(concrete(store).debugRowGroupCount(), 1U);
 
@@ -409,7 +409,7 @@ TEST_F(ColumnStoreTest, DrainReturnsRowMajorBytesAndResetsSelf)
     for (uint64_t i = 0; i < 2; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x20 + i));
-        store.writeRecord(row.data(), rowWidth, Timestamp(200 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(200 + i));
     }
     ASSERT_EQ(concrete(store).debugActiveRowCount(), 2U);
 

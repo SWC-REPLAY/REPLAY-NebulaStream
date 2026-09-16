@@ -35,7 +35,7 @@
 #include <lossy/ColumnStats.hpp>
 #include <lossy/LossyGroupFormat.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Column-oriented tail of the store chain, backed by one file of independently decodable
@@ -124,7 +124,7 @@ public:
     void close(Store& self);
     void flush(Store& self);
 
-    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self);
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
     uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
 

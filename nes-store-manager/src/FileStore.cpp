@@ -384,7 +384,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
 
         /// 3. Straddling a bound: the only case that reads timestamps. Filtering compacts the
         /// survivors in place, so the next division continues straight after them.
-        destTuples += filterBufferRows(dest, rowsRead, tupleSize, *tsOffset, range);
+        destTuples += filterBufferRows(std::span<char>(dest, rowsRead * tupleSize), rowsRead, tupleSize, *tsOffset, range);
     }
 
     NES_DEBUG(

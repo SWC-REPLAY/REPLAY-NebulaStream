@@ -23,7 +23,7 @@
 #include <DataTypes/DataType.hpp>
 #include <lossy/Quantize.hpp>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 /// Which codec produced a column's bytes.

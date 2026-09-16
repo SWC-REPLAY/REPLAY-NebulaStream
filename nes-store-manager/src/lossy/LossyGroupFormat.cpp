@@ -16,7 +16,7 @@
 
 #include <bit>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 namespace

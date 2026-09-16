@@ -22,7 +22,7 @@
 
 #include <ErrorHandling.hpp>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 uint8_t bitWidthFor(const uint64_t maxValue) noexcept

@@ -21,7 +21,7 @@
 #include <ErrorHandling.hpp>
 #include <lossy/Primitives.hpp>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 namespace

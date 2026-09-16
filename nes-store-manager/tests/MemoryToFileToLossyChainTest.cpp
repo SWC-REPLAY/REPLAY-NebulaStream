@@ -46,7 +46,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class MemoryToFileToLossyChainTest : public Testing::BaseUnitTest
@@ -109,7 +109,7 @@ void writeRows(Store& store, const Schema& schema, const uint64_t count, const u
         std::vector<uint8_t> row(rowWidth, 0);
         std::memcpy(row.data(), &ts, sizeof(ts));
         std::memcpy(row.data() + sizeof(uint64_t), &value, sizeof(value));
-        store.writeRecord(row.data(), rowWidth, Timestamp(ts), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(ts));
     }
 }
 

@@ -20,7 +20,7 @@
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 void FileToLossyTransformation::execute(Store& source, Store& dest)
@@ -60,6 +60,6 @@ namespace NES
 StoreTransformationRegistryReturnType
 StoreTransformationGeneratedRegistrar::RegisterFileStore_to_LossyStoreStoreTransformation(StoreTransformationRegistryArguments)
 {
-    return StoreManager::FileToLossyTransformation{};
+    return FileToLossyTransformation{};
 }
 }

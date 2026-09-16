@@ -219,7 +219,7 @@ Store StoreRegistry::getOrCreateStore(
         auto headStore = makeStore<MemoryStore>(
             schema,
             MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
-            bufferManager,
+            bufferProvider,
             std::move(fileStore),
             policy);
 

@@ -35,7 +35,7 @@
 #include <lossy/ColumnCodec.hpp>
 #include <lossy/Primitives.hpp>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 class ColumnCodecTest : public Testing::BaseUnitTest

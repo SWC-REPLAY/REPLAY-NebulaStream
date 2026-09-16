@@ -18,7 +18,7 @@
 
 #include <Store.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Moves a FileStore's rows down into a LossyStore.

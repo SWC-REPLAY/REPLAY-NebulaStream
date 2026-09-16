@@ -26,7 +26,7 @@
 /// <ErrorHandling.hpp> (e.g. PRECONDITION / INVARIANT). Swapping them in is a
 /// mechanical change and does not affect the logic below.
 
-namespace NES::StoreManager
+namespace NES
 {
 
 CompressionCodec::CompressionCodec(Type type, int level) : type(type), level(level)

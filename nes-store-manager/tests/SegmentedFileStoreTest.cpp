@@ -40,7 +40,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class SegmentedFileStoreTest : public Testing::BaseUnitTest
@@ -165,7 +165,7 @@ TEST_F(SegmentedFileStoreTest, WriteRecordAccumulatesIntoTheActiveSegment)
     for (uint64_t i = 0; i < 10; ++i)
     {
         const auto row = makeRows(1, 1000 + i);
-        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
     }
     EXPECT_EQ(fileStore.debugSegmentCount(), 0U) << "ten records is not a segment each";
 
@@ -173,7 +173,7 @@ TEST_F(SegmentedFileStoreTest, WriteRecordAccumulatesIntoTheActiveSegment)
     for (uint64_t i = 10; i < 64; ++i)
     {
         const auto row = makeRows(1, 1000 + i);
-        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
     }
     EXPECT_EQ(fileStore.debugSegmentCount(), 1U);
 
@@ -181,7 +181,7 @@ TEST_F(SegmentedFileStoreTest, WriteRecordAccumulatesIntoTheActiveSegment)
     for (uint64_t i = 64; i < 128; ++i)
     {
         const auto row = makeRows(1, 1000 + i);
-        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
     }
     EXPECT_EQ(fileStore.debugSegmentCount(), 2U);
 

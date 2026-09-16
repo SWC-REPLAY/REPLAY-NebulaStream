@@ -38,7 +38,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class FileToCompressedChainTest : public Testing::BaseUnitTest
@@ -102,7 +102,7 @@ TEST_F(FileToCompressedChainTest, FileFlushesIntoCompressed)
     for (uint64_t i = 0; i < numRows; ++i)
     {
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x40 + i));
-        file.writeRecord(row.data(), rowWidth, Timestamp(300 + i), schema);
+        file.writeRecord(row.data(), rowWidth, Timestamp(300 + i));
     }
 
     /// Flush: FileStore::flush runs the transformation, which drains the file into
@@ -171,7 +171,7 @@ TEST_F(FileToCompressedChainTest, EachBlockCarriesTheRangeOfTheSegmentsInsideIt)
     for (uint64_t i = 0; i < 256; ++i)
     {
         const auto row = makeTimedRow(rowWidth, i, 1000 + i);
-        chain.file.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+        chain.file.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
     }
     EXPECT_EQ(chain.file.getAs<FileStore>().get().debugSegmentCount(), 16U) << "the tier above should divide at its own size";
 
@@ -208,7 +208,7 @@ TEST_F(FileToCompressedChainTest, NarrowWindowReturnsExactlyItsRows)
     for (uint64_t i = 0; i < 256; ++i)
     {
         const auto row = makeTimedRow(rowWidth, i, 1000 + i);
-        chain.file.writeRecord(row.data(), rowWidth, Timestamp(1000 + i), schema);
+        chain.file.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
     }
     chain.file.flush();
 

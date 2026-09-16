@@ -34,7 +34,7 @@
 #include <lossy/ColumnStats.hpp>
 #include <lossy/Primitives.hpp>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 class ColumnStatsTest : public Testing::BaseUnitTest

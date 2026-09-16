@@ -19,7 +19,7 @@
 #include <span>
 #include <vector>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 /// Building blocks the codecs are assembled from. All lossless, all pure functions.

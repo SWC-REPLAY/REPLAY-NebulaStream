@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 /// On-disk layout of the lossy store:

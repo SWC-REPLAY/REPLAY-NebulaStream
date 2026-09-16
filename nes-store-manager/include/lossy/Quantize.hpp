@@ -19,7 +19,7 @@
 #include <span>
 #include <vector>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 /// The one place in this store where information is lost.

@@ -31,7 +31,7 @@
 #include <Util/Logger/impl/NesLogger.hpp>
 #include <lossy/Primitives.hpp>
 
-namespace NES::StoreManager::Lossy
+namespace NES::Lossy
 {
 
 class PrimitivesTest : public Testing::BaseUnitTest

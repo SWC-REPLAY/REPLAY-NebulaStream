@@ -46,7 +46,7 @@
 #include <StoreRegistry.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class LossyStoreTest : public Testing::BaseUnitTest
@@ -57,6 +57,14 @@ public:
 
 namespace
 {
+
+/// Upstream made StoreRegistry worker-owned rather than process-global, so this file holds one
+/// instance: a store materialised in one helper stays visible to the next.
+StoreRegistry& testRegistry()
+{
+    static StoreRegistry registry{StoreConfig{}};
+    return registry;
+}
 
 Schema makeSchema()
 {
@@ -936,7 +944,7 @@ TEST_F(LossyStoreTest, RecordWiseAndBulkIngestAgree)
     byRecord.open();
     for (uint64_t i = 0; i < 30; ++i)
     {
-        byRecord.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(1000 + (i * 10)), schema);
+        byRecord.writeRecord(rows.data() + (i * rowWidth), rowWidth, Timestamp(1000 + (i * 10)));
     }
     byRecord.flush();
 
@@ -980,8 +988,8 @@ TEST_F(LossyStoreTest, ErrorBudgetReachesAChainBuiltStore)
         config.storeOrder = "LossyStore";
         config.accuracyBoundPercent = bound;
 
-        auto& registry = StoreRegistry::instance();
-        registry.registerConfiguredStore(storeName, schema, "ts UINT64, value FLOAT64", config);
+        auto& registry = testRegistry();
+        std::ignore = registry.getOrCreateStore(storeName, schema, "ts UINT64, value FLOAT64", config, BufferManager::create());
 
         auto store = registry.getStore(storeName);
         EXPECT_TRUE(store.has_value());
@@ -1012,7 +1020,7 @@ TEST_F(LossyStoreTest, ErrorBudgetReachesAChainBuiltStore)
         EXPECT_LE(std::abs(bounded[i] - original[i]), epsilon) << "row " << i;
     }
 
-    StoreRegistry::instance().clearAndDeleteFiles();
+    testRegistry().clearAndDeleteFiles();
 }
 
 }

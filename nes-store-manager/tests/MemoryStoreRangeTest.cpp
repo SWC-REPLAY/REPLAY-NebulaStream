@@ -41,7 +41,7 @@
 #include <Store.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 class MemoryStoreRangeTest : public Testing::BaseUnitTest
@@ -98,7 +98,7 @@ TEST_F(MemoryStoreRangeTest, PartiallyOverlappingBufferIsFilteredRowByRow)
     for (uint64_t i = 0; i < 100; ++i)
     {
         const auto row = makeRow(1000 + i, i);
-        store.writeRecord(row.data(), static_cast<uint32_t>(row.size()), Timestamp(1000 + i), schema);
+        store.writeRecord(row.data(), static_cast<uint32_t>(row.size()), Timestamp(1000 + i));
     }
     store.flush();
 
@@ -126,7 +126,7 @@ TEST_F(MemoryStoreRangeTest, RangeCoveringEverythingReturnsEveryRow)
     for (uint64_t i = 0; i < 50; ++i)
     {
         const auto row = makeRow(2000 + i, i);
-        store.writeRecord(row.data(), static_cast<uint32_t>(row.size()), Timestamp(2000 + i), schema);
+        store.writeRecord(row.data(), static_cast<uint32_t>(row.size()), Timestamp(2000 + i));
     }
     store.flush();
 
@@ -147,7 +147,7 @@ TEST_F(MemoryStoreRangeTest, RangeOutsideEveryBufferReturnsNothing)
     for (uint64_t i = 0; i < 50; ++i)
     {
         const auto row = makeRow(3000 + i, i);
-        store.writeRecord(row.data(), static_cast<uint32_t>(row.size()), Timestamp(3000 + i), schema);
+        store.writeRecord(row.data(), static_cast<uint32_t>(row.size()), Timestamp(3000 + i));
     }
     store.flush();
 

@@ -20,7 +20,7 @@
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 void FileToCompressedTransformation::execute(Store& source, Store& dest)
@@ -62,6 +62,6 @@ namespace NES
 StoreTransformationRegistryReturnType
 StoreTransformationGeneratedRegistrar::RegisterFileStore_to_CompressedStoreStoreTransformation(StoreTransformationRegistryArguments)
 {
-    return StoreManager::FileToCompressedTransformation{};
+    return FileToCompressedTransformation{};
 }
 }

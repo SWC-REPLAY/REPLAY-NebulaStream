@@ -33,7 +33,7 @@
 #include <StoreTransformation.hpp>
 #include <TimeRange.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// Lossless, segment-based, compressed store, backed by a file on disk (one
@@ -99,7 +99,7 @@ public:
     void close(Store& self);
     void flush(Store& self);
 
-    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, const Schema& writeSchema, Store& self);
+    void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
     uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
     [[nodiscard]] bool hasMore() const;
 

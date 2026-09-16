@@ -23,7 +23,7 @@
 namespace NES
 {
 
-using ColumnCodecRegistryReturnType = std::shared_ptr<StoreManager::Lossy::ColumnCodec>;
+using ColumnCodecRegistryReturnType = std::shared_ptr<Lossy::ColumnCodec>;
 
 /// Codecs are stateless, so there is nothing to configure at construction time.
 struct ColumnCodecRegistryArguments

@@ -19,7 +19,7 @@
 #include <string_view>
 #include <vector>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// A lossless codec = compressor + decompressor.

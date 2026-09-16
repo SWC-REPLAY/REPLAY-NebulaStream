@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 /// On-disk layout of the compressed store:

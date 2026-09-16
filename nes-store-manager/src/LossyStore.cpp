@@ -27,7 +27,7 @@
 #include <ReplayStoreFormat.hpp>
 #include <StoreTypeRegistry.hpp>
 
-namespace NES::StoreManager
+namespace NES
 {
 
 using namespace Lossy;
@@ -162,19 +162,12 @@ void LossyStore::flush(Store&)
     sealPending();
 }
 
-void LossyStore::writeRecord(
-    const uint8_t* recordData, const uint32_t recordSize, const Timestamp ts, const Schema& writeSchema, Store&)
+void LossyStore::writeRecord(const uint8_t* recordData, const uint32_t recordSize, const Timestamp ts, Store&)
 {
     const std::unique_lock lock(mutex);
     PRECONDITION(opened, "LossyStore must be opened before writing");
     PRECONDITION(
         recordSize == rowWidth, "record is {} bytes, schema row width is {}", recordSize, rowWidth);
-    PRECONDITION(
-        writeSchema.getSizeOfSchemaInBytes() == 0 || writeSchema.getSizeOfSchemaInBytes() == rowWidth,
-        "write schema row width {} does not match store's {}",
-        writeSchema.getSizeOfSchemaInBytes(),
-        rowWidth);
-
     pending.insert(pending.end(), recordData, recordData + recordSize);
 
     /// The range of what is accumulating, built from the timestamps handed in rather than read
@@ -667,7 +660,7 @@ namespace NES
 {
 StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterLossyStoreStoreType(StoreTypeRegistryArguments args)
 {
-    StoreManager::LossyStore::Config cfg;
+    LossyStore::Config cfg;
     if (const auto it = args.config.find("storeName"); it != args.config.end())
     {
         cfg.storeName = it->second;
@@ -689,6 +682,6 @@ StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterLossyStoreStore
     {
         cfg.accuracyBoundPercent = std::stod(it->second);
     }
-    return StoreManager::makeStore<StoreManager::LossyStore>(std::move(cfg), args.schema);
+    return makeStore<LossyStore>(std::move(cfg), args.schema);
 }
 }
