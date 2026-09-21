@@ -525,7 +525,7 @@
 
         clangTidyDiffRunner = pkgs.writeShellApplication {
           name = clangTidyDiffCommand;
-          runtimeInputs = [ pkgs.python3 ];
+          runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.pyyaml ])) ];
           text = ''
             exec python3 ${clangTidyDiffScript} "$@"
           '';

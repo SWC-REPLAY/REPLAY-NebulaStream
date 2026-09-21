@@ -23,7 +23,6 @@
 #include <vector>
 #include <Functions/FieldAccessLogicalFunction.hpp>
 #include <Functions/LogicalFunction.hpp>
-#include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/WindowAggregationLogicalFunction.hpp>
 #include <Operators/Windows/JoinLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
@@ -83,9 +82,7 @@ public:
     JoinLogicalOperator::JoinType joinType = JoinLogicalOperator::JoinType::INNER_JOIN;
     std::optional<std::unordered_map<std::string, std::string>> storeOptions;
 
-    /// UDB specific variables
-    bool hasUdbClause{false};
-    UdbRecordingOptions udbOptions;
+    std::optional<std::unordered_map<std::string, std::string>> udbOptions;
 
     /// Utility variables to keep state between enter/exit parser function calls.
     size_t opBoolean{}; ///anonymous token enum in AntlrSQLLexer.h

@@ -25,7 +25,6 @@
 #include <Functions/LogicalFunction.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ProjectionLogicalOperator.hpp>
-#include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/WindowAggregationLogicalFunction.hpp>
 #include <Operators/Windows/JoinLogicalOperator.hpp>
 #include <Plans/LogicalPlan.hpp>
@@ -98,7 +97,7 @@ public:
         const LogicalPlan& queryPlan);
 
     static LogicalPlan addReplayStore(const DescriptorConfig::Config& config, const LogicalPlan& queryplan);
-    static LogicalPlan addUdbRecording(UdbRecordingOptions options, const LogicalPlan& queryPlan);
+    static LogicalPlan addUdbRecording(const DescriptorConfig::Config& config, const LogicalPlan& queryPlan);
     /// Checks in case a window is contained in the query.
     /// If a watermark operator exists in the queryPlan and if not adds a watermark strategy to the queryPlan.
     static LogicalPlan checkAndAddWatermarkAssigner(LogicalPlan queryPlan, const std::shared_ptr<Windowing::WindowType>& windowType);

@@ -33,8 +33,8 @@ namespace NES
 class UdbRecordingPhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    explicit UdbRecordingPhysicalOperator(Udb::RecordingConfig config);
-    /// Udb::Recording is neither copyable nor movable, so this operator needs an explicit copy
+    explicit UdbRecordingPhysicalOperator(RecordingConfig config);
+    /// Recording is neither copyable nor movable, so this operator needs an explicit copy
     /// constructor. A copy deliberately starts out not recording: exactly one object must own a
     /// given udb process, otherwise both would signal and reap the same pid.
     UdbRecordingPhysicalOperator(const UdbRecordingPhysicalOperator& other);
@@ -49,11 +49,11 @@ public:
     void setChild(PhysicalOperator child) override;
 
 private:
-    Udb::RecordingConfig config;
+    RecordingConfig config;
     std::optional<PhysicalOperator> child;
     /// Engaged exactly while this pipeline is being recorded: constructed in setup(), destroyed in
     /// terminate().
-    mutable std::optional<Udb::Recording> recording;
+    mutable std::optional<Recording> recording;
 };
 
 }
