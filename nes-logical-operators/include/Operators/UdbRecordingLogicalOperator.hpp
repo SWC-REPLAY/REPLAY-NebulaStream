@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <DataTypes/UnboundField.hpp>
@@ -58,7 +59,28 @@ public:
     static TypedLogicalOperator<UdbRecordingLogicalOperator> create(std::optional<std::string> traceName);
     static TypedLogicalOperator<UdbRecordingLogicalOperator> create(LogicalOperator child, std::optional<std::string> traceName);
 
-    [[nodiscard]] const UdbRecordingOptions& getOptions() const { return options; }
+    [[nodiscard]] const DescriptorConfig::Config& getConfig() const { return config; }
+
+    [[nodiscard]] UdbRecordingLogicalOperator withConfig(DescriptorConfig::Config validatedConfig) const;
+
+    struct ConfigParameters
+    {
+        static inline const DescriptorConfig::ConfigParameter<std::string> TRACE_NAME{
+            "trace_name",
+            std::nullopt,
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(TRACE_NAME, cfg); }};
+
+        /// History bound, as SIZE[KB|MB|GB].
+        static inline const DescriptorConfig::ConfigParameter<std::string> TRACE_SIZE{
+            "trace_size",
+            std::nullopt,
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(TRACE_SIZE, cfg); }};
+
+        static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
+            = DescriptorConfig::createConfigParameterContainerMap(TRACE_NAME, TRACE_SIZE);
+    };
+
+    static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);
 
     [[nodiscard]] bool operator==(const UdbRecordingLogicalOperator& rhs) const;
 
@@ -120,3 +142,10 @@ struct std::hash<NES::UdbRecordingLogicalOperator>
 {
     uint64_t operator()(const NES::UdbRecordingLogicalOperator& op) const noexcept;
 };
+namespace NES::detail
+{
+struct ReflectedUdbRecordingLogicalOperator
+{
+    DescriptorConfig::Config config;
+};
+}
