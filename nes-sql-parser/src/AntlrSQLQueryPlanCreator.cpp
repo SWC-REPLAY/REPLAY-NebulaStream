@@ -52,6 +52,7 @@
 #include <Functions/LogicalFunction.hpp>
 #include <Functions/LogicalFunctionProvider.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
+#include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
@@ -546,9 +547,10 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
         queryPlan = LogicalPlanBuilder::addReplayStore(cfg, queryPlan);
     }
     /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
-    if (helpers.top().hasUdbClause)
+    if (const auto& udbOptions = helpers.top().udbOptions)
     {
-        queryPlan = LogicalPlanBuilder::addUdbRecording(std::move(helpers.top().udbOptions), queryPlan);
+        const auto cfg = UdbRecordingLogicalOperator::validateAndFormatConfig(*udbOptions);
+        queryPlan = LogicalPlanBuilder::addUdbRecording(cfg, queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -1128,17 +1130,10 @@ void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelC
 
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
 {
-    helpers.top().hasUdbClause = true;
+    std::unordered_map<std::string, std::string> options;
+    options.emplace(UdbRecordingLogicalOperator::ConfigParameters::TRACE_NAME, context->udbTraceName->getText());
+    options.emplace(UdbRecordingLogicalOperator::ConfigParameters::TRACE_SIZE, toUpperCase(context->udbTraceSize->getText()));
 
-    /// if no trace name is provided UDB auto generates one
-    if (context->udbTraceName != nullptr)
-    {
-        helpers.top().udbOptions.traceName = context->udbTraceName->getText();
-    }
-    /// if no trace size is provided UDB falls back to a default size
-    if (context->udbTraceSize != nullptr)
-    {
-        helpers.top().udbOptions.traceSize = toUpperCase(context->udbTraceSize->getText());
-    }
+    helpers.top().udbOptions = std::move(options);
 }
 }

@@ -17,9 +17,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <Configurations/Descriptor.hpp>
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
@@ -30,28 +32,19 @@
 namespace NES
 {
 
-/// Configuration for UDB recording; doubles as the operator's reflected payload.
-/// Adding a field here also requires forwarding it in LowerToPhysicalUdbRecording.
-struct UdbRecordingOptions
-{
-    std::optional<std::string> traceName;
-    std::optional<std::string> traceSize;
-
-    bool operator==(const UdbRecordingOptions& rhs) const = default;
-};
-
+/// Logical operator that records the execution of its pipeline with udb, passing rows through unchanged.
 class UdbRecordingLogicalOperator : public ManagedByOperator
 {
 public:
     UdbRecordingLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
 
-    explicit UdbRecordingLogicalOperator(WeakLogicalOperator self, UdbRecordingOptions options)
-        : ManagedByOperator(std::move(self)), options(std::move(options))
+    explicit UdbRecordingLogicalOperator(WeakLogicalOperator self, DescriptorConfig::Config validatedConfig)
+        : ManagedByOperator(std::move(self)), config(std::move(validatedConfig))
     {
     }
 
-    explicit UdbRecordingLogicalOperator(UdbRecordingOptions options)
-        : ManagedByOperator(WeakLogicalOperator{}), options(std::move(options))
+    explicit UdbRecordingLogicalOperator(DescriptorConfig::Config validatedConfig)
+        : ManagedByOperator(WeakLogicalOperator{}), config(std::move(validatedConfig))
     {
     }
 
@@ -68,13 +61,35 @@ public:
     [[nodiscard]] Schema getOutputSchema() const;
     [[nodiscard]] UdbRecordingLogicalOperator withInferredSchema(const std::vector<Schema>&) const;
 
-    [[nodiscard]] const UdbRecordingOptions& getOptions() const { return options; }
+    [[nodiscard]] const DescriptorConfig::Config& getConfig() const { return config; }
+
+    [[nodiscard]] UdbRecordingLogicalOperator withConfig(DescriptorConfig::Config validatedConfig) const;
+
+    struct ConfigParameters
+    {
+        static inline const DescriptorConfig::ConfigParameter<std::string> TRACE_NAME{
+            "trace_name",
+            std::nullopt,
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(TRACE_NAME, cfg); }};
+
+        /// History bound, as SIZE[KB|MB|GB].
+        static inline const DescriptorConfig::ConfigParameter<std::string> TRACE_SIZE{
+            "trace_size",
+            std::nullopt,
+            [](const std::unordered_map<std::string, std::string>& cfg) { return DescriptorConfig::tryGet(TRACE_SIZE, cfg); }};
+
+        static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
+            = DescriptorConfig::createConfigParameterContainerMap(TRACE_NAME, TRACE_SIZE);
+    };
+
+    static DescriptorConfig::Config validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs);
 
 private:
     static constexpr std::string_view NAME = "UdbRecording";
     std::vector<LogicalOperator> children;
     TraitSet traitSet;
-    UdbRecordingOptions options;
+
+    DescriptorConfig::Config config;
 };
 
 template <>
@@ -91,4 +106,12 @@ struct Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>
 
 static_assert(LogicalOperatorConcept<UdbRecordingLogicalOperator>);
 
+}
+
+namespace NES::detail
+{
+struct ReflectedUdbRecordingLogicalOperator
+{
+    DescriptorConfig::Config config;
+};
 }

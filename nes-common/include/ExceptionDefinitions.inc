@@ -86,6 +86,7 @@ EXCEPTION(TuplesTooLargeForPipelineBufferSize, 3005, "tuples too large for pipel
 EXCEPTION(InferenceRuntimeFailure, 3006, "inference runtime failure")
 EXCEPTION(ArithmeticalError, 3013, "arithmetical error")
 EXCEPTION(WindowingError, 3014, "windowing error")
+EXCEPTION(UdbRecordingFailure, 3015, "udb recording failure")
 
 /// 4XXX Errors interpreting data stream, sources and sinks
 EXCEPTION(CannotFormatSourceData, 4000, "cannot format source data")
@@ -110,7 +111,6 @@ EXCEPTION(NotImplemented, 9003, "not implemented")
 
 /// Special errors
 EXCEPTION(UnknownException, 9999, "unknown exception")
-EXCEPTION(UdbRecordingFailure, 8888, "udb recording failure") /// random code for now
 
 /// Test Exception is thrown in testing related code, to differentiate between system errors and errors during test setup/cleanup
 EXCEPTION(TestException, 10000, "exception in test code")

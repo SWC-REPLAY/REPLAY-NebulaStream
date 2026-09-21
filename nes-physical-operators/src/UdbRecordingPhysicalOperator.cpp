@@ -28,7 +28,7 @@
 namespace NES
 {
 
-UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(Udb::RecordingConfig config) : config(std::move(config))
+UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(RecordingConfig config) : config(std::move(config))
 {
 }
 
