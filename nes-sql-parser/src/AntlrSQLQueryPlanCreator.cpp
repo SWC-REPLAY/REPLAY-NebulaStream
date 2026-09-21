@@ -900,9 +900,10 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
         queryPlan = LogicalPlanBuilder::addReplayStore(*storeName, queryPlan);
     }
     /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
-    if (helpers.top().hasUdbClause)
+    if (const auto& udbOptions = helpers.top().udbOptions)
     {
-        queryPlan = LogicalPlanBuilder::addUdbRecording(std::move(helpers.top().udbOptions), queryPlan);
+        const auto cfg = UdbRecordingLogicalOperator::validateAndFormatConfig(*udbOptions);
+        queryPlan = LogicalPlanBuilder::addUdbRecording(cfg, queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -1564,7 +1565,9 @@ void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelC
 
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
 {
-    helpers.top().hasUdbClause = true;
+    std::unordered_map<std::string, std::string> options;
+    options.emplace(UdbRecordingLogicalOperator::ConfigParameters::TRACE_NAME, context->udbTraceName->getText());
+    options.emplace(UdbRecordingLogicalOperator::ConfigParameters::TRACE_SIZE, toUpperCase(context->udbTraceSize->getText()));
 
     /// if no trace name is provided UDB auto generates one
     if (context->udbTraceName != nullptr)

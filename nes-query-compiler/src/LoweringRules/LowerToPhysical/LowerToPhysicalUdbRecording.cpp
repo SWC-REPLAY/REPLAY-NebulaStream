@@ -17,6 +17,7 @@
 #include <memory>
 #include <vector>
 
+#include <Configurations/Descriptor.hpp>
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/UdbRecordingLogicalOperator.hpp>

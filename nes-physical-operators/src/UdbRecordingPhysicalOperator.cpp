@@ -35,7 +35,7 @@
 namespace NES
 {
 
-UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(Udb::RecordingConfig config) : config(std::move(config))
+UdbRecordingPhysicalOperator::UdbRecordingPhysicalOperator(RecordingConfig config) : config(std::move(config))
 {
 
 /// Spawns udb attached to the current NES PID. udb detaches itself after attaching so no reaping needed.

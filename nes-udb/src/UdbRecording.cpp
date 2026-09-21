@@ -28,8 +28,6 @@
 #include <thread>
 #include <vector>
 #include <fcntl.h>
-#include <stdlib.h>
-#include <signal.h>
 #include <unistd.h>
 #include <linux/prctl.h>
 #include <sys/prctl.h>
@@ -40,7 +38,7 @@
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 
-namespace NES::Udb
+namespace NES
 {
 
 namespace
@@ -64,7 +62,14 @@ pid_t currentTracerPid()
         constexpr std::string_view prefix = "TracerPid:";
         if (line.starts_with(prefix))
         {
-            return static_cast<pid_t>(std::strtol(line.c_str() + prefix.size(), nullptr, 10));
+            errno = 0;
+            const std::string numberPart = line.substr(prefix.size());
+            const auto tracerPid = std::strtol(numberPart.c_str(), nullptr, 10);
+            if (errno == 0)
+            {
+                return static_cast<pid_t>(tracerPid);
+            }
+            return 0;
         }
     }
     return 0;
@@ -120,18 +125,18 @@ pid_t spawnLiveRecorder(const RecordingConfig& config)
 
     /// Build every string before fork() - malloc is not async-signal-safe in the child.
     const std::string pidStr = std::to_string(static_cast<int>(::getpid()));
-    /// Without a name, point live-record at the store dir and let it derive one from the program and pid.
-    const char* const recordingFlag = config.traceName.has_value() ? "--recording-file" : "--recording-dir";
-    const std::string recordingArg = config.traceName.has_value() ? (storeDir / (*config.traceName + ".undo")).string() : storeDir.string();
+    const std::string recordingPath = (storeDir / (config.traceName + ".undo")).string();
 
     /// Same for the argv itself.
-    std::vector<const char*> execArgs{udbBin.c_str(), "--pid", pidStr.c_str(), recordingFlag, recordingArg.c_str()};
-    if (config.traceSize.has_value())
-    {
-        execArgs.push_back("--max-event-log-size");
-        execArgs.push_back(config.traceSize->c_str());
-    }
-    execArgs.push_back(nullptr);
+    const std::vector<const char*> execArgs{
+        udbBin.c_str(),
+        "--pid",
+        pidStr.c_str(),
+        "--recording-file",
+        recordingPath.c_str(),
+        "--max-event-log-size",
+        config.traceSize.c_str(),
+        nullptr};
 
     NES_DEBUG("Spawning live-record (binary={}, pid={})", udbBin, pidStr);
 
@@ -206,7 +211,7 @@ void waitUntilAttached(const pid_t udbPid)
     while (currentTracerPid() == 0)
     {
         int status = 0;
-        if (::waitpid(udbPid, &status, WNOHANG) == udbPid)
+        if (::waitpid(udbPid, &status, WNOHANG) == udbPid) /// NOLINT(misc-include-cleaner) - WNOHANG is provided by <sys/wait.h> above
         {
             throw UdbRecordingFailure("live-record process {} exited before attaching (status={})", udbPid, status);
         }
@@ -214,7 +219,7 @@ void waitUntilAttached(const pid_t udbPid)
         {
             /// A process can only have one tracer, so leaving a half-attached live-record behind
             /// would block every later recording for the lifetime of this process.
-            ::kill(udbPid, SIGKILL);
+            ::kill(udbPid, SIGKILL); /// NOLINT(misc-include-cleaner) - <signal.h> would duplicate <csignal> above
             ::waitpid(udbPid, nullptr, 0);
             throw UdbRecordingFailure("timed out waiting for live-record process {} to attach", udbPid);
         }
@@ -231,10 +236,11 @@ void waitUntilSaved(const pid_t udbPid) noexcept
     int status = 0;
     for (;;)
     {
-        const pid_t reaped = ::waitpid(udbPid, &status, WNOHANG);
+        const pid_t reaped
+            = ::waitpid(udbPid, &status, WNOHANG); /// NOLINT(misc-include-cleaner) - WNOHANG is provided by <sys/wait.h> above
         if (reaped == udbPid)
         {
-            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) /// NOLINT(misc-include-cleaner) - provided by <sys/wait.h> above
             {
                 NES_ERROR("live-record process {} did not save the recording cleanly (status={})", udbPid, status);
             }
@@ -248,7 +254,7 @@ void waitUntilSaved(const pid_t udbPid) noexcept
         if (std::chrono::steady_clock::now() >= deadline)
         {
             NES_ERROR("Timed out waiting for live-record process {} to save the recording, killing it", udbPid);
-            ::kill(udbPid, SIGKILL);
+            ::kill(udbPid, SIGKILL); /// NOLINT(misc-include-cleaner) - <signal.h> would duplicate <csignal> above
             ::waitpid(udbPid, nullptr, 0);
             return;
         }
@@ -269,10 +275,10 @@ Recording::Recording(const RecordingConfig& config)
 
 Recording::~Recording()
 {
-    if (::kill(udbPid, SIGUSR1) != 0)
+    if (::kill(udbPid, SIGUSR1) != 0) /// NOLINT(misc-include-cleaner) - <signal.h> would duplicate <csignal> above
     {
         NES_ERROR("Failed to signal live-record process {} to save the recording: {}", udbPid, getErrorMessageFromERRNO());
-        ::waitpid(udbPid, nullptr, WNOHANG);
+        ::waitpid(udbPid, nullptr, WNOHANG); /// NOLINT(misc-include-cleaner) - WNOHANG is provided by <sys/wait.h> above
         return;
     }
     waitUntilSaved(udbPid);
