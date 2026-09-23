@@ -25,6 +25,7 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <ErrorHandling.hpp>
+#include <StoreReadCursor.hpp>
 #include <TimeRange.hpp>
 #include <nameof.hpp>
 
@@ -49,6 +50,7 @@ concept StoreConcept = requires(
     uint32_t recordSize,
     TupleBuffer& bufferRef,
     const Schema& schema,
+    StoreReadCursor& cursorRef,
     Store& self) {
     { store.open() };
     { store.close(self) };
@@ -57,8 +59,11 @@ concept StoreConcept = requires(
     /// Write a single record to the store
     { store.writeRecord(recordData, recordSize, Timestamp(Timestamp::INITIAL_VALUE), self) } -> std::same_as<void>;
 
-    /// Read data into a TupleBuffer within the given time range, return number of rows written
-    { store.read(bufferRef, schema, TimeRange{}) } -> std::convertible_to<uint64_t>;
+    /// Read data into a TupleBuffer within the given time range, return number of rows written.
+    /// Fills the caller's buffer and stops when it is full, so a larger result takes several calls;
+    /// `cursor` carries the resume point between them and `depth` is this tier's position in the
+    /// chain, which is how it finds its own frame.
+    { store.read(bufferRef, schema, TimeRange{}, cursorRef, size_t{0}) } -> std::convertible_to<uint64_t>;
 
     /// Check if there is more data to read
     { constStore.hasMore() } -> std::convertible_to<bool>;
@@ -85,7 +90,8 @@ struct ErasedStore
     virtual void close(Store& self) = 0;
     virtual void flush(Store& self) = 0;
     virtual void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self) = 0;
-    [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) = 0;
+    [[nodiscard]] virtual uint64_t
+    read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range, StoreReadCursor& cursor, size_t depth) = 0;
     [[nodiscard]] virtual bool hasMore() const = 0;
     [[nodiscard]] virtual Schema getSchema() const = 0;
     [[nodiscard]] virtual uint64_t size() const = 0;
@@ -115,9 +121,10 @@ struct StoreModel final : ErasedStore
         impl.writeRecord(recordData, recordSize, ts, self);
     }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range) override
+    [[nodiscard]] uint64_t
+    read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range, StoreReadCursor& cursor, size_t depth) override
     {
-        return impl.read(buffer, schema, range);
+        return impl.read(buffer, schema, range, cursor, depth);
     }
 
     [[nodiscard]] bool hasMore() const override { return impl.hasMore(); }
@@ -217,9 +224,30 @@ struct TypedStore
         self->writeRecord(recordData, recordSize, ts, selfStore);
     }
 
+    /// Read the next bufferful of a tier at `depth` in the chain. Used by a tier to delegate to the
+    /// one below it, which is why the depth is explicit rather than assumed to be zero.
+    [[nodiscard]] uint64_t
+    read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
+    {
+        return self->read(buffer, schema, range, cursor, depth);
+    }
+
+    /// Read the next bufferful from the head of the chain, continuing where `cursor` left off.
+    /// Returns 0 once the chain has nothing further for this range, which is the caller's signal
+    /// to stop.
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range, StoreReadCursor& cursor)
+    {
+        return self->read(buffer, schema, range, cursor, 0);
+    }
+
+    /// Read the FIRST bufferful and discard the resume point.
+    ///
+    /// Equivalent to the call above with a fresh cursor, which is what a single read has always
+    /// done. Calling this in a loop repeats the same rows forever -- hold a cursor instead.
     [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range)
     {
-        return self->read(buffer, schema, range);
+        StoreReadCursor cursor;
+        return self->read(buffer, schema, range, cursor, 0);
     }
 
     [[nodiscard]] bool hasMore() const { return self->hasMore(); }

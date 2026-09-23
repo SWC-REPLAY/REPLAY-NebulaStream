@@ -31,6 +31,7 @@
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Pointers.hpp>
 #include <Store.hpp>
+#include <StoreReadCursor.hpp>
 #include <TimeRange.hpp>
 
 namespace NES
@@ -72,7 +73,11 @@ private:
     std::unique_ptr<ReplayStoreReader> reader;
     Schema schema;
     TimeRange timeRange;
-    bool readComplete{false};
+
+    /// Where the last fillTupleBuffer got to. A store read fills the caller's buffer and stops when
+    /// it is full, so anything larger than one buffer takes several calls; this is what makes the
+    /// later ones continue instead of returning the first bufferful again.
+    StoreReadCursor cursor;
 };
 
 }

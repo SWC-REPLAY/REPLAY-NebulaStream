@@ -143,7 +143,6 @@ void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Time
 {
     PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
 
-    NES_DEBUG("FileStore::writeRecord: recordSize={}, ts={}, file={}", recordSize, ts, filePath);
 
     /// Accumulated into the segment being filled, exactly as MemoryStore accumulates a record
     /// into the buffer being filled. A record does NOT become a segment of its own -- the
@@ -264,12 +263,27 @@ std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string&
     return std::nullopt;
 }
 
-/// Filter rows in a buffer in-place, keeping only rows whose timestamp field falls within the range.
-/// Returns the number of rows remaining.
-uint64_t filterBufferRows(const std::span<char> data, uint64_t numRows, uint32_t rowWidth, uint32_t tsFieldOffset, const TimeRange& range)
+/// How far a filtering pass got, in both senses. The two differ whenever the range drops rows, and
+/// a resumable read needs them apart: `kept` says how much of the destination was used, `scanned`
+/// says which row nobody has looked at yet.
+struct FilterProgress
 {
-    uint64_t kept = 0;
-    for (uint64_t i = 0; i < numRows; ++i)
+    uint64_t kept{0};
+    uint64_t scanned{0};
+};
+
+/// Filter rows in a buffer in-place, keeping only rows whose timestamp field falls within the range.
+/// Stops once `maxKept` rows have been kept, so the caller can fill a destination exactly.
+FilterProgress filterBufferRows(
+    const std::span<char> data,
+    const uint64_t numRows,
+    const uint32_t rowWidth,
+    const uint32_t tsFieldOffset,
+    const TimeRange& range,
+    const uint64_t maxKept)
+{
+    FilterProgress progress;
+    for (uint64_t i = 0; i < numRows && progress.kept < maxKept; ++i)
     {
         const auto row = data.subspan(i * rowWidth, rowWidth);
         uint64_t tsValue = 0;
@@ -278,27 +292,31 @@ uint64_t filterBufferRows(const std::span<char> data, uint64_t numRows, uint32_t
         std::memcpy(&tsValue, tsBytes.data(), tsBytes.size());
         if (range.contains(Timestamp(tsValue)))
         {
-            if (kept != i)
+            if (progress.kept != i)
             {
-                std::memmove(data.subspan(kept * rowWidth, rowWidth).data(), row.data(), rowWidth);
+                std::memmove(data.subspan(progress.kept * rowWidth, rowWidth).data(), row.data(), rowWidth);
             }
-            ++kept;
+            ++progress.kept;
         }
+        progress.scanned = i + 1;
     }
-    return kept;
+    return progress;
 }
 
 }
 
-uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
+uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
 {
-    if (nextLevel)
+    PRECONDITION(depth + 1 < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
+
+    if (nextLevel && !cursor.frames.at(depth + 1).exhausted)
     {
         NES_DEBUG("Checking if next level has data to be read");
-        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range); nextLevelRead != 0)
+        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range, cursor, depth + 1); nextLevelRead != 0)
         {
             return nextLevelRead;
         }
+        cursor.frames.at(depth + 1).exhausted = true;
     }
 
     /// Skip entire file if its timestamp range falls outside the query range
@@ -329,8 +347,10 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     /// The segment still being filled is included as a division of its own. It has no descriptor
     /// in the header yet, but its rows are already on disk and a read must see them.
     std::vector<SegmentDescriptor> divisions;
+    auto& frame = cursor.frames.at(depth);
     {
         const std::shared_lock lock(mutex);
+        bindCursorFrame(frame, readGeneration, typeName());
         divisions = segments;
         if (activeSegment.byteLength > 0)
         {
@@ -340,18 +360,26 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
 
     auto destSpan = buffer.getAvailableMemoryArea<char>();
     const uint64_t capacity = destSpan.size() / tupleSize;
+    /// A destination that cannot hold one row would return zero forever, and a zero is read as
+    /// end of stream -- so the whole replay would come back empty with no error at all.
+    PRECONDITION(capacity > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), tupleSize);
     uint64_t destTuples = 0;
 
     /// Three decisions per division, exactly as MemoryStore makes them per buffer: skip it, take
     /// all of it, or inspect its rows. Deciding per division is what makes the skip real -- a
     /// span from the first match to the last would read everything in between, and segments are
     /// held in write order, so a late arrival puts a non-matching one between two matches.
-    for (const auto& division : divisions)
+    size_t unit = frame.unitIndex;
+    uint64_t rowOffset = frame.rowOffset;
+
+    for (; unit < divisions.size(); ++unit, rowOffset = 0)
     {
         if (destTuples >= capacity)
         {
             break;
         }
+
+        const auto& division = divisions[unit];
 
         /// 1. Its range cannot meet the query: never touched.
         if (!range.isUnbounded() && !range.overlaps(Timestamp(division.minTs), Timestamp(division.maxTs)))
@@ -360,31 +388,63 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         }
 
         const uint64_t rowsInDivision = division.byteLength / tupleSize;
-        const uint64_t rowsToRead = std::min(rowsInDivision, capacity - destTuples);
-        if (rowsToRead == 0)
+        if (rowOffset >= rowsInDivision)
         {
             continue;
         }
 
-        char* dest = destSpan.data() + (destTuples * tupleSize);
-        const ssize_t bytesRead
-            = writer.readAt(dest, rowsToRead * tupleSize, dataStartOffset + division.byteOffset);
-        if (bytesRead <= 0)
-        {
-            continue;
-        }
-        const auto rowsRead = static_cast<uint64_t>(bytesRead) / tupleSize;
+        const bool whollyInRange
+            = range.isUnbounded() || (division.minTs >= range.start.getRawValue() && division.maxTs < range.end.getRawValue());
 
-        /// 2. Wholly inside the query: every row qualifies, so none of them is examined.
-        if (range.isUnbounded() || (division.minTs >= range.start.getRawValue() && division.maxTs < range.end.getRawValue()))
+        /// Read in chunks of at most the remaining destination capacity. One chunk suffices when
+        /// every row qualifies, because then rows read and rows kept are the same number. Filtering
+        /// breaks that equality -- a chunk may yield almost nothing -- so that case keeps pulling
+        /// chunks until the destination is full or the division runs out, instead of returning a
+        /// nearly empty buffer and a resume point.
+        while (rowOffset < rowsInDivision && destTuples < capacity)
         {
-            destTuples += rowsRead;
-            continue;
+            const uint64_t chunkRows = std::min(rowsInDivision - rowOffset, capacity - destTuples);
+            char* dest = destSpan.data() + (destTuples * tupleSize);
+            const ssize_t bytesRead
+                = writer.readAt(dest, chunkRows * tupleSize, dataStartOffset + division.byteOffset + (rowOffset * tupleSize));
+            if (bytesRead <= 0)
+            {
+                break;
+            }
+            const auto rowsRead = static_cast<uint64_t>(bytesRead) / tupleSize;
+            if (rowsRead == 0)
+            {
+                break;
+            }
+
+            /// 2. Wholly inside the query: every row qualifies, so none of them is examined.
+            if (whollyInRange)
+            {
+                destTuples += rowsRead;
+                rowOffset += rowsRead;
+                continue;
+            }
+
+            /// 3. Straddling a bound: the only case that reads timestamps. Filtering compacts the
+            /// survivors in place, so the next chunk continues straight after them.
+            const auto progress = filterBufferRows(
+                std::span<char>(dest, rowsRead * tupleSize), rowsRead, tupleSize, *tsOffset, range, capacity - destTuples);
+            destTuples += progress.kept;
+            /// Rows LOOKED AT, not rows kept: a row this pass rejected has been decided.
+            rowOffset += progress.scanned;
         }
 
-        /// 3. Straddling a bound: the only case that reads timestamps. Filtering compacts the
-        /// survivors in place, so the next division continues straight after them.
-        destTuples += filterBufferRows(std::span<char>(dest, rowsRead * tupleSize), rowsRead, tupleSize, *tsOffset, range);
+        if (rowOffset < rowsInDivision)
+        {
+            break; /// destination filled part-way through this division; resume here
+        }
+    }
+
+    frame.unitIndex = unit;
+    frame.rowOffset = rowOffset;
+    if (unit >= divisions.size())
+    {
+        frame.exhausted = true;
     }
 
     NES_DEBUG(
@@ -453,7 +513,9 @@ std::vector<FileStore::DrainedSegment> FileStore::drainSegments()
     }
 
     /// Let go of the data: cut the file back past the header and the (now stale) table, and
-    /// reset both the table and the file-wide range.
+    /// reset both the table and the file-wide range. Every index into `segments` stops meaning
+    /// anything, so a cursor holding one has to be told rather than left to read the wrong bytes.
+    ++readGeneration;
     writer.truncateTo(dataStartOffset);
     const uint32_t sealedCount = 0;
     writer.writeAt(&sealedCount, sizeof(sealedCount), sealedCountOffset(config.schemaText.size()));

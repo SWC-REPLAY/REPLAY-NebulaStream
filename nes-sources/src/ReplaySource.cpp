@@ -107,16 +107,17 @@ void ReplaySource::close()
 Source::FillTupleBufferResult ReplaySource::fillTupleBuffer(TupleBuffer& tupleBuffer, const std::stop_token&)
 {
     PRECONDITION(store.has_value(), "Replay source requires underlying store type!");
-    if (readComplete)
-    {
-        return FillTupleBufferResult::eos();
-    }
-    const uint64_t tuplesWritten = store->read(tupleBuffer, schema, timeRange);
-    readComplete = true;
+
+    /// One bufferful per call. SourceThread calls this again for as long as it is not told the
+    /// stream ended, so the store's own capacity is what decides how many buffers a replay becomes;
+    /// `cursor` is what stops each call from repeating the previous one.
+    const uint64_t tuplesWritten = store->read(tupleBuffer, schema, timeRange, cursor);
     if (tuplesWritten == 0)
     {
         return FillTupleBufferResult::eos();
     }
+    /// A ROW COUNT despite the name: this source is formatted Native, and SourceThread feeds this
+    /// value straight into setNumberOfTuples (see SourceThread.cpp, dataSourceRoutine).
     return FillTupleBufferResult::withBytes(tuplesWritten);
 }
 

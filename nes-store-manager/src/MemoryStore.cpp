@@ -162,6 +162,8 @@ void MemoryStore::writeRecord(const uint8_t* recordData, const uint32_t recordSi
             {
                 currentSize -= buffers.front().buffer.getBufferSize();
                 buffers.pop_front();
+                /// Every index into `buffers` shifts by one, so any cursor holding one is stale.
+                ++readGeneration;
             }
         }
 
@@ -223,30 +225,48 @@ std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string&
 
 }
 
-uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
+uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
 {
-    if (nextLevel)
+    PRECONDITION(depth + 1 < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
+
+    /// The tier below holds the older rows, so it is drained first. A zero from it now means it is
+    /// finished rather than momentarily empty, which is what the exhausted flag records -- without
+    /// it the loop below would never be reached on a second call.
+    if (nextLevel && !cursor.frames.at(depth + 1).exhausted)
     {
         NES_DEBUG("Checking if next level has data to be read")
-        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range); nextLevelRead != 0)
+        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range, cursor, depth + 1); nextLevelRead != 0)
         {
             return nextLevelRead;
         }
+        cursor.frames.at(depth + 1).exhausted = true;
     }
+
     NES_DEBUG("Read from memory store into buffer");
     const std::shared_lock lock(mutex);
+
+    auto& frame = cursor.frames.at(depth);
+    bindCursorFrame(frame, readGeneration, typeName());
 
     const uint32_t rowWidth = readSchema.getSizeOfSchemaInBytes();
     auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
     const uint64_t maxDestTuples = destSpan.size() / rowWidth;
-    uint64_t destTuples = 0;
+    /// A destination that cannot hold one row would return zero forever, and a zero is read as
+    /// end of stream -- so the whole replay would come back empty with no error at all.
+    PRECONDITION(maxDestTuples > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), rowWidth);
 
-    for (const auto& timedBuf : buffers)
+    uint64_t destTuples = 0;
+    size_t unit = frame.unitIndex;
+    uint64_t rowOffset = frame.rowOffset;
+
+    for (; unit < buffers.size(); ++unit, rowOffset = 0)
     {
         if (destTuples >= maxDestTuples)
         {
             break;
         }
+
+        const auto& timedBuf = buffers[unit];
 
         /// Skip entire buffer if its timestamp range falls outside the query range
         if (!range.isUnbounded() && !range.overlaps(timedBuf.minTs, timedBuf.maxTs))
@@ -255,15 +275,24 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
         }
 
         const uint64_t numTuples = timedBuf.buffer.getNumberOfTuples();
+        if (rowOffset >= numTuples)
+        {
+            continue;
+        }
         auto srcSpan = timedBuf.buffer.getAvailableMemoryArea<uint8_t>();
 
-        /// If the entire buffer is within range, copy all its tuples
+        /// If the entire buffer is within range, copy its remaining tuples
         if (range.isUnbounded() || (timedBuf.minTs >= range.start && timedBuf.maxTs < range.end))
         {
-            const uint64_t tuplesToCopy = std::min(numTuples, maxDestTuples - destTuples);
+            const uint64_t tuplesToCopy = std::min(numTuples - rowOffset, maxDestTuples - destTuples);
             const auto dest = destSpan.subspan(destTuples * rowWidth, tuplesToCopy * rowWidth);
-            std::memcpy(dest.data(), srcSpan.data(), dest.size());
+            std::memcpy(dest.data(), srcSpan.subspan(rowOffset * rowWidth, dest.size()).data(), dest.size());
             destTuples += tuplesToCopy;
+            rowOffset += tuplesToCopy;
+            if (rowOffset < numTuples)
+            {
+                break; /// destination filled part-way through this buffer; resume here
+            }
             continue;
         }
 
@@ -271,19 +300,34 @@ uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema, const 
         const auto tsOffset = findFieldOffset(readSchema, range.fieldName);
         PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
 
-        for (uint64_t i = 0; i < numTuples && destTuples < maxDestTuples; ++i)
+        uint64_t row = rowOffset;
+        for (; row < numTuples && destTuples < maxDestTuples; ++row)
         {
-            const auto row = srcSpan.subspan(i * rowWidth, rowWidth);
+            const auto rowSpan = srcSpan.subspan(row * rowWidth, rowWidth);
             uint64_t tsValue = 0;
             /// tsOffset already points past any null indicator.
-            const auto tsBytes = row.subspan(*tsOffset, sizeof(uint64_t));
+            const auto tsBytes = rowSpan.subspan(*tsOffset, sizeof(uint64_t));
             std::memcpy(&tsValue, tsBytes.data(), tsBytes.size());
             if (range.contains(Timestamp(tsValue)))
             {
-                std::memcpy(destSpan.subspan(destTuples * rowWidth, rowWidth).data(), row.data(), rowWidth);
+                std::memcpy(destSpan.subspan(destTuples * rowWidth, rowWidth).data(), rowSpan.data(), rowWidth);
                 ++destTuples;
             }
         }
+        /// Rows LOOKED AT, not rows kept: the ones filtered out here have been decided and must not
+        /// be examined again.
+        rowOffset = row;
+        if (row < numTuples)
+        {
+            break;
+        }
+    }
+
+    frame.unitIndex = unit;
+    frame.rowOffset = rowOffset;
+    if (unit >= buffers.size())
+    {
+        frame.exhausted = true;
     }
 
     if (destTuples > 0)
@@ -329,6 +373,8 @@ bool MemoryStore::isFull() const
 std::vector<TimedBuffer> MemoryStore::drain()
 {
     const std::unique_lock lock(mutex);
+    /// The buffers leave this tier entirely, so every index into them stops meaning anything.
+    ++readGeneration;
     std::vector<TimedBuffer> result;
     result.reserve(buffers.size() + (activeBuffer.has_value() ? 1 : 0));
     for (auto& buf : buffers)

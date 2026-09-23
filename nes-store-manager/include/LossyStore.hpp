@@ -125,7 +125,7 @@ public:
     void flush(Store& self);
 
     void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
+    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;
@@ -220,6 +220,10 @@ private:
     uint64_t dataStartOffset{0};
 
     std::vector<GroupIndexEntry> groups;
+
+    /// Bumped whenever `groups` is emptied, i.e. whenever an index into it stops meaning what it
+    /// did. Appending never invalidates an index, so sealing a group does not bump it.
+    uint64_t readGeneration{0};
 
     /// Rows received through writeRecord but not yet sealed, and their range. Unused when the
     /// store is fed segments by a transformation.

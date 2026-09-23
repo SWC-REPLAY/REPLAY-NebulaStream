@@ -260,18 +260,25 @@ static std::optional<uint32_t> findFieldValueOffset(const Schema& schema, const 
     return std::nullopt;
 }
 
-uint64_t CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
+uint64_t
+CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
 {
+    PRECONDITION(depth + 1 < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
+
     /// Read the lower tier first (older data), like MemoryStore::read.
-    if (nextLevel)
+    if (nextLevel && !cursor.frames.at(depth + 1).exhausted)
     {
-        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range); nextLevelRead != 0)
+        if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range, cursor, depth + 1); nextLevelRead != 0)
         {
             return nextLevelRead;
         }
+        cursor.frames.at(depth + 1).exhausted = true;
     }
 
     const std::shared_lock lock(mutex);
+
+    auto& frame = cursor.frames.at(depth);
+    bindCursorFrame(frame, readGeneration, typeName());
 
     const uint32_t rowWidth = readSchema.getSizeOfSchemaInBytes();
     if (rowWidth == 0)
@@ -281,15 +288,22 @@ uint64_t CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, co
 
     auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
     const uint64_t maxDestTuples = destSpan.size() / rowWidth;
-    uint64_t destTuples = 0;
+    /// A destination that cannot hold one row would return zero forever, and a zero is read as
+    /// end of stream -- so the whole replay would come back empty with no error at all.
+    PRECONDITION(maxDestTuples > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), rowWidth);
 
-    for (const auto& seg : segments)
+    uint64_t destTuples = 0;
+    size_t unit = frame.unitIndex;
+    uint64_t rowOffset = frame.rowOffset;
+
+    for (; unit < segments.size(); ++unit, rowOffset = 0)
     {
         if (destTuples >= maxDestTuples)
         {
             break;
         }
 
+        const auto& seg = segments[unit];
         const Timestamp segMin(seg.header.minTs);
         const Timestamp segMax(seg.header.maxTs);
 
@@ -299,21 +313,35 @@ uint64_t CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, co
             continue;
         }
 
+        const uint64_t numTuples = seg.header.rowCount;
+        if (rowOffset >= numTuples)
+        {
+            continue;
+        }
+
         /// Segment survived pruning — read just its compressed payload off disk.
+        ///
+        /// A segment is compressed as a whole, so resuming inside one costs a full decompression
+        /// again. That is the price of a destination smaller than a segment; sizing the read buffer
+        /// above the segment size avoids it entirely.
         std::vector<uint8_t> compressed(seg.header.compressedBytes);
         const auto payloadOffset = seg.offset + SEGMENT_HEADER_BYTES;
         const ssize_t got = writer.readAt(compressed.data(), seg.header.compressedBytes, payloadOffset);
         PRECONDITION(got == static_cast<ssize_t>(seg.header.compressedBytes), "Short read of compressed segment payload");
 
         const std::vector<uint8_t> raw = codec.decompress(compressed.data(), seg.header.compressedBytes, seg.header.uncompressedBytes);
-        const uint64_t numTuples = seg.header.rowCount;
 
-        /// Whole segment in range -> copy all rows.
+        /// Whole segment in range -> copy the rows not yet taken.
         if (range.isUnbounded() || (segMin >= range.start && segMax < range.end))
         {
-            const uint64_t tuplesToCopy = std::min(numTuples, maxDestTuples - destTuples);
-            std::memcpy(destSpan.data() + (destTuples * rowWidth), raw.data(), tuplesToCopy * rowWidth);
+            const uint64_t tuplesToCopy = std::min(numTuples - rowOffset, maxDestTuples - destTuples);
+            std::memcpy(destSpan.data() + (destTuples * rowWidth), raw.data() + (rowOffset * rowWidth), tuplesToCopy * rowWidth);
             destTuples += tuplesToCopy;
+            rowOffset += tuplesToCopy;
+            if (rowOffset < numTuples)
+            {
+                break; /// destination filled part-way through this segment; resume here
+            }
             continue;
         }
 
@@ -321,9 +349,10 @@ uint64_t CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, co
         const auto tsOffset = findFieldValueOffset(readSchema, range.fieldName);
         PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
 
-        for (uint64_t i = 0; i < numTuples && destTuples < maxDestTuples; ++i)
+        uint64_t row = rowOffset;
+        for (; row < numTuples && destTuples < maxDestTuples; ++row)
         {
-            const uint8_t* rowPtr = raw.data() + (i * rowWidth);
+            const uint8_t* rowPtr = raw.data() + (row * rowWidth);
             uint64_t tsValue = 0;
             std::memcpy(&tsValue, rowPtr + *tsOffset, sizeof(uint64_t));
             if (range.contains(Timestamp(tsValue)))
@@ -332,6 +361,19 @@ uint64_t CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, co
                 ++destTuples;
             }
         }
+        /// Rows LOOKED AT, not rows kept.
+        rowOffset = row;
+        if (row < numTuples)
+        {
+            break;
+        }
+    }
+
+    frame.unitIndex = unit;
+    frame.rowOffset = rowOffset;
+    if (unit >= segments.size())
+    {
+        frame.exhausted = true;
     }
 
     if (destTuples > 0)
@@ -382,6 +424,7 @@ uint64_t CompressedStore::size() const
 void CompressedStore::removeFile()
 {
     const std::unique_lock lock(mutex);
+    ++readGeneration;
     writer.removeFile();
     segments.clear();
     activeBuffer.clear();
@@ -424,7 +467,9 @@ CompressedStore::DrainedData CompressedStore::drain()
         }
     }
 
-    /// Let go of the data: cut the file back to the header, reset all in-memory state.
+    /// Let go of the data: cut the file back to the header, reset all in-memory state. Every index
+    /// into `segments` stops meaning anything, so a cursor holding one has to be told.
+    ++readGeneration;
     segments.clear();
     activeBuffer.clear();
     activeRowCount = 0;

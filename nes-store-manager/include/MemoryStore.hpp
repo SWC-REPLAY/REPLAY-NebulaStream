@@ -68,7 +68,7 @@ public:
     void flush(Store& self);
 
     void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range);
+    uint64_t read(TupleBuffer& buffer, const Schema& schema, const TimeRange& range, StoreReadCursor& cursor, size_t depth);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;
@@ -89,6 +89,12 @@ private:
     Config config;
     std::shared_ptr<AbstractBufferProvider> bufferManager;
     std::deque<TimedBuffer> buffers;
+
+    /// Bumped whenever `buffers` is emptied or loses its front, i.e. whenever an index into it stops
+    /// meaning what it did. A reader's cursor holds the value it started against, so a drain or an
+    /// eviction mid-read is thrown rather than silently skipping or repeating rows.
+    uint64_t readGeneration{0};
+
     uint64_t currentSize{0};
     mutable std::shared_mutex mutex;
     bool opened{false};

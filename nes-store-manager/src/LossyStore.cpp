@@ -452,9 +452,14 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
     }
 }
 
-uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range)
+uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
 {
+    PRECONDITION(depth < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
+
     const std::shared_lock lock(mutex);
+
+    auto& frame = cursor.frames.at(depth);
+    bindCursorFrame(frame, readGeneration, typeName());
 
     const uint32_t readRowWidth = readSchema.getSizeOfSchemaInBytes();
     if (readRowWidth == 0)
@@ -473,18 +478,25 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
 
     auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
     const uint64_t maxDestTuples = destSpan.size() / rowWidth;
+    /// A destination that cannot hold one row would return zero forever, and a zero is read as
+    /// end of stream -- so the whole replay would come back empty with no error at all.
+    PRECONDITION(maxDestTuples > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), rowWidth);
+
     uint64_t destTuples = 0;
+    size_t unit = frame.unitIndex;
+    uint64_t rowOffset = frame.rowOffset;
 
     std::vector<uint8_t> groupBytes;
     std::vector<uint8_t> rowScratch;
 
-    for (const auto& group : groups)
+    for (; unit < groups.size(); ++unit, rowOffset = 0)
     {
         if (destTuples >= maxDestTuples)
         {
             break;
         }
 
+        const auto& group = groups[unit];
         const Timestamp groupMin(group.header.minTs);
         const Timestamp groupMax(group.header.maxTs);
 
@@ -493,6 +505,14 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
             continue;
         }
 
+        if (rowOffset >= group.header.rowCount)
+        {
+            continue;
+        }
+
+        /// A group's columns are decoded as a whole, so resuming inside one decodes it again. That
+        /// is the price of a destination smaller than a group; sizing the read buffer above the
+        /// group size avoids it entirely.
         groupBytes.resize(group.header.groupByteLength);
         const ssize_t got = writer.readAt(groupBytes.data(), groupBytes.size(), group.offset);
         PRECONDITION(
@@ -560,12 +580,17 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
             }
         }
 
-        /// Whole group inside the range (or no range at all): take every row.
+        /// Whole group inside the range (or no range at all): take every row not yet taken.
         if (range.isUnbounded() || (groupMin >= range.start && groupMax < range.end))
         {
-            const uint64_t toCopy = std::min(rowCount, maxDestTuples - destTuples);
-            std::memcpy(destSpan.data() + (destTuples * rowWidth), rowScratch.data(), toCopy * rowWidth);
+            const uint64_t toCopy = std::min(rowCount - rowOffset, maxDestTuples - destTuples);
+            std::memcpy(destSpan.data() + (destTuples * rowWidth), rowScratch.data() + (rowOffset * rowWidth), toCopy * rowWidth);
             destTuples += toCopy;
+            rowOffset += toCopy;
+            if (rowOffset < rowCount)
+            {
+                break; /// destination filled part-way through this group; resume here
+            }
             continue;
         }
 
@@ -573,9 +598,10 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
         const auto tsField = std::ranges::find_if(fields, [&](const auto& f) { return f.name == range.fieldName; });
         PRECONDITION(tsField != fields.end(), "TimeRange field '{}' not found in schema", range.fieldName);
 
-        for (uint64_t r = 0; r < rowCount && destTuples < maxDestTuples; ++r)
+        uint64_t row = rowOffset;
+        for (; row < rowCount && destTuples < maxDestTuples; ++row)
         {
-            const uint8_t* rowPtr = rowScratch.data() + (r * rowWidth);
+            const uint8_t* rowPtr = rowScratch.data() + (row * rowWidth);
             uint64_t tsValue = 0;
             std::memcpy(&tsValue, rowPtr + tsField->valueOffset, sizeof(uint64_t));
             if (range.contains(Timestamp(tsValue)))
@@ -584,6 +610,19 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
                 ++destTuples;
             }
         }
+        /// Rows LOOKED AT, not rows kept.
+        rowOffset = row;
+        if (row < rowCount)
+        {
+            break;
+        }
+    }
+
+    frame.unitIndex = unit;
+    frame.rowOffset = rowOffset;
+    if (unit >= groups.size())
+    {
+        frame.exhausted = true;
     }
 
     if (destTuples > 0)
@@ -624,6 +663,7 @@ uint64_t LossyStore::size() const
 void LossyStore::removeFile()
 {
     const std::unique_lock lock(mutex);
+    ++readGeneration;
     if (writerOpened)
     {
         writer.close();

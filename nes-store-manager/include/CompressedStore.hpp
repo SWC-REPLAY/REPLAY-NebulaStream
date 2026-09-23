@@ -100,7 +100,7 @@ public:
     void flush(Store& self);
 
     void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
+    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;
@@ -180,6 +180,10 @@ private:
 
     /// Lightweight index of sealed segments (headers only — payload lives on disk).
     std::vector<SegmentIndexEntry> segments;
+
+    /// Bumped whenever `segments` is emptied, i.e. whenever an index into it stops meaning what it
+    /// did. Appending never invalidates an index, so sealing does not bump it.
+    uint64_t readGeneration{0};
 
     bool opened{false};
     mutable std::shared_mutex mutex;

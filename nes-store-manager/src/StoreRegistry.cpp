@@ -154,6 +154,15 @@ Store StoreRegistry::getOrCreateStore(
         /// Unset means lossless, which is what every chain gets unless a budget was asked for.
         .accuracyBoundPercent = config.accuracyBoundPercent.value_or(0.0)};
 
+    /// How many descriptor slots a FileStore preallocates, via ceil(totalSize / segmentSize).
+    ///
+    /// Deliberately NOT the history size. That figure already decides the memory buffer and the
+    /// flush threshold, and how many slots a file reserves is a third question with no relation to
+    /// how much history a query asked to keep -- tying them made a '1MB' history reserve 16 slots
+    /// while the default reserved 1024, so two chains differed by 40 KB of zeroed table for reasons
+    /// nobody chose. Held at the store type's own default so the geometry is identical everywhere.
+    const auto segmentTableBudget = FileStore::Config{}.totalSize;
+
     if (hasMemoryStore && hasFileStore && hasCompressedStore)
     {
         auto memoryToFile = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
@@ -173,9 +182,7 @@ Store StoreRegistry::getOrCreateStore(
                 .storeName = storeName,
                 .storeDir = storeDir,
                 .schemaText = schemaText,
-                /// The segment table is preallocated from this, and the flush policy
-                /// drains the file at the same figure -- so the slots always suffice.
-                .totalSize = bufferSize},
+                .totalSize = segmentTableBudget},
             schema,
             std::move(compressedStore),
             *fileToCompressed,
@@ -208,9 +215,7 @@ Store StoreRegistry::getOrCreateStore(
                 .storeName = storeName,
                 .storeDir = storeDir,
                 .schemaText = schemaText,
-                /// The segment table is preallocated from this, and the flush policy
-                /// drains the file at the same figure -- so the slots always suffice.
-                .totalSize = bufferSize},
+                .totalSize = segmentTableBudget},
             schema,
             std::move(lossyStore),
             *fileToLossy,
@@ -230,12 +235,14 @@ Store StoreRegistry::getOrCreateStore(
         auto transformation = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
         PRECONDITION(transformation.has_value(), "No transformation registered for 'MemoryStore' -> 'FileStore'");
 
-        auto fileStore
-            = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
-
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
         const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+
+        auto fileStore = makeStore<FileStore>(
+            FileStore::Config{
+                .storeName = storeName, .storeDir = storeDir, .schemaText = schemaText, .totalSize = segmentTableBudget},
+            schema);
 
         auto headStore = makeStore<MemoryStore>(
             schema,
@@ -262,9 +269,7 @@ Store StoreRegistry::getOrCreateStore(
                 .storeName = storeName,
                 .storeDir = storeDir,
                 .schemaText = schemaText,
-                /// The segment table is preallocated from this, and the flush policy
-                /// drains the file at the same figure -- so the slots always suffice.
-                .totalSize = bufferSize},
+                .totalSize = segmentTableBudget},
             schema,
             std::move(compressedStore),
             *transformation,
@@ -287,9 +292,7 @@ Store StoreRegistry::getOrCreateStore(
                 .storeName = storeName,
                 .storeDir = storeDir,
                 .schemaText = schemaText,
-                /// The segment table is preallocated from this, and the flush policy
-                /// drains the file at the same figure -- so the slots always suffice.
-                .totalSize = bufferSize},
+                .totalSize = segmentTableBudget},
             schema,
             std::move(lossyStore),
             *transformation,
@@ -316,8 +319,10 @@ Store StoreRegistry::getOrCreateStore(
         auto headStore = makeStore<LossyStore>(lossyConfig, schema);
         return stores.emplace(storeName, headStore).first->second;
     }
-    auto headStore
-        = makeStore<FileStore>(FileStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+    auto headStore = makeStore<FileStore>(
+        FileStore::Config{
+            .storeName = storeName, .storeDir = storeDir, .schemaText = schemaText, .totalSize = segmentTableBudget},
+        schema);
     return stores.emplace(storeName, headStore).first->second;
 }
 

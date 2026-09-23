@@ -20,6 +20,7 @@
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -48,12 +49,19 @@ public:
         /// Bytes per segment. Buffers accumulate into the segment being filled; once it reaches
         /// this size the segment seals and its descriptor is written into the header.
         ///
-
-        size_t segmentSize = 64UZ * 1024UZ;
+        /// The segment is also the unit a read skips on, so this is the granularity of time-range
+        /// pruning: a query that touches one minute of a file still reads whole segments.
+        size_t segmentSize = 16UZ * 1024UZ;
 
         /// How much data the file may hold before the flush policy drains it. Fixes how many
-        /// descriptor slots the header preallocates.
-        size_t totalSize = 64UZ * 1024UZ * 1024UZ;
+        /// descriptor slots the header preallocates, at ceil(totalSize / segmentSize) of them.
+        ///
+        /// Preallocated means written out zeroed whether or not a segment ever fills them, so an
+        /// over-large value is dead weight in every file: at 64 MB over 64 KB segments the table
+        /// was 1024 slots and 40 KB, which a file holding 88 KB of rows paid in full for 1,022
+        /// slots it never used. Sized here to one flush cycle's worth, which is what the file can
+        /// actually accumulate before the policy drains it.
+        size_t totalSize = 8UZ * 1024UZ * 1024UZ;
     };
 
     /// One segment handed to the tier below: its bytes, and the range of the rows inside them.
@@ -89,7 +97,7 @@ public:
     /// MemoryToFileTransformation).
     void appendBuffer(const uint8_t* data, size_t len, uint64_t rowCount, Timestamp minTs, Timestamp maxTs);
 
-    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range);
+    uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth);
     [[nodiscard]] bool hasMore() const;
 
     [[nodiscard]] Schema getSchema() const;
@@ -129,6 +137,10 @@ private:
 
     /// Sealed segments,this one exists so reads and drains need no parsing.
     std::vector<SegmentDescriptor> segments;
+
+    /// Bumped whenever `segments` is emptied, i.e. whenever an index into it stops meaning what it
+    /// did. Appending never invalidates an index, so sealing does not bump it.
+    uint64_t readGeneration{0};
     /// The segment being filled. Sealed once it reaches `config.segmentSize`, or at flush.
     SegmentDescriptor activeSegment{};
     uint32_t maxSegments{0};
