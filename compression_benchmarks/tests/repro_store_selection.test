@@ -1,0 +1,39 @@
+# name: repro_store_selection.test
+# description: A FOR EVENT_TIME read binds to the first store registered for a logical source, not
+#              to one that can actually answer it. With two stores recording different projections
+#              of the same source, the read fails against the wrong store's schema.
+# groups: [Replay]
+
+SEQUENTIAL_EXECUTION
+
+CREATE LOGICAL SOURCE stream(id UINT64, value UINT64, ts UINT64);
+CREATE PHYSICAL SOURCE FOR stream TYPE File;
+ATTACH INLINE
+1,10,1000
+2,20,1001
+
+CREATE SINK s1(stream.id UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK s2(stream.value UINT64, stream.ts UINT64) TYPE File;
+CREATE SINK s3(stream.value UINT64, stream.ts UINT64) TYPE File;
+
+# Store A records (id, ts). Registered first.
+SELECT id, ts FROM stream INTO s1 REPLAYABLE WITH HISTORY OF '64MB';
+----
+1,1000
+2,1001
+
+# Store B records (value, ts) from the same logical source. Registered second.
+SELECT value, ts FROM stream INTO s2 REPLAYABLE WITH HISTORY OF '64MB';
+----
+10,1000
+20,1001
+
+# Reads (value, ts). Only store B holds a `value` column, so only store B can answer.
+#
+# Expected: the two rows below, served from store B.
+# Actual:   the read is bound to store A and schema inference fails with
+#           "field VALUE is not part of the schema Schema(STREAM$ID, STREAM$TS)".
+SELECT value, ts FROM stream FOR EVENT_TIME AS OF TIMESTAMP ALL INTO s3;
+----
+10,1000
+20,1001

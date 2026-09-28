@@ -1,0 +1,10 @@
+dataset,column,type,bound_pct,bytes,bytes_per_row,vs_lossless_pct,codec,worst_recorded_error
+debs_wind_turbines,producedPower,FLOAT64,0.0,697848,3.49,0.0,Raw,0
+debs_wind_turbines,producedPower,FLOAT64,0.01,404387,2.02,-42.1,Quantized,9.99979e-05
+debs_wind_turbines,producedPower,FLOAT64,0.1,335378,1.68,-51.9,Quantized,0.000999989
+debs_wind_turbines,producedPower,FLOAT64,0.5,275907,1.38,-60.5,Quantized,0.00499984
+debs_wind_turbines,producedPower,FLOAT64,1.0,252612,1.26,-63.8,Quantized,0.00999998
+debs_wind_turbines,producedPower,FLOAT64,2.0,192392,0.96,-72.4,Quantized,0.02
+debs_wind_turbines,producedPower,FLOAT64,5.0,198882,0.99,-71.5,Quantized,0.0499992
+debs_wind_turbines,producedPower,FLOAT64,10.0,158442,0.79,-77.3,Quantized,0.0999987
+debs_wind_turbines,producedPower,FLOAT64,20.0,142123,0.71,-79.6,Quantized,0.199997

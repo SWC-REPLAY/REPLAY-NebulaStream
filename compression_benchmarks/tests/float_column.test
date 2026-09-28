@@ -1,0 +1,112 @@
+# name: compression_benchmarks/float_column.test
+# description: What the accuracy bound buys, measured on the one column it touches.
+# groups: [StoreBench]
+#
+# Input: 200,001 rows x 28 bytes = 5,600,028 bytes, DEBS wind turbine readings.
+#
+# Only `producedPower` is a float, and only a float can be quantised -- the two INT32 keys and the
+# UINT64 timestamp are encoded losslessly whatever the bound says. So every byte the bound saves
+# comes out of one column, and a whole-store ratio hides that: at no bound the float is stored Raw
+# at 672,816 B, which is 44% of the file and the single largest thing in it.
+#
+# These are WRITE-ONLY queries on purpose. The sink sees the rows on their way in, so the checksum
+# is the input checksum at every bound and says nothing about what was stored -- which is fine,
+# because what is stored is measured from the files afterwards by scripts/float_column.py. Adding
+# read-backs would only pin quantiser output that the analysis already reports properly.
+#
+# The bounds run 0 to 20%. 0 means lossless and is the baseline every other row is measured against.
+
+SEQUENTIAL_EXECUTION
+
+CREATE LOGICAL SOURCE fc_000(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_000 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_001(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_001 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_01(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_01 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_05(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_05 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_1(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_1 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_2(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_2 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_5(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_5 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_10(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_10 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE fc_20(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR fc_20 TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE SINK s000(fc_000.producerId INT32, fc_000.groupId INT32, fc_000.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s001(fc_001.producerId INT32, fc_001.groupId INT32, fc_001.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s01(fc_01.producerId INT32, fc_01.groupId INT32, fc_01.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s05(fc_05.producerId INT32, fc_05.groupId INT32, fc_05.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s1(fc_1.producerId INT32, fc_1.groupId INT32, fc_1.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s2(fc_2.producerId INT32, fc_2.groupId INT32, fc_2.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s5(fc_5.producerId INT32, fc_5.groupId INT32, fc_5.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s10(fc_10.producerId INT32, fc_10.groupId INT32, fc_10.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK s20(fc_20.producerId INT32, fc_20.groupId INT32, fc_20.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+
+
+# ---- 0%: lossless. The float is stored however the encoder likes with no rounding allowed. ------
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_000 INTO s000
+REPLAYABLE WITH HISTORY OF '1MB' SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_001 INTO s001
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 0.01% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_01 INTO s01
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 0.1% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_05 INTO s05
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 0.5% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_1 INTO s1
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 1% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_2 INTO s2
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 2% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_5 INTO s5
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 5% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_10 INTO s10
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 10% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM fc_20 INTO s20
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 20% SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
