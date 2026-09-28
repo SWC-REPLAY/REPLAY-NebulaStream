@@ -142,7 +142,9 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
         throw CannotOpenSink("Failed to read segment header extension");
     }
 
-    /// Only the sealed slots carry anything; the rest are still zeroed.
+    /// The table is sized to what one file can hold before it rolls, so a file can never outgrow
+    /// it: the slot count and the roll point are the same number. Only the sealed slots carry
+    /// anything; the rest are still zeroed.
     PRECONDITION(
         header.sealedCount <= header.maxSegments,
         "header claims {} sealed segments out of {} slots",

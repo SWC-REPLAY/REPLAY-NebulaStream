@@ -38,6 +38,7 @@
 #include <FileStore.hpp>
 #include <ReplayStoreFormat.hpp>
 #include <Store.hpp>
+#include <StoreReadCursor.hpp>
 #include <TimeRange.hpp>
 
 namespace NES
@@ -217,8 +218,316 @@ TEST_F(SegmentedFileStoreTest, DrainSealsThePartialSegment)
     fileStore.removeFile();
 }
 
+/// `totalSize` caps ONE file, not the store. Once a file has no room for the next segment the
+/// store opens another and keeps going, so the cap never costs a write.
+TEST_F(SegmentedFileStoreTest, RollsToANewFileWhenTotalSizeIsReached)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(64, 1000); /// 64 rows x 16 B = 1024 B
+
+    /// Two segments per file: capacity 8 KB over 4 files is 2 KB each, which is two 1 KB segments.
+    FileStore::Config cfg{
+        .storeName = "rolling",
+        .storeDir = "/tmp",
+        .schemaText = "",
+        .segmentSize = rows.size(),
+        .totalSize = 8UZ * rows.size(),
+        .filesAtCapacity = 4};
+
+    Store store = makeStore<FileStore>(cfg, schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    EXPECT_EQ(fileStore.debugFileCount(), 1U) << "one file before anything is written";
+
+    /// Five segments over two-segment files: 2 + 2 + 1.
+    for (uint64_t i = 0; i < 5; ++i)
+    {
+        const auto ts = 1000 + (i * 100);
+        fileStore.appendBuffer(rows.data(), rows.size(), 64, Timestamp(ts), Timestamp(ts + 63));
+    }
+
+    EXPECT_EQ(fileStore.debugSegmentCount(), 5U) << "every segment is still tracked after rolling";
+    EXPECT_EQ(fileStore.debugFileCount(), 3U) << "two segments per file over five segments";
+    EXPECT_EQ(fileStore.getFilePaths().size(), 3U);
+
+    /// Each file really is a separate file on disk, and each holds at most its two segments -- so
+    /// the preallocated table, sized to exactly that, is never outgrown.
+    for (const auto& path : fileStore.getFilePaths())
+    {
+        std::ifstream ifs(path, std::ios::binary);
+        ASSERT_TRUE(ifs.is_open()) << path;
+        const auto [header, dataStart] = parseHeader(ifs);
+        EXPECT_EQ(header.maxSegments, 2U) << path;
+        EXPECT_LE(header.sealedCount, header.maxSegments) << path;
+    }
+
+    fileStore.removeFile();
+}
+
+/// The point of rolling: once the store is over capacity the OLDEST FILE is unlinked whole. No
+/// rewrite, no holes to track -- which is only possible because history is spread over files
+/// rather than accumulated in one. The newest rows always land; the oldest leave to make room.
+TEST_F(SegmentedFileStoreTest, OldestFileIsEvictedOnceOverCapacity)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(64, 0); /// 1024 B, one segment each
+
+    /// Two segments per file, four files at capacity -- so the store holds roughly 8 KB of rows
+    /// and anything older than that is dropped a whole file at a time.
+    FileStore::Config cfg{
+        .storeName = "evicting",
+        .storeDir = "/tmp",
+        .schemaText = "",
+        .segmentSize = rows.size(),
+        .totalSize = 8UZ * rows.size(),
+        .filesAtCapacity = 4};
+
+    Store store = makeStore<FileStore>(cfg, schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    /// Twenty segments into a store that holds about eight: most of it has to go.
+    for (uint64_t i = 0; i < 20; ++i)
+    {
+        const auto batch = makeRows(64, 1000 + (i * 100));
+        fileStore.appendBuffer(batch.data(), batch.size(), 64, Timestamp(1000 + (i * 100)), Timestamp(1063 + (i * 100)));
+    }
+
+    EXPECT_GT(fileStore.debugEvictedFileCount(), 0U) << "nothing was ever dropped, so totalSize is not a limit";
+    EXPECT_LE(fileStore.size(), cfg.totalSize) << "the store is over the capacity it was given";
+
+    /// Every file still listed exists; the evicted ones are gone from disk entirely.
+    const auto paths = fileStore.getFilePaths();
+    EXPECT_EQ(paths.size(), fileStore.debugFileCount());
+    for (const auto& path : paths)
+    {
+        const std::ifstream alive(path, std::ios::binary);
+        EXPECT_TRUE(alive.is_open()) << path << " is listed but not on disk";
+    }
+
+    /// What survives is the NEWEST history, not the oldest. The last segment written starts at
+    /// ts 2900, and the earliest survivor must be well past where the run began.
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+    auto bufferManager = BufferManager::create(rowWidth * 2048, 8);
+    auto buffer = bufferManager->getBufferBlocking();
+    const uint64_t got = store.read(buffer, schema, TimeRange{});
+    ASSERT_GT(got, 0U);
+
+    const auto area = buffer.getAvailableMemoryArea<const uint8_t>();
+    uint64_t firstTs = 0;
+    std::memcpy(&firstTs, area.data(), sizeof(firstTs));
+    EXPECT_GT(firstTs, 1000U) << "the oldest rows survived, so the wrong end was evicted";
+
+    uint64_t lastTs = 0;
+    std::memcpy(&lastTs, area.data() + ((got - 1) * rowWidth), sizeof(lastTs));
+    EXPECT_EQ(lastTs, 2963U) << "the newest row should always be present";
+
+    fileStore.removeFile();
+}
+
+/// Eviction has to shrink the range the store claims, not just the data it holds. read() opens by
+/// testing the query against that claim, so a claim that only ever grows makes the whole-store skip
+/// useless the longer the store runs -- it keeps vouching for timestamps it has deleted.
+TEST_F(SegmentedFileStoreTest, EvictionNarrowsTheClaimedRange)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(64, 0);
+    FileStore::Config cfg{
+        .storeName = "evictrange",
+        .storeDir = "/tmp",
+        .schemaText = "",
+        .segmentSize = rows.size(),
+        .totalSize = 8UZ * rows.size(),
+        .filesAtCapacity = 4};
+
+    Store store = makeStore<FileStore>(cfg, schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    for (uint64_t i = 0; i < 20; ++i)
+    {
+        const auto batch = makeRows(64, 1000 + (i * 100));
+        fileStore.appendBuffer(batch.data(), batch.size(), 64, Timestamp(1000 + (i * 100)), Timestamp(1063 + (i * 100)));
+    }
+    ASSERT_GT(fileStore.debugEvictedFileCount(), 0U) << "nothing was evicted, so there is nothing to check";
+
+    const auto [claimedMin, claimedMax] = fileStore.debugStoreRange();
+    EXPECT_GT(claimedMin.getRawValue(), 1000U) << "the store still claims the timestamp of rows it deleted";
+    EXPECT_EQ(claimedMax.getRawValue(), 1063U + (19 * 100)) << "the newest row must still be claimed";
+
+    /// The claim must not narrow PAST what is still held either -- too narrow makes read() skip
+    /// live rows, which is a wrong answer rather than a missed optimisation.
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+    auto bufferManager = BufferManager::create(rowWidth * 2048, 8);
+    auto buffer = bufferManager->getBufferBlocking();
+    const uint64_t got = store.read(buffer, schema, TimeRange{});
+    ASSERT_GT(got, 0U);
+
+    const auto area = buffer.getAvailableMemoryArea<const uint8_t>();
+    uint64_t oldestHeld = 0;
+    std::memcpy(&oldestHeld, area.data(), sizeof(oldestHeld));
+    EXPECT_LE(claimedMin.getRawValue(), oldestHeld) << "the claim excludes rows the store still holds";
+
+    fileStore.removeFile();
+}
+
+/// A read in progress must survive an eviction. The cursor records a GLOBAL unit position rather
+/// than an index into the units currently held, so dropping the oldest file shifts nothing: the
+/// read continues instead of being told the store renumbered itself.
+TEST_F(SegmentedFileStoreTest, AReadInProgressSurvivesEviction)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(64, 0);
+    FileStore::Config cfg{
+        .storeName = "evictcursor",
+        .storeDir = "/tmp",
+        .schemaText = "",
+        .segmentSize = rows.size(),
+        .totalSize = 8UZ * rows.size(),
+        .filesAtCapacity = 4};
+
+    Store store = makeStore<FileStore>(cfg, schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    for (uint64_t i = 0; i < 6; ++i)
+    {
+        const auto batch = makeRows(64, 1000 + (i * 100));
+        fileStore.appendBuffer(batch.data(), batch.size(), 64, Timestamp(1000 + (i * 100)), Timestamp(1063 + (i * 100)));
+    }
+    ASSERT_EQ(fileStore.debugEvictedFileCount(), 0U) << "nothing should have been evicted yet";
+
+    /// A destination that holds one segment, so the read stops part way and the cursor keeps a
+    /// position to come back to.
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+    auto bufferManager = BufferManager::create(rowWidth * 64, 8);
+    StoreReadCursor cursor;
+
+    auto first = bufferManager->getBufferBlocking();
+    const uint64_t firstRead = store.read(first, schema, TimeRange{}, cursor);
+    ASSERT_EQ(firstRead, 64U) << "one segment's worth, leaving the cursor mid-store";
+
+    /// Now write enough to push the store over capacity, which unlinks the oldest file underneath
+    /// the cursor.
+    for (uint64_t i = 6; i < 20; ++i)
+    {
+        const auto batch = makeRows(64, 1000 + (i * 100));
+        fileStore.appendBuffer(batch.data(), batch.size(), 64, Timestamp(1000 + (i * 100)), Timestamp(1063 + (i * 100)));
+    }
+    ASSERT_GT(fileStore.debugEvictedFileCount(), 0U) << "the point of this test is that it evicted";
+
+    /// Resuming must not throw. Before unit positions were global this raised UnknownOperation,
+    /// because the cursor's index no longer pointed at the unit it was written for.
+    auto second = bufferManager->getBufferBlocking();
+    uint64_t resumed = 0;
+    EXPECT_NO_THROW(resumed = store.read(second, schema, TimeRange{}, cursor));
+    EXPECT_GT(resumed, 0U) << "the read resumed but returned nothing";
+
+    /// And it must not hand back rows it already delivered.
+    const auto area = second.getAvailableMemoryArea<const uint8_t>();
+    uint64_t firstTsOfSecondRead = 0;
+    std::memcpy(&firstTsOfSecondRead, area.data(), sizeof(firstTsOfSecondRead));
+    EXPECT_GE(firstTsOfSecondRead, 1100U) << "the resumed read repeated the first segment";
+
+    fileStore.removeFile();
+}
+
+/// A read walks every rolled file, oldest first. Offsets are relative to the file a segment lives
+/// in, so reading across a roll is where a descriptor applied to the wrong file would show up.
+TEST_F(SegmentedFileStoreTest, ReadsSpanEveryRolledFile)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(64, 0);
+    FileStore::Config cfg{
+        .storeName = "rollread",
+        .storeDir = "/tmp",
+        .schemaText = "",
+        .segmentSize = rows.size(),
+        .totalSize = 64UZ * rows.size(),
+        .filesAtCapacity = 32};
+
+    Store store = makeStore<FileStore>(cfg, schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    /// Five segments of 64 rows, each segment's timestamps a distinct hundred.
+    for (uint64_t i = 0; i < 5; ++i)
+    {
+        const auto batch = makeRows(64, 1000 + (i * 100));
+        fileStore.appendBuffer(batch.data(), batch.size(), 64, Timestamp(1000 + (i * 100)), Timestamp(1063 + (i * 100)));
+    }
+    ASSERT_GT(fileStore.debugFileCount(), 1U) << "the point of this test is that it rolled";
+
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+    auto bufferManager = BufferManager::create(rowWidth * 512, 8);
+    auto buffer = bufferManager->getBufferBlocking();
+
+    const uint64_t got = store.read(buffer, schema, TimeRange{});
+    ASSERT_EQ(got, 320U) << "5 segments x 64 rows, across 3 files";
+
+    /// Rows come back in write order, so the timestamps must run 1000..1063, 1100..1163, and so on.
+    const auto area = buffer.getAvailableMemoryArea<const uint8_t>();
+    for (uint64_t i = 0; i < got; ++i)
+    {
+        uint64_t ts = 0;
+        std::memcpy(&ts, area.data() + (i * rowWidth), sizeof(ts));
+        const uint64_t expected = 1000 + ((i / 64) * 100) + (i % 64);
+        ASSERT_EQ(ts, expected) << "row " << i << " read from the wrong file or the wrong offset";
+    }
+
+    fileStore.removeFile();
+}
+
+/// Draining takes the rolled files with it: their rows have moved to the tier below, so they are
+/// deleted and the store is left with the single file it started with.
+TEST_F(SegmentedFileStoreTest, DrainCollectsEveryRolledFileAndDeletesThem)
+{
+    const Schema schema = makeSchema();
+    const auto rows = makeRows(64, 1000);
+    FileStore::Config cfg{
+        .storeName = "rolldrain",
+        .storeDir = "/tmp",
+        .schemaText = "",
+        .segmentSize = rows.size(),
+        .totalSize = 64UZ * rows.size(),
+        .filesAtCapacity = 32};
+
+    Store store = makeStore<FileStore>(cfg, schema);
+    store.open();
+    auto& fileStore = store.getAs<FileStore>().getMutable();
+
+    for (uint64_t i = 0; i < 5; ++i)
+    {
+        const auto ts = 1000 + (i * 100);
+        fileStore.appendBuffer(rows.data(), rows.size(), 64, Timestamp(ts), Timestamp(ts + 63));
+    }
+    ASSERT_EQ(fileStore.debugFileCount(), 3U);
+    const auto pathsBefore = fileStore.getFilePaths();
+
+    const auto drained = fileStore.drainSegments();
+    ASSERT_EQ(drained.size(), 5U) << "every segment, from every file";
+    for (const auto& segment : drained)
+    {
+        EXPECT_EQ(segment.rowCount, 64U);
+        EXPECT_EQ(segment.bytes.size(), rows.size());
+    }
+
+    EXPECT_EQ(fileStore.debugFileCount(), 1U) << "back to one file";
+    EXPECT_EQ(fileStore.debugSegmentCount(), 0U);
+
+    /// The rolled files are gone from disk; the first survives, cut back to its header.
+    for (size_t i = 1; i < pathsBefore.size(); ++i)
+    {
+        const std::ifstream gone(pathsBefore[i], std::ios::binary);
+        EXPECT_FALSE(gone.is_open()) << pathsBefore[i] << " should have been deleted";
+    }
+
+    fileStore.removeFile();
+}
+
 /// The table is in the file, not just in memory: a reader that only has the file must be able to
-/// recover every segment's range without reading a single row.
+/// recover every segment's range without reading a single row, in one read of the front of it.
 TEST_F(SegmentedFileStoreTest, SegmentTableIsPersistedInTheHeader)
 {
     const Schema schema = makeSchema();
@@ -243,9 +552,13 @@ TEST_F(SegmentedFileStoreTest, SegmentTableIsPersistedInTheHeader)
     EXPECT_EQ(header.segments[1].minTs, 9000U);
     EXPECT_EQ(header.segments[1].maxTs, 9063U);
 
-    /// Offsets are relative to the data region and the second segment follows the first.
+    /// Offsets are relative to the data region and the second segment follows the first, because
+    /// the descriptors live in the table at the front rather than between the payloads.
     EXPECT_EQ(header.segments[0].byteOffset, 0U);
     EXPECT_EQ(header.segments[1].byteOffset, early.size());
+
+    /// The table is sized to the segments one file holds before rolling, so it is never outgrown.
+    EXPECT_GE(header.maxSegments, header.sealedCount);
     EXPECT_EQ(dataStart, dataStartOffsetFor(header.schemaText.size(), header.maxSegments));
 
     fileStore.removeFile();
