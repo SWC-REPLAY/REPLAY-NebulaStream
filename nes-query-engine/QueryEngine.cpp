@@ -960,13 +960,18 @@ void QueryCatalog::start(
 
 void QueryCatalog::stopQuery(QueryId id)
 {
-    const std::unique_ptr<RunningQueryPlan> toBeDeleted;
+    /// Runs after the lock is released: it destroys the query's sources and joins their threads. A source
+    /// can only exit once its emitWork finds room in the task queue, and every worker thread that runs a
+    /// task touching the catalog parks on this mutex. Joining under the lock therefore deadlocks the whole
+    /// pool once enough workers park, e.g. when many queries stop or finish at once.
+    /// TODO #XXX: open an issue for the stopQuery deadlock (backtraces: criu-benchmark smoke-3
+    /// shadow-backtraces.txt) and check other QueryCatalog paths that run cleanup under the mutex.
+    absl::AnyInvocable<void()> cleanup;
     {
         const std::scoped_lock lock(mutex);
         if (auto it = queryStates.find(id); it != queryStates.end())
         {
             auto& state = *it->second;
-            absl::AnyInvocable<void()> cleanup;
             bool didTransition = state.transition(
                 [&cleanup](Starting&& starting) /// NOLINT(cppcoreguidelines-rvalue-reference-param-not-moved)
                 {
@@ -980,15 +985,19 @@ void QueryCatalog::stopQuery(QueryId id)
                     cleanup = std::move(cb);
                     return Stopping{std::move(stoppingQueryPlan)};
                 });
-            if (didTransition)
+            if (!didTransition)
             {
-                cleanup();
+                cleanup = nullptr;
             }
         }
         else
         {
             ENGINE_LOG_WARNING("Attempting to stop query {} failed. Query was not submitted to the engine.", id);
         }
+    }
+    if (cleanup)
+    {
+        cleanup();
     }
 }
 }
