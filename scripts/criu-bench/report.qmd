@@ -11,13 +11,10 @@ execute:
   warning: false
 ---
 
-Every query in `nes-systests/benchmark/` runs concurrently on one single-node worker.
-After a fixed delay, the worker is checkpointed with `criu dump --leave-running`.
-The selected query is stopped on the original and continues on a shadow restored from that checkpoint.
-There, every other query is stopped, and Undo live-record is attached only then.
-Baseline trials run the same 32 queries without a checkpoint or recording.
-
-Render with `python scripts/criu-bench/bench.py report`. Rendering again with the same run ID reuses its results.
+- **Offload:** 32 queries on one worker; `criu dump --leave-running` after a delay; selected query stopped on the original; shadow restored from the dump, recorded by live-record from resume, other 31 stopped there.
+- **Baseline:** same 32 queries, no checkpoint, no recording.
+- **Solo-recorded:** selected query alone, recorded from its start, no checkpoint.
+- Render: `python scripts/criu-bench/bench.py report`; same run ID reuses results.
 
 ```{python}
 #| tags: [parameters]
@@ -76,7 +73,7 @@ analysis.summarize(trials, [
 
 ## Selected query
 
-`{python} bench.OFFLOAD_KEY` end to end, from submission to a valid checksum.
+- `{python} bench.OFFLOAD_KEY`, submission to valid checksum.
 
 ```{python}
 #| label: fig-offload-query
@@ -84,18 +81,89 @@ analysis.plot_offload_query(trials);
 ```
 
 ```{python}
+#| label: selected-values
+#| echo: false
+def median_of(kind, column):
+    rows = trials[trials["kind"].eq(kind) & trials["success"].eq(True)] if "kind" in trials else trials
+    return rows[column].median() if column in rows and not rows.empty else float("nan")
+
+
+baseline_s = median_of("baseline", "offload_query_seconds")
+solo_s = median_of("solo-recorded", "offload_query_seconds")
+offload_s = median_of("offload", "offload_query_seconds")
+```
+
+- Baseline `{python} f"{baseline_s:.0f}"` s, solo-recorded `{python} f"{solo_s:.0f}"` s (recording ~`{python} f"{solo_s / baseline_s:.1f}"`x), offload `{python} f"{offload_s:.0f}"` s.
+- Recorded runs include the trace save (checksum is written after it).
+- Offload >> solo: larger address space to trace and save, plus the other queries' teardown on live-record's single core.
+
+```{python}
 #| label: fig-offload-phases
 analysis.plot_offload_phases(trials);
 ```
 
-## The other queries on the original
+```{python}
+#| label: phase-values
+#| echo: false
+checkpoint_s = median_of("offload", "dump_seconds") + median_of("offload", "restore_seconds")
+attach_s = median_of("offload", "attach_seconds")
+after_attach_s = median_of("offload", "shadow_after_attach_seconds")
+stop_others_s = median_of("offload", "stop_others_seconds")
+```
+
+- Dump + restore: `{python} f"{checkpoint_s:.0f}"` s, cheap.
+- Attach: `{python} f"{attach_s:.0f}"` s, full-clone address space plus concurrent stops.
+- After attach: `{python} f"{after_attach_s:.0f}"` s = recorded execution + others' teardown + trace save.
+- Stopping the others: `{python} f"{stop_others_s:.0f}"` s, overlapping, not drawn.
+
+## Impact on the queries that stay on the original
+
+```{python}
+#| label: cohort-shift
+#| echo: false
+original = queries[queries["role"].eq("original")]
+per_kind = original.pivot_table(index="query", columns="kind", values="seconds", aggfunc="median")
+cohort_shift = (
+    (per_kind["offload"] - per_kind["baseline"]).dropna().median()
+    if {"offload", "baseline"} <= set(per_kind.columns) else float("nan")
+)
+dump_seconds = trials.loc[trials["kind"].eq("offload"), "dump_seconds"].median() if "dump_seconds" in trials else float("nan")
+```
+
+- Per query on the original: submission to checksum, baseline vs offload run.
+- Penalty: median `{python} f"{cohort_shift:.0f}"` s per query, about the `{python} f"{dump_seconds:.0f}"` s dump freeze.
+- Beyond the dump, the offload does not slow the remaining queries.
 
 ```{python}
 #| label: fig-cohort
 analysis.plot_cohort(queries);
 ```
 
-## Cost
+## Memory and disk cost (uncompressed)
+
+```{python}
+#| label: cost-values
+#| echo: false
+gib = 1024**3
+offload_rows = trials[trials["kind"].eq("offload") & trials["success"].eq(True)] if "kind" in trials else trials
+solo_rows = trials[trials["kind"].eq("solo-recorded") & trials["success"].eq(True)] if "kind" in trials else trials
+
+
+def median_gib(rows, column):
+    return rows[column].median() / gib if column in rows and not rows.empty else float("nan")
+
+
+image_gib = median_gib(offload_rows, "image_bytes")
+trace_gib = median_gib(offload_rows, "recording_bytes")
+rss_gib = median_gib(offload_rows, "shadow_peak_rss_bytes")
+solo_trace_gib = median_gib(solo_rows, "recording_bytes")
+solo_rss_gib = median_gib(solo_rows, "shadow_peak_rss_bytes")
+```
+
+- CRIU image `{python} f"{image_gib:.1f}"` GiB: the whole worker, every query's state.
+- Shadow peak RSS `{python} f"{rss_gib:.1f}"` GiB vs `{python} f"{solo_rss_gib:.1f}"` GiB solo: the shadow is a full clone.
+- UDB trace `{python} f"{trace_gib:.1f}"` GiB vs `{python} f"{solo_trace_gib:.1f}"` GiB solo: grows with the address space.
+- Images can be compressed or streamed with [criu-image-streamer](https://github.com/checkpoint-restore/criu-image-streamer).
 
 ```{python}
 #| label: fig-costs

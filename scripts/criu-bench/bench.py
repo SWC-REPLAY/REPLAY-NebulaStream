@@ -3,7 +3,7 @@
 
 Commands:
   check   verify tools and run a rootless CRIU dump/restore smoke test
-  run     baseline and offload trials for one run ID
+  run     baseline, solo-recorded and offload trials for one run ID
   report  render the Quarto notebook (it runs the trials if they are missing, then cleans up)
   clean   delete the heavy artifacts of one run ID
 """
@@ -49,7 +49,6 @@ WORKER_FLAGS = (
     "--worker.number_of_buffers_in_global_buffer_manager=200000 "
     "--worker.default_query_execution.slice_cache.enable_slice_cache=true"
 )
-# Everything a trial writes that is large or only needed while it runs.
 # Bound on waiting for the other queries to report Stopped on the shadow. They stop while live-record
 # serializes the process, so this is generous; the trial continues either way.
 SHADOW_STOP_GRACE_SECONDS = 600
@@ -63,6 +62,7 @@ DEFAULT_STALL_SECONDS = 300
 STALL_CPU_EPSILON_SECONDS = 1.0
 # Pointer to the one CRIU image kept from a failed offload trial (about 45 GB).
 KEPT_FAILED_IMAGE = RESULTS / "kept-failed-image.json"
+# Everything a trial writes that is large or only needed while it runs.
 HEAVY_TRIAL_DIRS = ("images", "runtime", "output", "state", "topologies", "shadow-runtime", "shadow-output", "shadow-state")
 
 
@@ -482,6 +482,65 @@ def baseline_inner(trial_dir: Path, timeout_seconds: int, stall_seconds: int) ->
         stop_launcher(launcher)
 
 
+def solo_recorded_inner(trial_dir: Path, timeout_seconds: int, trace_name: str, stall_seconds: int) -> int:
+    """Reference for the offload: OFFLOAD_KEY alone on a fresh worker, recorded from its start, no CRIU."""
+    run_checked(["ip", "link", "set", "lo", "up"])
+    resolve_live_record()
+    recording = UDB_RECORDINGS / f"{trace_name}.undo"
+    holder = NamespaceHolder.start()
+    launcher: subprocess.Popen[str] | None = None
+    observer: OutputObserver | None = None
+    metrics: dict[str, Any] = {
+        "kind": "solo-recorded", "trial": trial_dir.name, "offload_key": OFFLOAD_KEY,
+        "recording_path": str(recording), "success": False,
+    }
+    try:
+        # Without NES_UDB_RECORD_ON_TRIGGER the recorder attaches during setup, before any source runs.
+        launcher = launch_worker(holder, trial_dir / "runtime", arm_udb_trigger=False)
+        runner(
+            holder, "run", trial_dir, "--existing-worker", "--submit-only", "--host", "127.0.0.1:8080",
+            "--data-address", "127.0.0.1:9090", "--only", OFFLOAD_KEY, "--udb-trace", trace_name, log="submit.log",
+        )
+        submitted_ns = time.monotonic_ns()
+        manifest: list[dict[str, Any]] = read_json(trial_dir / "manifest.json")
+        if len(manifest) != 1 or not manifest[0].get("query_id"):
+            raise RuntimeError(f"Submitting {OFFLOAD_KEY} failed; inspect {trial_dir / 'submit.log'}")
+        observer = OutputObserver.start(manifest, trial_dir / "output")
+        watchdog = StallWatchdog(holder, stall_seconds)
+        peak_rss, cpu_seconds = 0, 0.0
+
+        def recorded_query_done() -> bool:
+            nonlocal peak_rss, cpu_seconds
+            sampled = worker_resources(holder)
+            if sampled is not None:
+                cpu_seconds, peak_rss = max(cpu_seconds, sampled[0]), max(peak_rss, sampled[1])
+            if OFFLOAD_KEY in observer.completed_ns:
+                return True
+            watchdog.check("solo", trace_bytes(recording))
+            return False
+
+        wait_for(recorded_query_done, timeout_seconds, f"recorded {OFFLOAD_KEY}")
+        # nes-udb writes the checksum only after the trace is saved, so this should already hold.
+        wait_for(recording.is_file, 120, f"UDB trace {recording}")
+        metrics.update({
+            "offload_query_seconds": (observer.completed_ns[OFFLOAD_KEY] - submitted_ns) / 1e9,
+            "shadow_cpu_seconds": cpu_seconds,
+            "shadow_peak_rss_bytes": peak_rss,
+            "recording_bytes": recording.stat().st_size,
+            "success": True,
+        })
+        return 0
+    except (OSError, RuntimeError, subprocess.TimeoutExpired, TimeoutError, ValueError, KeyError) as error:
+        metrics["error"] = str(error)
+        return 1
+    finally:
+        if observer is not None:
+            observer.stop()
+        write_json(trial_dir / "metrics.json", metrics)
+        holder.stop()
+        stop_launcher(launcher)
+
+
 def offload_inner(
     trial_dir: Path, delay_seconds: int, timeout_seconds: int, trace_name: str | None, stall_seconds: int,
 ) -> int:
@@ -604,7 +663,6 @@ def offload_inner(
             time.sleep(1)
         else:
             raise TimeoutError("Offload trial did not finish in time")
-        # The checksum can land before live-record has written the trace (it saves on pipeline terminate).
         if recorded:
             # nes-udb writes the checksum only after the trace is saved, so this should already hold.
             wait_for(recording.is_file, 120, f"UDB trace {recording}")
@@ -707,7 +765,7 @@ def run_experiment(
     run_id: str, reps: int = 3, delay_seconds: int = DEFAULT_DELAY_SECONDS, timeout_seconds: int = 7200, record: bool = True,
     stall_seconds: int = DEFAULT_STALL_SECONDS,
 ) -> bool:
-    """Run `reps` baseline and `reps` offload trials. A completed run is kept, not repeated."""
+    """Run `reps` each of baseline, solo-recorded and offload trials. A completed run is kept, not repeated."""
     run_dir = run_dir_of(run_id)
     manifest_path = run_dir / "manifest.json"
     if manifest_path.is_file():
@@ -719,7 +777,8 @@ def run_experiment(
         raise FileExistsError(f"{run_dir} holds trials without a manifest; clean it or pick a new run ID")
     # `report` creates the run dir first as Quarto's output dir, so an empty one is expected.
     run_dir.mkdir(parents=True, exist_ok=True)
-    trials = [f"baseline-{rep}" for rep in range(1, reps + 1)] + [f"offload-{rep}" for rep in range(1, reps + 1)]
+    kinds = ["baseline", "solo", "offload"] if record else ["baseline", "offload"]
+    trials = [f"{kind}-{rep}" for kind in kinds for rep in range(1, reps + 1)]
     manifest: dict[str, Any] = {
         "run_id": run_id, "status": "running", "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "settings": {"reps": reps, "delay_seconds": delay_seconds, "timeout_seconds": timeout_seconds, "offload_key": OFFLOAD_KEY, "record": record,
@@ -735,6 +794,11 @@ def run_experiment(
         if trial.startswith("baseline"):
             ok = in_rootless_namespace(
                 "_baseline", trial_dir, "--timeout", str(timeout_seconds), "--stall-seconds", str(stall_seconds),
+            )
+        elif trial.startswith("solo"):
+            ok = in_rootless_namespace(
+                "_solo", trial_dir, "--timeout", str(timeout_seconds), "--stall-seconds", str(stall_seconds),
+                "--trace-name", trace_name_of(run_id, trial),
             )
         else:
             ok = in_rootless_namespace(
@@ -801,7 +865,7 @@ def main() -> int:
     for name in ("run", "report"):
         command = commands.add_parser(name)
         command.add_argument("--run-id", default=time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
-        command.add_argument("--reps", type=int, default=3, help="baseline and offload trials each (default 3)")
+        command.add_argument("--reps", type=int, default=3, help="trials of each kind: baseline, solo-recorded, offload (default 3)")
         command.add_argument(
             "--delay", type=int, default=DEFAULT_DELAY_SECONDS,
             help=f"seconds between submission and checkpoint (default {DEFAULT_DELAY_SECONDS})",
@@ -818,7 +882,7 @@ def main() -> int:
     clean_command = commands.add_parser("clean")
     clean_command.add_argument("--run-id", required=True)
     clean_command.add_argument("--keep-recordings", action="store_true")
-    for internal in ("_check", "_baseline", "_offload"):
+    for internal in ("_check", "_baseline", "_solo", "_offload"):
         command = commands.add_parser(internal)
         command.add_argument("--trial-dir", type=Path, required=True)
         command.add_argument("--timeout", type=int, default=7200)
@@ -847,6 +911,8 @@ def main() -> int:
             return check_inner(arguments.trial_dir)
         case "_baseline":
             return baseline_inner(arguments.trial_dir, arguments.timeout, arguments.stall_seconds)
+        case "_solo":
+            return solo_recorded_inner(arguments.trial_dir, arguments.timeout, arguments.trace_name, arguments.stall_seconds)
         case "_offload":
             return offload_inner(
                 arguments.trial_dir, arguments.delay, arguments.timeout, arguments.trace_name, arguments.stall_seconds,
