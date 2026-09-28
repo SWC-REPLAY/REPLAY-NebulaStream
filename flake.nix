@@ -734,6 +734,7 @@
 
         # Development tools
         devTools = with pkgs; [
+          criu
           gdb
           llvm.lldb
           python3

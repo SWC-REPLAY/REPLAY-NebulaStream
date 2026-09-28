@@ -1,0 +1,16 @@
+[project]
+name = "criu-benchmark"
+version = "0.1.0"
+description = "Reproducible rootless CRIU measurements for NebulaStream"
+requires-python = ">=3.13"
+dependencies = [
+  "jupyter>=1.1,<2",
+  "matplotlib>=3.10,<4",
+  "pandas>=2.2,<4",
+  "papermill>=2.6,<3",
+  "psutil>=7,<8",
+  "quarto-cli==1.10.18",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9"]

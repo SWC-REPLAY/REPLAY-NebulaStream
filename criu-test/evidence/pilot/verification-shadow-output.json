@@ -1,0 +1,15 @@
+[
+  {
+    "key": "Nexmark_with_varsized:01",
+    "output": "/home/vanhoa/Repos/REPLAY-NebulaStream/criu-benchmark/build/criu-bench/runs/20260927T215406Z-pilot/shadow-output/Nexmark_with_varsized-01.csv",
+    "expected": [
+      183991721,
+      353216217968
+    ],
+    "observed": [
+      183991721,
+      353216217968
+    ],
+    "passed": true
+  }
+]

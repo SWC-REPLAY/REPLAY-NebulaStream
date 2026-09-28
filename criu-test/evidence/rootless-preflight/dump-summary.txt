@@ -1,0 +1,25 @@
+(00.046958) 0x7f68658e8000-0x7f68658e9000 (4K) prot 0x1 flags 0x2 fdflags 0 st 0x41 off 0 reg fp  shmid: 0x13
+(00.046970) 0x7f68658e9000-0x7f6865913000 (168K) prot 0x5 flags 0x2 fdflags 0 st 0x41 off 0x1000 reg fp  shmid: 0x13
+(00.046981) 0x7f6865913000-0x7f686591d000 (40K) prot 0x1 flags 0x2 fdflags 0 st 0x41 off 0x2b000 reg fp  shmid: 0x13
+(00.046992) 0x7f686591d000-0x7f686591f000 (8K) prot 0x1 flags 0x2 fdflags 0 st 0x41 off 0x35000 reg fp  shmid: 0x13
+(00.047004) 0x7f686591f000-0x7f6865921000 (8K) prot 0x3 flags 0x2 fdflags 0 st 0x41 off 0x37000 reg fp  shmid: 0x13
+(00.047015) 0x7ffff807a000-0x7ffff80b2000 (224K) prot 0x3 flags 0x122 fdflags 0 st 0x201 off 0 reg ap  shmid: 0
+(00.047027) 0xffffffffff600000-0xffffffffff601000 (4K) prot 0x4 flags 0x22 fdflags 0 st 0x204 off 0 vsys ap  shmid: 0
+(00.047045) Obtaining task auvx ...
+(00.047371) Dumping path for -3 fd via self 15 [/]
+(00.047477) Dumping path for -3 fd via self 15 [/]
+(00.047511) Dumping task cwd id 0x16 root id 0x17
+(00.047791) Dumping file-locks
+(00.047816)
+(00.047829) Dumping pstree (pid: 4)
+(00.047843) ----------------------------------------
+(00.047859) Process: 4(4)
+(00.047955) ----------------------------------------
+(00.048124) unix: Dumping external sockets
+(00.048140) Writing image inventory (version 1)
+(00.048411) Running post-dump scripts
+(00.048425) net: Unlock network
+(00.048439) Unfreezing tasks into 1
+(00.048450) 	Unseizing 4 into 1
+(00.048493) Writing stats
+(00.048583) Dumping finished successfully

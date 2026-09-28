@@ -1,0 +1,25 @@
+(00.011159) pie: 4: vdso: symbol __vdso_clock_gettime64 at address 0x0
+(00.011172) pie: 4: vdso: image [vdso] 0x7f68658e6000-0x7f68658e8000 [vvar] 0x7f68658e2000-0x7f68658e6000
+(00.011186) pie: 4: vdso: Runtime vdso/vvar matches dumpee, remap inplace
+(00.011226) pie: 4: vdso: Remap rt-vdso 0x33000 -> 0x7f68658e6000
+(00.011253) pie: 4: vdso: Remap rt-vvar 0x2f000 -> 0x7f68658e2000
+(00.011280) pie: 4: vdso: Using gettimeofday() on vdso at 0x7f68658e6bd0
+(00.011382) pie: 4: Restoring scheduler params 0.0.0
+(00.011414) pie: 4: rseq: rseq_abi_pointer = 0x7f6865616ca0 signature = 0x53053053
+(00.011470) pie: 4: 4: Restored
+(00.011589) Running post-restore scripts
+(00.011608) net: Unlock network
+(00.011657) pie: 4: seccomp: mode 0 on tid 4
+(00.011820) 4 was trapped
+(00.011852) 4 was trapped
+(00.011861) 4 (native) is going to execute the syscall 15, required is 15
+(00.011882) 4 was stopped
+(00.011929) 4 was trapped
+(00.011937) 4 (native) is going to execute the syscall 11, required is 11
+(00.011986) 4 was stopped
+(00.011993) Run late stage hook from criu master for external devices
+(00.011997) restore late stage hook for external plugin failed
+(00.012000) Running pre-resume scripts
+(00.012007) Restore finished successfully. Tasks resumed.
+(00.012010) Writing stats
+(00.012094) Running post-resume scripts

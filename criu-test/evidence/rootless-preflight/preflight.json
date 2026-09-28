@@ -1,0 +1,6 @@
+{
+  "passed": true,
+  "stage": "smoke",
+  "criu_check_exit_code": 1,
+  "image_bytes": 571173
+}

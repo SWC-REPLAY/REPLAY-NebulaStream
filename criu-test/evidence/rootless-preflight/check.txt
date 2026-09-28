@@ -1,0 +1,2 @@
+Error (criu/cr-check.c:533): /proc/sys/kernel/sem_next_id is inaccessible: Permission denied
+Warn  (criu/cr-check.c:1659): Does not look good.

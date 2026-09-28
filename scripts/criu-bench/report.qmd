@@ -1,0 +1,111 @@
+---
+title: "Query offload with CRIU and UDB"
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: true
+jupyter: python3
+execute:
+  echo: true
+  warning: false
+---
+
+Every query in `nes-systests/benchmark/` runs concurrently on one single-node worker.
+After a fixed delay, the worker is checkpointed with `criu dump --leave-running`.
+The selected query is stopped on the original and continues on a shadow restored from that checkpoint.
+There, every other query is stopped, and Undo live-record is attached only then.
+Baseline trials run the same 32 queries without a checkpoint or recording.
+
+Render with `python scripts/criu-bench/bench.py report`. Rendering again with the same run ID reuses its results.
+
+```{python}
+#| tags: [parameters]
+run_id = "manual"
+reps = 3
+delay = 15
+keep_artifacts = False
+stall_seconds = 300
+```
+
+```{python}
+#| label: run
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path.cwd()))
+import analysis
+import bench
+
+completed = bench.run_experiment(run_id, reps=reps, delay_seconds=delay, stall_seconds=stall_seconds)
+run_dir = bench.run_dir_of(run_id)
+manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+trials, queries = analysis.export_tables(run_dir)
+print(f"run {run_id}: {manifest['status']}")
+```
+
+## Setup
+
+```{python}
+#| label: setup
+import pandas as pd
+from IPython.display import Markdown
+
+pd.DataFrame(
+    [(key, value) for section in ("settings", "environment") for key, value in manifest[section].items()],
+    columns=["setting", "value"],
+)
+```
+
+## Trials
+
+```{python}
+#| label: trials
+trials[["trial", "kind", "success", *[c for c in ("error",) if c in trials]]]
+```
+
+```{python}
+#| label: summary
+analysis.summarize(trials, [
+    "offload_query_seconds", "cohort_seconds", "dump_seconds", "restore_seconds",
+    "stop_others_seconds", "attach_seconds", "shadow_after_attach_seconds",
+    "image_bytes", "recording_bytes", "shadow_cpu_seconds", "shadow_peak_rss_bytes",
+]).round(3)
+```
+
+## Selected query
+
+`{python} bench.OFFLOAD_KEY` end to end, from submission to a valid checksum.
+
+```{python}
+#| label: fig-offload-query
+analysis.plot_offload_query(trials);
+```
+
+```{python}
+#| label: fig-offload-phases
+analysis.plot_offload_phases(trials);
+```
+
+## The other queries on the original
+
+```{python}
+#| label: fig-cohort
+analysis.plot_cohort(queries);
+```
+
+## Cost
+
+```{python}
+#| label: fig-costs
+analysis.plot_costs(trials);
+```
+
+## Cleanup
+
+```{python}
+#| label: cleanup
+removed = [] if keep_artifacts else bench.clean(run_id)
+Markdown(f"Removed {len(removed)} heavy artifact paths. Kept: metrics, logs, `trials.csv`, `queries.csv`.")
+```

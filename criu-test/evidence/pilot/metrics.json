@@ -1,0 +1,24 @@
+{
+  "kind": "pilot",
+  "trial": "20260927T215406Z-pilot",
+  "delay_seconds": 5,
+  "success": true,
+  "active_at_trigger": 1,
+  "dump_seconds": 1.322246462,
+  "image_bytes": 1150907963,
+  "restore_seconds": 0.938075681,
+  "original_passed": 1,
+  "shadow_passed": 1,
+  "cohort_seconds": 28.667057697,
+  "shadow_runtime_seconds": 9.03174711,
+  "verification_wall_seconds": 37.694440793,
+  "shadow_cpu_seconds": 133.29,
+  "shadow_peak_rss_bytes": 1325363200,
+  "per_query_original_seconds": {
+    "Nexmark_with_varsized:01": 15.158007783
+  },
+  "per_query_shadow_after_restore_seconds": {
+    "Nexmark_with_varsized:01": 8.508132309
+  },
+  "shadow_inherited_output_count": 0
+}

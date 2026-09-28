@@ -1,0 +1,20 @@
+{
+  "git_commit": "be17d27a6ce34e76d6872e191a29e5504486c0f4",
+  "kernel": "5.15.0-46-generic",
+  "machine": "x86_64",
+  "logical_cpus": 48,
+  "memory_bytes": 1622505644032,
+  "python": "3.13.5",
+  "criu_binary": "/nix/store/9abifc4rp2m15k70l4b1fr95i617wagg-criu-4.1.1/bin/criu",
+  "criu_version": "Version: 4.1.1",
+  "harness_sha256": "1b28de9dabb1202885ead14c78455f00d18dcbd90cbd627beb8a32808cfb98b6",
+  "analysis_sha256": "93917dcea1e4297ab533b9a0e687c07ddff19f8b4f20077bf5b06c33b489d895",
+  "flake_lock_sha256": "300ab78cf08f194fe6677c6cddf0e01bc795dd1154290d29c5898626174d48ad",
+  "uv_lock_sha256": "8a0887a6a16d9e95f5065ad74ab09479c51367ae30dfe9520ade85441f7ca64c",
+  "worker_settings": {
+    "execution_mode": "COMPILER",
+    "worker_threads": 16,
+    "global_buffers": 200000,
+    "slice_cache": true
+  }
+}
