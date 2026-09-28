@@ -1,0 +1,273 @@
+# name: compression_benchmarks/filestore_mechanics.test
+# description: FileStore end to end through SQL -- unsealed reads, segment pruning, rolling across
+#              files, eviction, draining, and every chain position it can occupy.
+# groups: [Replay, StoreBench]
+#
+# These are SYSTESTS, not unit tests: everything here goes through the real query path, so it covers
+# what the unit tests cannot -- the binding rule, the source, buffer sealing, the transformations
+# between tiers, and the cursor that resumes a read across calls.
+#
+# Two datasets, for two different reasons.
+#
+#   ATTACH INLINE      four rows. Small enough that NOTHING SEALS: 4 x 24 B against a 64 KB segment,
+#                      so every row is still in the in-memory active segment when it is read back.
+#                      FileStore is the only tier that serves unsealed rows at all, so this is the
+#                      only place that property is checked. Sinks are TYPE File so the assertion is
+#                      the rows themselves, not a checksum.
+#
+#   large/debs         200,001 rows x 28 B = 5,600,028 B. A file holds totalSize/filesAtCapacity =
+#                      64 MB/16 = 4 MB, so this input MUST roll -- two files, with the boundary
+#                      falling in the middle of the data. Every read here crosses that boundary, and
+#                      a descriptor applied to the wrong file would show up as wrong rows.
+#
+# Row counts for the ranged queries are DERIVED from the CSV, not observed: the data runs from
+# 1000000000000 to 1003999960000 in steps of 60000, three rows per timestamp. Checksums are pinned
+# so a silent change in what comes back cannot pass.
+#
+# Chained cases raise MAX_BUFFER_COUNT to 2048. That is not tuning -- a chained MemoryStore whose
+# ring wraps crashes in flush(), because writeRecord moves out of `activeBuffer` without
+# disengaging the optional. 8 MB of ring against 5.6 MB of input means it never wraps. See
+# chained_large.test for the full account.
+
+SEQUENTIAL_EXECUTION
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+#  A. Standalone, unsealed. Four rows never reach 64 KB, so they are read out of memory.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+CREATE LOGICAL SOURCE tiny(id UINT64, value UINT64, ts UINT64);
+CREATE PHYSICAL SOURCE FOR tiny TYPE File;
+ATTACH INLINE
+1,10,1000
+2,20,1001
+3,30,1002
+4,40,2000
+
+CREATE SINK tinyWrite(tiny.id UINT64, tiny.value UINT64, tiny.ts UINT64) TYPE File;
+CREATE SINK tinyAll(tiny.id UINT64, tiny.value UINT64, tiny.ts UINT64) TYPE File;
+CREATE SINK tinyPoint(tiny.id UINT64, tiny.value UINT64, tiny.ts UINT64) TYPE File;
+CREATE SINK tinyBetween(tiny.id UINT64, tiny.value UINT64, tiny.ts UINT64) TYPE File;
+CREATE SINK tinyFromTo(tiny.id UINT64, tiny.value UINT64, tiny.ts UINT64) TYPE File;
+CREATE SINK tinyContained(tiny.id UINT64, tiny.value UINT64, tiny.ts UINT64) TYPE File;
+CREATE SINK tinyEmpty(tiny.id UINT64, tiny.value UINT64, tiny.ts UINT64) TYPE File;
+
+SELECT id, value, ts FROM tiny INTO tinyWrite
+REPLAYABLE WITH HISTORY OF '1MB' SET('FileStore' AS REPLAY.STORE_ORDER);
+----
+1,10,1000
+2,20,1001
+3,30,1002
+4,40,2000
+
+# Every row comes back although none of them ever sealed into a segment.
+SELECT id, value, ts FROM tiny FOR EVENT_TIME AS OF TIMESTAMP ALL INTO tinyAll;
+----
+1,10,1000
+2,20,1001
+3,30,1002
+4,40,2000
+
+# AS OF is a SUFFIX, [t, inf) -- not a point read. It lands inside the unsealed segment and
+# filters row by row, dropping only the row before the bound.
+SELECT id, value, ts FROM tiny FOR EVENT_TIME AS OF TIMESTAMP '1001' INTO tinyPoint;
+----
+2,20,1001
+3,30,1002
+4,40,2000
+
+SELECT id, value, ts FROM tiny FOR EVENT_TIME AS OF TIMESTAMP BETWEEN '1001' AND '1002' INTO tinyBetween;
+----
+2,20,1001
+3,30,1002
+
+SELECT id, value, ts FROM tiny FOR EVENT_TIME AS OF TIMESTAMP FROM '1002' TO '2000' INTO tinyFromTo;
+----
+3,30,1002
+
+# CONTAINED IN closes BOTH ends, where FROM..TO above leaves the upper one open -- same two
+# bounds, different last row.
+SELECT id, value, ts FROM tiny FOR EVENT_TIME AS OF TIMESTAMP CONTAINED IN ('1002', '2000') INTO tinyContained;
+----
+3,30,1002
+4,40,2000
+
+# A range that misses everything returns nothing rather than the nearest rows.
+SELECT id, value, ts FROM tiny FOR EVENT_TIME AS OF TIMESTAMP FROM '5000' TO '6000' INTO tinyEmpty;
+----
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+#  B. Standalone, rolling. 5.6 MB over 4 MB files, so reads must cross a file boundary.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+CREATE LOGICAL SOURCE roll(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR roll TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE SINK rollWrite(roll.producerId INT32, roll.groupId INT32, roll.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK rollAll(roll.producerId INT32, roll.groupId INT32, roll.producedPower FLOAT64, roll.ts UINT64) TYPE Checksum;
+CREATE SINK rollFirst(roll.producerId INT32, roll.groupId INT32, roll.producedPower FLOAT64, roll.ts UINT64) TYPE Checksum;
+CREATE SINK rollLate(roll.producerId INT32, roll.groupId INT32, roll.producedPower FLOAT64, roll.ts UINT64) TYPE Checksum;
+CREATE SINK rollBefore(roll.producerId INT32, roll.groupId INT32, roll.producedPower FLOAT64, roll.ts UINT64) TYPE Checksum;
+CREATE SINK rollAfter(roll.producerId INT32, roll.groupId INT32, roll.producedPower FLOAT64, roll.ts UINT64) TYPE Checksum;
+CREATE SINK rollPoint(roll.producerId INT32, roll.groupId INT32, roll.producedPower FLOAT64, roll.ts UINT64) TYPE Checksum;
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM roll INTO rollWrite
+REPLAYABLE WITH HISTORY OF '1MB' SET('FileStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+# Everything, across both files. A wrong dataStart or a descriptor read against the wrong file
+# would corrupt rows here rather than lose them, which the checksum catches and a count would not.
+SELECT producerId, groupId, producedPower, ts FROM roll
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rollAll;
+----
+200001 243964861
+
+# The first quarter of the range: 50,001 rows, counted from the CSV. These sit in the FIRST file.
+SELECT producerId, groupId, producedPower, ts FROM roll
+FOR EVENT_TIME AS OF TIMESTAMP FROM '1000000000000' TO '1001000000000' INTO rollFirst;
+----
+50001 60917802
+
+# A window late in the range, 49,998 rows, which fall in the SECOND file. Reaching them means the
+# read skipped the whole first file's segments on their ranges rather than scanning them.
+SELECT producerId, groupId, producedPower, ts FROM roll
+FOR EVENT_TIME AS OF TIMESTAMP FROM '1002000000000' TO '1003000000000' INTO rollLate;
+----
+49998 61006423
+
+# Entirely before the data, and entirely after it. Both must prune every segment in both files.
+SELECT producerId, groupId, producedPower, ts FROM roll
+FOR EVENT_TIME AS OF TIMESTAMP FROM '999000000000' TO '1000000000000' INTO rollBefore;
+----
+0 0
+
+SELECT producerId, groupId, producedPower, ts FROM roll
+FOR EVENT_TIME AS OF TIMESTAMP FROM '1004000000000' TO '1005000000000' INTO rollAfter;
+----
+0 0
+
+# A suffix starting halfway through: 99,999 rows, counted from the CSV. The bound falls inside the
+# SECOND file, so this both skips the first file entirely and filters within the second.
+SELECT producerId, groupId, producedPower, ts FROM roll
+FOR EVENT_TIME AS OF TIMESTAMP '1002000000000' INTO rollPoint;
+----
+99999 122080715
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+#  C. FileStore as the TAIL of a chain: MemoryStore drains into it, it drains into nothing.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+CREATE LOGICAL SOURCE tail(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR tail TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE SINK tailWrite(tail.producerId INT32, tail.groupId INT32, tail.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK tailAll(tail.producerId INT32, tail.groupId INT32, tail.producedPower FLOAT64, tail.ts UINT64) TYPE Checksum;
+CREATE SINK tailRange(tail.producerId INT32, tail.groupId INT32, tail.producedPower FLOAT64, tail.ts UINT64) TYPE Checksum;
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM tail INTO tailWrite
+REPLAYABLE WITH HISTORY OF '1MB' SET(
+    'MemoryStore->FileStore' AS REPLAY.STORE_ORDER,
+    2048 AS REPLAY.MAX_BUFFER_COUNT
+);
+----
+200001 243964861
+
+# Rows arrive here as whole sealed buffers through MemoryToFileTransformation, carrying the ranges
+# MemoryStore measured. Reading them back proves those ranges survived the handover.
+SELECT producerId, groupId, producedPower, ts FROM tail
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO tailAll;
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, ts FROM tail
+FOR EVENT_TIME AS OF TIMESTAMP FROM '1000000000000' TO '1001000000000' INTO tailRange;
+----
+50001 60917802
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+#  D. FileStore as the HEAD of a chain: it drains into CompressedStore, so drainSegments runs
+#     repeatedly and every index into its segments is invalidated each time.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+CREATE LOGICAL SOURCE head(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR head TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE SINK headWrite(head.producerId INT32, head.groupId INT32, head.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK headAll(head.producerId INT32, head.groupId INT32, head.producedPower FLOAT64, head.ts UINT64) TYPE Checksum;
+CREATE SINK headRange(head.producerId INT32, head.groupId INT32, head.producedPower FLOAT64, head.ts UINT64) TYPE Checksum;
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM head INTO headWrite
+REPLAYABLE WITH HISTORY OF '1MB' SET('FileStore->CompressedStore' AS REPLAY.STORE_ORDER);
+----
+200001 243964861
+
+# A read now spans two tiers: whatever FileStore has not yet drained, plus everything below it.
+# The cursor has to resume in the right tier at the right unit, or rows are duplicated or lost.
+SELECT producerId, groupId, producedPower, ts FROM head
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO headAll;
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, ts FROM head
+FOR EVENT_TIME AS OF TIMESTAMP FROM '1002000000000' TO '1003000000000' INTO headRange;
+----
+49998 61006423
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+#  E. FileStore in the MIDDLE: drained from above, draining below. Both transformations run.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+CREATE LOGICAL SOURCE mid(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR mid TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE LOGICAL SOURCE midLossy(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR midLossy TYPE File;
+ATTACH FILE large/debs/WIND_TURBINES_TOPIC_5M.csv
+
+CREATE SINK midWrite(mid.producerId INT32, mid.groupId INT32, mid.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK midAll(mid.producerId INT32, mid.groupId INT32, mid.producedPower FLOAT64, mid.ts UINT64) TYPE Checksum;
+CREATE SINK midRange(mid.producerId INT32, mid.groupId INT32, mid.producedPower FLOAT64, mid.ts UINT64) TYPE Checksum;
+CREATE SINK mlWrite(midLossy.producerId INT32, midLossy.groupId INT32, midLossy.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK mlAll(midLossy.producerId INT32, midLossy.groupId INT32, midLossy.producedPower FLOAT64, midLossy.ts UINT64) TYPE Checksum;
+
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM mid INTO midWrite
+REPLAYABLE WITH HISTORY OF '1MB' SET(
+    'MemoryStore->FileStore->CompressedStore' AS REPLAY.STORE_ORDER,
+    2048 AS REPLAY.MAX_BUFFER_COUNT
+);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, ts FROM mid
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO midAll;
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, ts FROM mid
+FOR EVENT_TIME AS OF TIMESTAMP FROM '1000000000000' TO '1001000000000' INTO midRange;
+----
+50001 60917802
+
+# The same shape with the lossy tail, at no bound, so it must still round trip exactly. Any loss
+# here is the columnar transposition, not the quantiser.
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM midLossy INTO mlWrite
+REPLAYABLE WITH HISTORY OF '1MB' SET(
+    'MemoryStore->FileStore->LossyStore' AS REPLAY.STORE_ORDER,
+    2048 AS REPLAY.MAX_BUFFER_COUNT
+);
+----
+200001 243964861
+
+SELECT producerId, groupId, producedPower, ts FROM midLossy
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO mlAll;
+----
+200001 243964861
