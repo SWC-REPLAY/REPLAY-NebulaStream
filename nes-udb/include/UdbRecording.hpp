@@ -14,7 +14,10 @@
 
 #pragma once
 
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <thread>
 #include <sys/types.h>
 
 namespace NES
@@ -53,6 +56,40 @@ public:
 private:
     /// pid of the udb process. Always valid for a live object: construction either attaches or throws.
     pid_t udbPid{-1};
+};
+
+/// Owns the recording of one TIME_TRAVEL_UDB pipeline, immediate or deferred.
+///
+/// If NES_UDB_RECORD_ON_TRIGGER is unset, recording starts in the constructor, exactly like Recording.
+/// If it names a file (relative paths resolve against the working directory), a watcher thread
+/// starts live-record once that file appears. This lets a worker be checkpointed with CRIU while
+/// no tracer is attached (CRIU cannot seize a ptraced process): the watcher thread is restored with
+/// the process, and the trigger file is created only in the restored shadow's private runtime dir.
+///
+/// A deferred recording that fails to attach is logged, not thrown: the query is already running
+/// by then and there is no caller left to fail.
+class RecordingSession
+{
+public:
+    /// @throws UdbRecordingFailure if an immediate recording could not be started.
+    explicit RecordingSession(RecordingConfig config);
+
+    /// Stops the watcher, then saves the trace if recording started.
+    ~RecordingSession() = default;
+
+    RecordingSession(const RecordingSession&) = delete;
+    RecordingSession& operator=(const RecordingSession&) = delete;
+    RecordingSession(RecordingSession&&) = delete;
+    RecordingSession& operator=(RecordingSession&&) = delete;
+
+private:
+    void recordOnceTriggered(const std::stop_token& stopToken, const std::filesystem::path& triggerPath);
+
+    RecordingConfig config;
+    /// Written only by the watcher thread until it is joined.
+    std::optional<Recording> recording;
+    /// Declared last so it is joined before recording is destroyed.
+    std::jthread watcher;
 };
 
 }

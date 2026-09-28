@@ -51,9 +51,9 @@ public:
 private:
     RecordingConfig config;
     std::optional<PhysicalOperator> child;
-    /// Engaged exactly while this pipeline is being recorded: constructed in setup(), destroyed in
-    /// terminate().
-    mutable std::optional<Recording> recording;
+    /// Engaged exactly while this pipeline may be recorded: constructed in setup(), destroyed in
+    /// terminate(). Recording may start later than setup(), see RecordingSession.
+    mutable std::optional<RecordingSession> recording;
 };
 
 }

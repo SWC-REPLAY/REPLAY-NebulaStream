@@ -25,7 +25,10 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <exception>
+#include <stop_token>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <fcntl.h>
 #include <unistd.h>
@@ -45,9 +48,9 @@ namespace
 {
 
 constexpr auto pollInterval = std::chrono::milliseconds(5);
+constexpr auto triggerPollInterval = std::chrono::milliseconds(50);
+constexpr auto triggerEnvVar = "NES_UDB_RECORD_ON_TRIGGER";
 constexpr auto attachTimeout = std::chrono::seconds(30);
-/// Bounded because a wedged live-record would otherwise hang query teardown for good.
-constexpr auto saveTimeout = std::chrono::seconds(60);
 /// live-record detaches only after writing the trace, so the previous recording can still hold this
 /// process briefly after its query was reported as stopped.
 constexpr auto detachTimeout = std::chrono::seconds(30);
@@ -229,15 +232,15 @@ void waitUntilAttached(const pid_t udbPid)
 }
 
 /// Blocks until live-record has saved the trace and exited, so the trace is guaranteed finalized by
-/// the time the caller returns.
+/// the time the caller returns. Deliberately unbounded: saving the recording of a large process takes
+/// minutes, and killing live-record mid-save leaves only an unusable .undo.part. A wedged live-record
+/// therefore holds query teardown; callers that need a bound must watch the process from outside.
 void waitUntilSaved(const pid_t udbPid) noexcept
 {
-    const auto deadline = std::chrono::steady_clock::now() + saveTimeout;
     int status = 0;
     for (;;)
     {
-        const pid_t reaped
-            = ::waitpid(udbPid, &status, WNOHANG); /// NOLINT(misc-include-cleaner) - WNOHANG is provided by <sys/wait.h> above
+        const pid_t reaped = ::waitpid(udbPid, &status, 0);
         if (reaped == udbPid)
         {
             if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) /// NOLINT(misc-include-cleaner) - provided by <sys/wait.h> above
@@ -251,14 +254,6 @@ void waitUntilSaved(const pid_t udbPid) noexcept
             NES_ERROR("Failed to reap live-record process {}: {}", udbPid, getErrorMessageFromERRNO());
             return;
         }
-        if (std::chrono::steady_clock::now() >= deadline)
-        {
-            NES_ERROR("Timed out waiting for live-record process {} to save the recording, killing it", udbPid);
-            ::kill(udbPid, SIGKILL); /// NOLINT(misc-include-cleaner) - <signal.h> would duplicate <csignal> above
-            ::waitpid(udbPid, nullptr, 0);
-            return;
-        }
-        std::this_thread::sleep_for(pollInterval);
     }
 }
 
@@ -282,6 +277,44 @@ Recording::~Recording()
         return;
     }
     waitUntilSaved(udbPid);
+}
+
+RecordingSession::RecordingSession(RecordingConfig config) : config(std::move(config))
+{
+    const char* triggerEnv = std::getenv(triggerEnvVar);
+    if (triggerEnv == nullptr || *triggerEnv == '\0')
+    {
+        recording.emplace(this->config);
+        return;
+    }
+    /// Resolved once so a later chdir in the worker cannot redirect the trigger. CRIU restores the
+    /// same absolute path, which the shadow's private bind mount makes point to its own runtime dir.
+    std::filesystem::path triggerPath = std::filesystem::absolute(triggerEnv);
+    NES_INFO("Deferring udb recording '{}' until {} exists", this->config.traceName, triggerPath.string());
+    watcher = std::jthread([this, triggerPath = std::move(triggerPath)](const std::stop_token& stopToken)
+                           { recordOnceTriggered(stopToken, triggerPath); });
+}
+
+void RecordingSession::recordOnceTriggered(const std::stop_token& stopToken, const std::filesystem::path& triggerPath)
+{
+    while (!stopToken.stop_requested())
+    {
+        std::error_code errorCode;
+        if (std::filesystem::exists(triggerPath, errorCode))
+        {
+            NES_INFO("Trigger {} found, spawning and attaching udb", triggerPath.string());
+            try
+            {
+                recording.emplace(config);
+            }
+            catch (const std::exception& error)
+            {
+                NES_ERROR("Deferred udb recording '{}' failed: {}", config.traceName, error.what());
+            }
+            return;
+        }
+        std::this_thread::sleep_for(triggerPollInterval);
+    }
 }
 
 }
