@@ -85,8 +85,30 @@ uint32_t FileStore::segmentsPerFile() const
     return static_cast<uint32_t>(std::max<size_t>(perFile / std::max<size_t>(config.segmentSize, 1), 1));
 }
 
+uint64_t FileStore::dataBytesLocked() const
+{
+    /// Rows only, each file's header and preallocated table subtracted. This is what a FLUSH
+    /// THRESHOLD is measured against.
+    ///
+    /// Framing is excluded because it is not accumulation: the table is preallocated from the
+    /// CAPACITY, so an empty store already "contains" it and a threshold smaller than the table
+    /// would be satisfied before a single row arrived. At a 48-byte segment that table reaches
+    /// 3.5 MB, which no sensible threshold could exceed.
+    uint64_t total = 0;
+    for (const auto& part : parts)
+    {
+        if (part.writer)
+        {
+            total += part.writer->size() - part.dataStart;
+        }
+    }
+    return total;
+}
+
 uint64_t FileStore::storedBytesLocked() const
 {
+    /// The whole footprint, framing included. This is what CAPACITY is measured against: a disk
+    /// budget has to count the bytes the disk actually holds, and the table is among them.
     uint64_t total = 0;
     for (const auto& part : parts)
     {
@@ -220,20 +242,33 @@ void FileStore::close([[maybe_unused]] Store& self)
     }
 }
 
-void FileStore::flush([[maybe_unused]] Store& self)
+void FileStore::flush(Store& self)
 {
-
-        if (nextLevel && transformation)
-        {
-            transformation->execute(self, *nextLevel);   // drain me into the next tier
-            nextLevel->flush();
-        }
-    /// BinaryStoreWriter uses pwrite which is immediately durable after fsync.
-    /// A full flush is performed on close().
-    /*if (nextLevel)
+    if (!nextLevel || !transformation)
     {
-        nextLevel->flush();
-    }*/
+        return;
+    }
+
+    /// This tier's own policy decides when its contents move down. Until now it never asked:
+    /// MemoryStore::flush ends with nextLevel->flush(), so FileStore drained everything on every
+    /// MemoryStore flush and never held anything at all. Its capacity, its rolling and its
+    /// eviction were unreachable in a chain -- every chained measurement showed 0 data bytes
+    /// here, the file on disk nothing but a header and an empty table.
+    ///
+    /// A tier with no policy -- a tail, or a standalone store -- still drains on demand, because
+    /// the guard only applies when there is a policy to consult.
+    uint64_t accumulated = 0;
+    {
+        const std::shared_lock lock(mutex);
+        accumulated = dataBytesLocked();
+    }
+    if (flushPolicy && !flushPolicy->shouldFlush(accumulated))
+    {
+        return;
+    }
+
+    transformation->execute(self, *nextLevel);
+    nextLevel->flush();
 }
 
 void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, [[maybe_unused]] Store& self)
@@ -253,10 +288,8 @@ void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Time
     uint64_t stored = 0;
     {
         const std::shared_lock lock(mutex);
-        for (const auto& part : parts)
-        {
-            stored += part.writer->size() - part.dataStart;
-        }
+        /// The same measure flush uses -- one threshold, one meaning.
+        stored = dataBytesLocked();
     }
     if (flushPolicy && flushPolicy->shouldFlush(stored))
     {
@@ -663,17 +696,13 @@ Schema FileStore::getSchema() const
 
 uint64_t FileStore::size() const
 {
+    /// Just the locking wrapper. The sum lives in storedBytesLocked and only there -- it was
+    /// written out twice, which is how three call sites came to disagree about what a threshold
+    /// counts in the first place.
     const std::shared_lock lock(mutex);
-    uint64_t total = 0;
-    for (const auto& part : parts)
-    {
-        if (part.writer)
-        {
-            total += part.writer->size();
-        }
-    }
-    return total;
+    return storedBytesLocked();
 }
+
 
 void FileStore::removeFile()
 {

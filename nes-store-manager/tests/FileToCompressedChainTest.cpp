@@ -92,7 +92,15 @@ TEST_F(FileToCompressedChainTest, FileFlushesIntoCompressed)
     fcfg.storeName = "fc_file";
     fcfg.storeDir = "/tmp";
     fcfg.schemaText = "";
-    const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = 64UZ * 1024UZ * 1024UZ};
+    /// A segment every 2 rows, and a threshold of 4. Both matter: only bytes ON DISK count toward
+    /// the threshold, so rows still in the unsealed segment are invisible to it -- with the
+    /// default 64 KB segment these four rows would never seal and the measure would never move,
+    /// whatever the threshold said.
+    ///
+    /// It read 64 MB before, against four rows, and passed only because FileStore::flush ignored
+    /// its policy and drained on command.
+    fcfg.segmentSize = rowWidth * 2;
+    const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = rowWidth * 4};
     Store file = makeStore<FileStore>(fcfg, schema, compressed, FileToCompressedTransformation{}, policy);
 
     file.open(); /// opens the file writer and (via nextLevel) the compressed tier
@@ -146,7 +154,12 @@ SizedChain makeSizedChain(const std::string& name, const uint32_t rowWidth)
     fcfg.schemaText = "";
     fcfg.segmentSize = rowWidth * 16; /// the tier above divides four times finer
     fcfg.totalSize = rowWidth * 16 * 64;
-    const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = 64UZ * 1024UZ * 1024UZ};
+    /// Migrate every 128 rows, i.e. every 8 of this tier's segments. The threshold is what puts
+    /// data in the tail now -- flush() no longer drains on command -- so it has to be a figure the
+    /// test data actually reaches. Over 256 rows that is two migrations of 8 segments each, and
+    /// the tail still cuts them into blocks of 64 on its own boundary, which is the point here.
+    const FlushPolicy policy{
+        .type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = rowWidth * 128};
     Store file = makeStore<FileStore>(fcfg, schema, compressed, FileToCompressedTransformation{}, policy);
 
     return SizedChain{.compressed = std::move(compressed), .file = std::move(file)};
@@ -173,7 +186,9 @@ TEST_F(FileToCompressedChainTest, EachBlockCarriesTheRangeOfTheSegmentsInsideIt)
         const auto row = makeTimedRow(rowWidth, i, 1000 + i);
         chain.file.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
     }
-    EXPECT_EQ(chain.file.getAs<FileStore>().get().debugSegmentCount(), 16U) << "the tier above should divide at its own size";
+    /// FileStore migrated twice on the way through and kept nothing, so the division it made is
+    /// visible in the tail's block boundaries rather than in its own segment count.
+    EXPECT_EQ(chain.file.getAs<FileStore>().get().debugSegmentCount(), 0U) << "everything should have moved down";
 
     chain.file.flush();
 

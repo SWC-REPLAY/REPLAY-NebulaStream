@@ -154,14 +154,19 @@ Store StoreRegistry::getOrCreateStore(
         /// Unset means lossless, which is what every chain gets unless a budget was asked for.
         .accuracyBoundPercent = config.accuracyBoundPercent.value_or(0.0)};
 
-    /// How many descriptor slots a FileStore preallocates, via ceil(totalSize / segmentSize).
+    /// What a FileStore migrates on: one file's worth, not one memory buffer's worth.
     ///
-    /// Deliberately NOT the history size. That figure already decides the memory buffer and the
-    /// flush threshold, and how many slots a file reserves is a third question with no relation to
-    /// how much history a query asked to keep -- tying them made a '1MB' history reserve 16 slots
-    /// while the default reserved 1024, so two chains differed by 40 KB of zeroed table for reasons
-    /// nobody chose. Held at the store type's own default so the geometry is identical everywhere.
-    const auto segmentTableBudget = FileStore::Config{}.totalSize;
+    /// Both tiers used to share MemoryStore's threshold, so FileStore tripped at the very moment
+    /// MemoryStore handed it data -- it passed everything straight through and never held
+    /// anything. Every chained measurement showed 0 data bytes in FileStore, and its capacity,
+    /// its rolling and its eviction were all unreachable. A cascade needs each tier to hold MORE
+    /// than the one above, or every tier trips at once and it is a chain in name only.
+    ///
+    /// Config::flushThresholdBytes overrides this when set; zero derives one file's worth.
+    const auto fileDefaults = FileStore::Config{};
+    const auto fileFlushThreshold = fileDefaults.flushThresholdBytes != 0
+        ? fileDefaults.flushThresholdBytes
+        : fileDefaults.totalSize / fileDefaults.filesAtCapacity;
 
     if (hasMemoryStore && hasFileStore && hasCompressedStore)
     {
@@ -175,25 +180,26 @@ Store StoreRegistry::getOrCreateStore(
 
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
-        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+        const FlushPolicy memoryPolicy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+        const FlushPolicy filePolicy{
+            .type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = fileFlushThreshold};
 
         auto fileStore = makeStore<FileStore>(
             FileStore::Config{
                 .storeName = storeName,
                 .storeDir = storeDir,
-                .schemaText = schemaText,
-                .totalSize = segmentTableBudget},
+                .schemaText = schemaText},
             schema,
             std::move(compressedStore),
             *fileToCompressed,
-            policy);
+            filePolicy);
 
         auto headStore = makeStore<MemoryStore>(
             schema,
             MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
             bufferProvider,
             std::move(fileStore),
-            policy);
+            memoryPolicy);
 
         return stores.emplace(storeName, headStore).first->second;
     }
@@ -208,25 +214,26 @@ Store StoreRegistry::getOrCreateStore(
 
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
-        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+        const FlushPolicy memoryPolicy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+        const FlushPolicy filePolicy{
+            .type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = fileFlushThreshold};
 
         auto fileStore = makeStore<FileStore>(
             FileStore::Config{
                 .storeName = storeName,
                 .storeDir = storeDir,
-                .schemaText = schemaText,
-                .totalSize = segmentTableBudget},
+                .schemaText = schemaText},
             schema,
             std::move(lossyStore),
             *fileToLossy,
-            policy);
+            filePolicy);
 
         auto headStore = makeStore<MemoryStore>(
             schema,
             MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
             bufferProvider,
             std::move(fileStore),
-            policy);
+            memoryPolicy);
 
         return stores.emplace(storeName, headStore).first->second;
     }
@@ -237,11 +244,13 @@ Store StoreRegistry::getOrCreateStore(
 
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
-        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+        /// FileStore is the TAIL here -- nothing below it to migrate into, so it takes no policy
+        /// and needs no threshold. Only MemoryStore drains.
+        const FlushPolicy memoryPolicy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
 
         auto fileStore = makeStore<FileStore>(
             FileStore::Config{
-                .storeName = storeName, .storeDir = storeDir, .schemaText = schemaText, .totalSize = segmentTableBudget},
+                .storeName = storeName, .storeDir = storeDir, .schemaText = schemaText},
             schema);
 
         auto headStore = makeStore<MemoryStore>(
@@ -249,7 +258,7 @@ Store StoreRegistry::getOrCreateStore(
             MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount},
             bufferProvider,
             std::move(fileStore),
-            policy);
+            memoryPolicy);
 
         return stores.emplace(storeName, headStore).first->second;
     }
@@ -261,19 +270,19 @@ Store StoreRegistry::getOrCreateStore(
         auto compressedStore = makeStore<CompressedStore>(
             CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
 
-        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
-        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+        /// No MemoryStore in this chain, so bufferSize had no other use here.
+        const FlushPolicy filePolicy{
+            .type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = fileFlushThreshold};
 
         auto headStore = makeStore<FileStore>(
             FileStore::Config{
                 .storeName = storeName,
                 .storeDir = storeDir,
-                .schemaText = schemaText,
-                .totalSize = segmentTableBudget},
+                .schemaText = schemaText},
             schema,
             std::move(compressedStore),
             *transformation,
-            policy);
+            filePolicy);
 
         return stores.emplace(storeName, headStore).first->second;
     }
@@ -284,19 +293,19 @@ Store StoreRegistry::getOrCreateStore(
 
         auto lossyStore = makeStore<LossyStore>(lossyConfig, schema);
 
-        const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
-        const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = bufferSize};
+        /// No MemoryStore in this chain, so bufferSize had no other use here.
+        const FlushPolicy filePolicy{
+            .type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = fileFlushThreshold};
 
         auto headStore = makeStore<FileStore>(
             FileStore::Config{
                 .storeName = storeName,
                 .storeDir = storeDir,
-                .schemaText = schemaText,
-                .totalSize = segmentTableBudget},
+                .schemaText = schemaText},
             schema,
             std::move(lossyStore),
             *transformation,
-            policy);
+            filePolicy);
 
         return stores.emplace(storeName, headStore).first->second;
     }
@@ -321,7 +330,7 @@ Store StoreRegistry::getOrCreateStore(
     }
     auto headStore = makeStore<FileStore>(
         FileStore::Config{
-            .storeName = storeName, .storeDir = storeDir, .schemaText = schemaText, .totalSize = segmentTableBudget},
+            .storeName = storeName, .storeDir = storeDir, .schemaText = schemaText},
         schema);
     return stores.emplace(storeName, headStore).first->second;
 }

@@ -44,6 +44,7 @@
 #include <MemoryStore.hpp>
 #include <MemoryToFileTransformation.hpp>
 #include <Store.hpp>
+#include <StoreReadCursor.hpp>
 #include <TimeRange.hpp>
 
 namespace NES
@@ -72,16 +73,25 @@ struct Chain
 };
 
 /// MemoryStore -> FileStore -> LossyStore, built bottom-up the way StoreRegistry does it.
-Chain makeChain(const std::string& name, const size_t segmentSize, const std::shared_ptr<BufferManager>& bufferManager)
+///
+/// A threshold per tier. Both tiers check their policy in writeRecord, so one shared value moves
+/// MemoryStore's drain cadence whenever FileStore's threshold is changed.
+Chain makeChain(
+    const std::string& name,
+    const size_t segmentSize,
+    const size_t memoryThreshold,
+    const size_t fileThreshold,
+    const std::shared_ptr<BufferManager>& bufferManager)
 {
     const Schema schema = makeSchema();
 
     Store lossy = makeStore<LossyStore>(
         LossyStore::Config{.storeName = name + "_lossy", .storeDir = "/tmp", .schemaText = ""}, schema);
 
-    /// A high flush threshold: this test drives the tier boundaries explicitly with flush(), so
-    /// that what lands where is a property of the test rather than of a byte count.
-    const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = 64UZ * 1024UZ * 1024UZ};
+    /// MemoryStore counts whole allocated buffers, FileStore whole sealed segments. Rows in the
+    /// segment still being filled are not on disk and do not count.
+    const FlushPolicy memoryPolicy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = memoryThreshold};
+    const FlushPolicy filePolicy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = fileThreshold};
 
     Store file = makeStore<FileStore>(
         FileStore::Config{
@@ -93,9 +103,9 @@ Chain makeChain(const std::string& name, const size_t segmentSize, const std::sh
         schema,
         lossy,
         FileToLossyTransformation{},
-        policy);
+        filePolicy);
 
-    Store head = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager, file, policy);
+    Store head = makeStore<MemoryStore>(schema, MemoryStore::Config{}, bufferManager, file, memoryPolicy);
     return Chain{.lossy = std::move(lossy), .file = std::move(file), .head = std::move(head)};
 }
 
@@ -117,16 +127,23 @@ std::vector<uint64_t> readTimestamps(Store& store, const Schema& schema, const T
 {
     auto bufferManager = BufferManager::create(schema.getSizeOfSchemaInBytes() * capacityRows, 8);
     auto buffer = bufferManager->getBufferBlocking();
-    const uint64_t got = store.read(buffer, schema, range);
-
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
-    const auto area = buffer.getAvailableMemoryArea<const uint8_t>();
+
+    /// One bufferful per call against a cursor that survives between them, until a call yields
+    /// nothing, which is how SourceThread drains a store. A chain holding rows in more than one
+    /// tier gives up only the lowest tier's share per call. The three-argument overload starts a
+    /// fresh cursor each time and would repeat the first call forever.
+    StoreReadCursor cursor;
     std::vector<uint64_t> out;
-    for (uint64_t i = 0; i < got; ++i)
+    while (const uint64_t got = store.read(buffer, schema, range, cursor))
     {
-        uint64_t ts = 0;
-        std::memcpy(&ts, area.data() + (i * rowWidth), sizeof(ts));
-        out.push_back(ts);
+        const auto area = buffer.getAvailableMemoryArea<const uint8_t>();
+        for (uint64_t i = 0; i < got; ++i)
+        {
+            uint64_t ts = 0;
+            std::memcpy(&ts, area.data() + (i * rowWidth), sizeof(ts));
+            out.push_back(ts);
+        }
     }
     return out;
 }
@@ -142,7 +159,7 @@ TEST_F(MemoryToFileToLossyChainTest, RangesSurviveBothTierBoundaries)
     auto bufferManager = BufferManager::create(rowWidth * 64, 64);
 
     /// 64 rows per segment, so 512 rows become 8 groups with disjoint windows.
-    auto chain = makeChain("chain_ranges", rowWidth * 64, bufferManager);
+    auto chain = makeChain("chain_ranges", rowWidth * 64, rowWidth * 128, rowWidth * 128, bufferManager);
     chain.head.open();
 
     writeRows(chain.head, schema, 512, 1000); /// ts 1000 .. 1511
@@ -150,7 +167,9 @@ TEST_F(MemoryToFileToLossyChainTest, RangesSurviveBothTierBoundaries)
     chain.file.flush();
 
     const auto& lossy = chain.lossy.getAs<LossyStore>().get();
-    EXPECT_GT(lossy.debugGroupCount(), 1U) << "the stream must land as several groups, not one";
+    /// ASSERT, not EXPECT: the checks below index into `ranges`, and a non-fatal failure here
+    /// used to run straight on into front() on an empty vector and segfault.
+    ASSERT_GT(lossy.debugGroupCount(), 1U) << "the stream must land as several groups, not one";
 
     /// The property that makes skipping possible, and the one a correct-rows assertion cannot
     /// distinguish from filtering every row: the ranges must be narrow and disjoint, not the
@@ -170,7 +189,11 @@ TEST_F(MemoryToFileToLossyChainTest, RangesSurviveBothTierBoundaries)
         previousMax = maxTs;
     }
     EXPECT_EQ(ranges.front().first, 1000U);
-    EXPECT_EQ(ranges.back().second, 1511U);
+    /// No matching assertion on ranges.back().second. The tail holds a PREFIX of the stream, not
+    /// all of it: FileStore migrates whole sealed segments once its own threshold is crossed, so
+    /// the newest rows are still upstream when this runs. Which prefix depends on the threshold
+    /// and the segment size, and is not this test's subject -- that the ranges are narrow and
+    /// disjoint is, and the loop above has shown it. Nothing is lost, which the read below shows.
 
     /// Everything comes back, in order.
     const auto all = readTimestamps(chain.head, schema, TimeRange{}, 1024);
@@ -196,7 +219,7 @@ TEST_F(MemoryToFileToLossyChainTest, NarrowQueryReturnsExactlyItsWindow)
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
     auto bufferManager = BufferManager::create(rowWidth * 64, 64);
 
-    auto chain = makeChain("chain_window", rowWidth * 64, bufferManager);
+    auto chain = makeChain("chain_window", rowWidth * 64, rowWidth * 128, rowWidth * 128, bufferManager);
     chain.head.open();
 
     writeRows(chain.head, schema, 512, 1000);
@@ -226,7 +249,7 @@ TEST_F(MemoryToFileToLossyChainTest, WindowOutsideTheStreamReturnsNothing)
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
     auto bufferManager = BufferManager::create(rowWidth * 64, 64);
 
-    auto chain = makeChain("chain_outside", rowWidth * 64, bufferManager);
+    auto chain = makeChain("chain_outside", rowWidth * 64, rowWidth * 128, rowWidth * 128, bufferManager);
     chain.head.open();
 
     writeRows(chain.head, schema, 256, 5000); /// ts 5000 .. 5255
@@ -238,6 +261,81 @@ TEST_F(MemoryToFileToLossyChainTest, WindowOutsideTheStreamReturnsNothing)
 
     const TimeRange after{.fieldName = "ts", .start = Timestamp(90000), .end = Timestamp(90100)};
     EXPECT_TRUE(readTimestamps(chain.head, schema, after, 1024).empty());
+
+    chain.head.close();
+    chain.lossy.getAs<LossyStore>().getMutable().removeFile();
+    chain.file.getAs<FileStore>().getMutable().removeFile();
+}
+
+/// The next two are a matched pair: same schema, same segment size, the same 256 rows, and the
+/// same MemoryStore threshold, so MemoryStore drains on the same cadence in both. Only FileStore's
+/// threshold differs, which leaves it as the only thing that can explain a difference.
+///
+/// Both assert that what FileStore still holds is below its own threshold, the one statement true
+/// on either side of the boundary. They differ in whether the tail received anything.
+TEST_F(MemoryToFileToLossyChainTest, BelowItsThresholdFileStoreHoldsAndTheTailStaysEmpty)
+{
+    const Schema schema = makeSchema();
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+    auto bufferManager = BufferManager::create(rowWidth * 64, 64);
+
+    /// 4096 bytes of rows reach a FileStore whose threshold is 16384: never crossed.
+    const size_t segmentBytes = rowWidth * 64;
+    const size_t fileThreshold = rowWidth * 1024;
+    auto chain = makeChain("chain_below_threshold", segmentBytes, rowWidth * 128, fileThreshold, bufferManager);
+    chain.head.open();
+
+    writeRows(chain.head, schema, 256, 1000); /// ts 1000 .. 1255, 4096 bytes
+    chain.head.flush();
+
+    const size_t heldSegments = chain.file.getAs<FileStore>().get().debugSegmentCount();
+    EXPECT_GT(heldSegments, 0U) << "the rows left MemoryStore, so FileStore must be holding them";
+    EXPECT_LT(heldSegments * segmentBytes, fileThreshold) << "held below its own threshold";
+    EXPECT_EQ(chain.lossy.getAs<LossyStore>().get().debugGroupCount(), 0U)
+        << "nothing reaches the tail until FileStore's threshold is crossed";
+
+    /// Held is not lost: the read still produces every row, from the middle tier this time.
+    const auto all = readTimestamps(chain.head, schema, TimeRange{}, 1024);
+    ASSERT_EQ(all.size(), 256U);
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        EXPECT_EQ(all[i], 1000U + i);
+    }
+
+    chain.head.close();
+    chain.lossy.getAs<LossyStore>().getMutable().removeFile();
+    chain.file.getAs<FileStore>().getMutable().removeFile();
+}
+
+TEST_F(MemoryToFileToLossyChainTest, AboveItsThresholdFileStoreMigratesToTheTail)
+{
+    const Schema schema = makeSchema();
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+    auto bufferManager = BufferManager::create(rowWidth * 64, 64);
+
+    /// The same 4096 bytes of rows, reaching a FileStore whose threshold is 2048: crossed.
+    const size_t segmentBytes = rowWidth * 64;
+    const size_t fileThreshold = rowWidth * 128;
+    auto chain = makeChain("chain_above_threshold", segmentBytes, rowWidth * 128, fileThreshold, bufferManager);
+    chain.head.open();
+
+    writeRows(chain.head, schema, 256, 1000); /// ts 1000 .. 1255, 4096 bytes
+    chain.head.flush();
+
+    EXPECT_GT(chain.lossy.getAs<LossyStore>().get().debugGroupCount(), 0U)
+        << "the threshold was crossed, so the tail received something";
+
+    /// Not zero. MemoryStore drains several times during the writes, so FileStore crosses its
+    /// threshold and migrates more than once, and the remainder left over sits below it.
+    const size_t heldSegments = chain.file.getAs<FileStore>().get().debugSegmentCount();
+    EXPECT_LT(heldSegments * segmentBytes, fileThreshold) << "only a sub-threshold remainder left";
+
+    const auto all = readTimestamps(chain.head, schema, TimeRange{}, 1024);
+    ASSERT_EQ(all.size(), 256U);
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        EXPECT_EQ(all[i], 1000U + i);
+    }
 
     chain.head.close();
     chain.lossy.getAs<LossyStore>().getMutable().removeFile();

@@ -61,6 +61,12 @@ public:
         ///
         /// This is the capacity, not the size of a file. A file holds `filesAtCapacity` fewer bytes
         /// than this, which is what makes eviction an unlink of one whole file rather than a rewrite.
+        ///
+        /// Deliberately NOT the history size from the query. That figure already decides the memory
+        /// buffer and MemoryStore's flush threshold, and how much a file store may keep is a third
+        /// question with no relation to it -- tying them made a '1MB' history reserve 16 descriptor
+        /// slots while the default reserved 1024, so two chains differed by 40 KB of zeroed table
+        /// for reasons nobody chose. Set here so the geometry is identical wherever a store is built.
         size_t totalSize = 64UZ * 1024UZ * 1024UZ;
 
         /// How many files the store is spread over when it is full, which fixes both the roll point
@@ -72,6 +78,17 @@ public:
         /// outgrown. That is only true because the file is bounded -- unbounded, the same table was
         /// a cap that silently stopped recording descriptors once it filled.
         size_t filesAtCapacity = 16;
+
+        /// Bytes this store accumulates before migrating to the tier below.
+        ///
+        /// Zero means one file's worth -- totalSize / filesAtCapacity -- which is the natural
+        /// unit, since the tier below then receives whole files rather than whatever the tier
+        /// above happened to hand over.
+        ///
+        /// Raise it to make the store span SEVERAL files before draining. That is also what makes
+        /// rolling engage: a threshold at or below one file's capacity migrates just before the
+        /// file could fill, so the store never rolls.
+        size_t flushThresholdBytes = 0;
     };
 
     /// One segment handed to the tier below: its bytes, and the range of the rows inside them.
@@ -174,7 +191,12 @@ private:
     /// Segments one file holds before it rolls, which is also its preallocated slot count.
     [[nodiscard]] uint32_t segmentsPerFile() const;
 
-    /// Bytes currently on disk across every file. PRECONDITION: the caller holds `mutex`.
+    /// Row bytes only, framing subtracted -- what a FLUSH THRESHOLD is compared against.
+    /// PRECONDITION: the caller holds `mutex`.
+    [[nodiscard]] uint64_t dataBytesLocked() const;
+
+    /// The whole footprint, framing included -- what CAPACITY is compared against.
+    /// PRECONDITION: the caller holds `mutex`.
     [[nodiscard]] uint64_t storedBytesLocked() const;
 
     [[nodiscard]] Part& current() { return parts.back(); }
