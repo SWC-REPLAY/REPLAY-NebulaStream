@@ -10,4 +10,7 @@ truncated,no - the whole shipped file
 timestamp_sorted,True
 timestamp_distinct_deltas,2
 timestamp_delta_pattern,0x133334; 60000x66666
+timestamp_delta_min,0
+timestamp_delta_max,60000
+timestamp_delta_mean,19999.8
 timestamp_range,1000000000000 .. 1003999960000
