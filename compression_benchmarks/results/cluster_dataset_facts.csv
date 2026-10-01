@@ -1,0 +1,16 @@
+item,value
+dataset,google_cluster_monitoring
+source_file,large/cluster_monitoring/google-cluster-data-original_1G.csv
+csv_bytes,1527761977
+rows,18649057
+columns,12
+stored_row_width_bytes,65
+stored_bytes_total,1212188705
+truncated,no - the whole shipped file
+timestamp_sorted,True
+timestamp_distinct_deltas,4031
+timestamp_delta_pattern,"0x17468421; 1x513175; 23x7969; 21x7799; 22x7745; 24x7670; 20x7544; 19x7358; ...4023 more, counts exact"
+timestamp_delta_min,0
+timestamp_delta_max,60012
+timestamp_delta_mean,19.9
+timestamp_range,1742121731026 .. 1742492559590

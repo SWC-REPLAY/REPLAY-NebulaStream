@@ -28,9 +28,17 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 RESULTS = REPO / "compression_benchmarks/results"
 
-PAYLOAD = {"INT32": 4, "INT64": 8, "UINT32": 4, "UINT64": 8, "FLOAT32": 4, "FLOAT64": 8}
-# Every column carries a null indicator byte in the stored row, which is why a 4-byte INT32
-# occupies 5. The benchmark's row width is the sum of these, not of the payloads.
+# Matches DataType::getSizeInBytesWithoutNull. VARSIZED is deliberately absent: it is 16 bytes
+# there but the stores all count 4, and no store carries its payload at all, so a dataset with one
+# cannot be measured honestly.
+PAYLOAD = {"INT8": 1, "UINT8": 1, "BOOLEAN": 1, "CHAR": 1,
+           "INT16": 2, "UINT16": 2,
+           "INT32": 4, "UINT32": 4, "FLOAT32": 4,
+           "INT64": 8, "UINT64": 8, "FLOAT64": 8}
+
+# A NULLABLE column carries a one-byte indicator in the stored row, so a 4-byte INT32 occupies 5;
+# a NOT NULL one does not. getSizeInBytesWithNull is literally withoutNull + nullable, so this is
+# the whole of the difference -- and it is worth 12 bytes a row on a twelve-column schema.
 NULL_BYTES = 1
 DELTA_CAP = 4096          # distinct timestamp deltas tracked exactly before the count goes bounded
 
@@ -55,14 +63,14 @@ def decimals(token: str) -> int:
     return len(token.split(".", 1)[1]) if "." in token else 0
 
 
-def scan(csv_path: Path, names, types):
+def scan(csv_path: Path, names, types, ts_name="timestamp"):
     """One pass: extents, decimal-place histogram, timestamp order and delta shape."""
     n = len(names)
     mins = [None] * n
     maxs = [None] * n
     examples = [None] * n
     dec_hist = [Counter() for _ in names]
-    ts_i = names.index("timestamp") if "timestamp" in names else None
+    ts_i = names.index(ts_name) if ts_name in names else None
     prev_ts = None
     sorted_ts = True
     deltas = Counter()
@@ -80,7 +88,10 @@ def scan(csv_path: Path, names, types):
                 continue
             rows += 1
             for i, (tok, ty) in enumerate(zip(parts, types)):
-                v = float(tok) if ty.startswith("FLOAT") else int(tok)
+                if ty == "BOOLEAN":
+                    v = 1 if tok.strip().lower() in ("true", "1") else 0
+                else:
+                    v = float(tok) if ty.startswith("FLOAT") else int(tok)
                 if mins[i] is None or v < mins[i]:
                     mins[i] = v
                 if maxs[i] is None or v > maxs[i]:
@@ -131,6 +142,10 @@ def main() -> int:
     ap.add_argument("--schema", nargs="+", required=True, help="name:SQLTYPE, in column order")
     ap.add_argument("--prefix", required=True, help="output files are <prefix>_dataset_*.csv")
     ap.add_argument("--truncated", default="no - the whole shipped file")
+    ap.add_argument("--not-null", action="store_true",
+                    help="every column is NOT NULL, so no row carries null indicator bytes")
+    ap.add_argument("--timestamp-column", default="timestamp",
+                    help="which column the sortedness and delta analysis applies to")
     ap.add_argument("--tmp", type=Path, default=Path("/tmp"))
     args = ap.parse_args()
 
@@ -139,10 +154,16 @@ def main() -> int:
         print(f"no such file: {csv_path}", file=sys.stderr)
         return 1
     names, types = zip(*(s.split(":") for s in args.schema))
-    width = sum(PAYLOAD[t] + NULL_BYTES for t in types)
+    unknown = [t for t in types if t not in PAYLOAD]
+    if unknown:
+        print(f"unsupported types: {unknown}. VARSIZED cannot be measured; see the comment on "
+              f"PAYLOAD.", file=sys.stderr)
+        return 1
+    per_null = 0 if args.not_null else NULL_BYTES
+    width = sum(PAYLOAD[t] + per_null for t in types)
 
     print(f"scanning {csv_path.name} ({csv_path.stat().st_size:,} bytes)", flush=True)
-    st = scan(csv_path, list(names), list(types))
+    st = scan(csv_path, list(names), list(types), args.timestamp_column)
     rows = st["rows"]
     print(f"  {rows:,} rows, {st['malformed']} malformed", flush=True)
 
@@ -166,10 +187,18 @@ def main() -> int:
         pattern = (f"irregular - over {DELTA_CAP} distinct deltas, no repeating cycle; "
                    f"min {st['delta_min']}, max {st['delta_max']}, mean {st['delta_mean']:.1f}")
         ndeltas = f">{DELTA_CAP}"
-    else:
+    elif len(st["deltas"]) <= 12:
         pattern = "; ".join(f"{d}x{c}" for d, c in st["deltas"].most_common())
         ndeltas = str(len(st["deltas"]))
-    ts_i = list(names).index("timestamp") if "timestamp" in names else None
+    else:
+        # The histogram is complete, but a few thousand entries is a dump rather than a pattern --
+        # one run wrote a 34 KB cell. Show the head and say how much was left out.
+        top = st["deltas"].most_common(8)
+        pattern = ("; ".join(f"{d}x{c}" for d, c in top)
+                   + f"; ...{len(st['deltas']) - len(top)} more, counts exact; "
+                     f"min {st['delta_min']}, max {st['delta_max']}, mean {st['delta_mean']:.1f}")
+        ndeltas = str(len(st["deltas"]))
+    ts_i = list(names).index(args.timestamp_column) if args.timestamp_column in names else None
     facts = [
         ("dataset", args.dataset),
         ("source_file", args.source_file),
@@ -205,7 +234,7 @@ def main() -> int:
         for i, (nm, ty) in enumerate(zip(names, types)):
             hist = st["dec_hist"][i]
             dec = "/".join(f"{k}:{hist[k]}" for k in sorted(hist)) if hist else ""
-            w.writerow([args.dataset, nm, ty, PAYLOAD[ty], NULL_BYTES, PAYLOAD[ty] + NULL_BYTES,
+            w.writerow([args.dataset, nm, ty, PAYLOAD[ty], per_null, PAYLOAD[ty] + per_null,
                         distinct[i], f"{distinct[i] / rows * 100:.2f}",
                         fmt_num(st["mins"][i]), fmt_num(st["maxs"][i]), dec,
                         "yes" if ty.startswith("FLOAT") else "no", st["examples"][i]])
