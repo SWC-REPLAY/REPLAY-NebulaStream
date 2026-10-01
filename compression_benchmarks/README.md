@@ -59,8 +59,8 @@ rounds to 1.000 at three decimals. The workbook reports framing in **bytes** as 
 ./scripts/lossy_breakdown.py --test tests/solar_float_column.test --dataset debs_solar_panels \
                             --rows 42700000 --prefix solar
 
-./scripts/workbook_wind.py && ./scripts/workbook_wind_charts.py   # -> wind_analysis.xlsx
-./scripts/workbook_solar.py                                       # -> solar_analysis.xlsx
+./scripts/workbook.py wind     # -> wind_analysis.xlsx
+./scripts/workbook.py solar    # -> solar_analysis.xlsx
 ```
 
 `--filestore-total-mb` only for a **standalone** run over a large input. A chain must not have it:
@@ -79,32 +79,45 @@ interrupted run used to leave a sweep value behind and every later run would ado
 ## What the numbers do not say
 
 **`decode_s` no longer scales with unit size.** It used to: every tier re-decoded its whole unit on
-each 4 KB output buffer, so a 1 MB segment was decompressed 257 times. A decoded-unit buffer now
-lives on the read cursor and decode is flat at 85–95 s across a 64× change in unit size. Figures
-in git history from before that change are not comparable.
+each 4 KB output buffer. Measured on wind before and after, the speedup tracks the re-decode factor
+exactly -- 1.0× at a 16 KB unit, 25.3× at 4096 KB, 5.3× over all 35 configurations. Decode is now
+flat on both datasets. Figures in git history from before that change are not comparable.
+
+**One decode cell is still wrong, and it is not the codec.** FileStore at a 16384 KB unit on solar
+takes 113.6 s against a 93 s median. It copies the whole unsealed segment on every `read()` call
+and uses at most 4 KB of it; this dataset leaves a 4.4 MB tail at 16 MB segments against 223 KB at
+the other three sizes. Latent at every unit size. See `nes-store-manager/FileStoreUnsealedCopy.md`.
 
 **Chaining costs almost nothing on solar and a lot on wind** — 0.5% against 13–33%. That is not a
 property of chaining. FileStore's leftover is a fixed ~2.5 MB set by the 4 MB flush threshold,
 which is 6.6% of wind's 5.6 MB and 0.2% of solar's 1.2 GB.
 
 **Lossy read-back checksums cannot be pinned across a unit sweep.** Quantisation depends on group
-size, so a pinned checksum is wrong at every point but one. The solar tests use `TYPE Void` sinks
-and assert nothing; `wind_*.test` still pins them and therefore reports three failures at every
-non-default group size, silently, because the bench script never checks the exit status.
+size, so a pinned value is right at one sweep point and wrong at the rest. Both datasets now use
+`TYPE Void` for the three bounded-lossy read-backs. The wind writes and lossless read-backs keep
+their checksums, since those are byte-exact whatever the group size; the solar ones are all Void
+only because the full-scale checksum was never measured.
 
-**Timings are N=1 on solar.** Byte counts are deterministic and exact; seconds are single samples.
+**`bench.py` does not check systest's exit status.** It parses timings and nothing else. That is
+how three failing queries went unnoticed across four wind grid points before the Void change.
+
+**Timings are N=3 on wind and N=1 on solar.** Byte counts are deterministic and exact either way.
 
 ## Anomalies
 
-`solar_analysis.xlsx` has a sheet for these. Two were chased to the source:
+Both workbooks have an Anomalies sheet. Three were chased to the source:
 
-- **Bounded ratios fall as the unit grows** — confirmed. The quantiser is logarithmic, and
-  `bitWidth` follows the *group's* magnitude span, so a smaller group needs fewer bits.
-- **The 5% bound stores more than 2%** — explained, and it is not the quantiser. At 5% it picks a
-  7-bit width against 2%'s 9 and its packed output really is smaller; the zstd pass afterwards is
-  kept in 91% of groups at 2% and only 39% at 5%, which more than cancels it. The bit width is
-  chosen before zstd is considered, so a width that packs tightly but compresses badly is never
-  compared against a looser one that compresses well.
+- **Solar's bounded ratios fall as the unit grows; wind's zigzag.** Both confirmed. The quantiser
+  is logarithmic and `bitWidth` follows the *group's* magnitude span, so a smaller group needs
+  fewer bits. Wind's zigzag is its period-3 timestamp delta aligning to a byte boundary only at
+  some widths — an artifact of its regularity, which solar has none of.
+- **The 5% bound stores more than 2%** — explained, and not the quantiser. At 5% it picks a 7-bit
+  width against 2%'s 9 and its packed output really is smaller; the zstd pass is kept in ~92% of
+  groups at 2% and ~40% at 5%, which more than cancels it. **Both datasets agree to three decimal
+  places** (wind ×1.2148 / ×1.0125, solar ×1.2085 / ×1.0137), so it is a property of the
+  quantiser-to-zstd handoff rather than of any data. The width is chosen before zstd is considered,
+  at `LossyStore.cpp:314`.
+- **FileStore's decode outlier** — not interference. See the note linked above.
 
 ## Files
 
@@ -120,6 +133,8 @@ non-default group size, silently, because the bench script never checks the exit
 | `filestore_mechanics.test` | correctness, not timing: unsealed reads, pruning, rolling, chaining |
 | `repro_store_selection.test` | reproduction for the store-selection issue |
 
-`workbook_solar.py` builds its whole workbook in one openpyxl pass. `workbook_wind.py` predates
-openpyxl being available here, goes via Flat ODS, and needs `workbook_wind_charts.py` afterwards.
-Merging the wind pair into the solar shape is a worthwhile follow-up.
+`workbook.py` builds both, 16 sheets and 35 charts each, ending in a Summary of six charts drawn
+from the analysis sheets. One script rather than three: the machinery is shared and only a
+`DATASETS` entry differs -- units, configurations, row count, and the prose. That matters because
+the two experiments CONTRADICT each other on three of four axes, and a shared script makes each
+summary cite the other where they disagree instead of letting them drift apart.

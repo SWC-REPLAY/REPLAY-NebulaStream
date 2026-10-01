@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Assemble the SOLAR results into one annotated workbook.
+"""Assemble one experiment's results into an annotated workbook.
 
-    ./compression_benchmarks/scripts/workbook_solar.py
+    ./compression_benchmarks/scripts/workbook.py {wind|solar}
 
 Written with openpyxl throughout, unlike workbook_wind.py, which predates openpyxl being
 available here and goes via Flat ODS. This is the better shape of the two.
 
-Ten sheets. Three carry the measurements verbatim from the CSVs; the rest are analysis, and every
+Sixteen sheets. Four carry the measurements verbatim from the CSVs; the rest are analysis, and every
 analysis cell is a SUMIFS or an arithmetic formula against those three -- never a number this
 script computed. Correct a measurement, rebuild, and the analysis follows.
 
@@ -18,6 +18,7 @@ would predict, and one of them is unexplained; they are listed with their eviden
 reproduce, and what would settle them.
 """
 
+import argparse
 import csv
 import subprocess
 import sys
@@ -30,28 +31,62 @@ from openpyxl.utils import get_column_letter
 
 REPO = Path(__file__).resolve().parents[2]
 RESULTS = REPO / "compression_benchmarks/results"
-BOOK = RESULTS / "solar_analysis.xlsx"
+# Everything that differs between the two experiments. The machinery below is shared; only this
+# dict and the per-dataset prose at the bottom change. Keeping them apart is what stopped this
+# becoming a second copy of the script.
+MEM = ("MemoryStore", "MemoryStore", None)
+LOSSY = [("LossyStore lossless", "LossyStore", None), ("LossyStore 0.1%", "LossyStore", 0.1),
+         ("LossyStore 1%", "LossyStore", 1), ("LossyStore 5%", "LossyStore", 5)]
+CHAIN = [("-> CompressedStore", "MemoryStore->FileStore->CompressedStore", None),
+         ("-> LossyStore lossless", "MemoryStore->FileStore->LossyStore", None),
+         ("-> LossyStore 0.1%", "MemoryStore->FileStore->LossyStore", 0.1),
+         ("-> LossyStore 1%", "MemoryStore->FileStore->LossyStore", 1),
+         ("-> LossyStore 5%", "MemoryStore->FileStore->LossyStore", 5)]
 
-UNITS = [256, 1024, 4096, 16384]
-ROWS_IN, ROW_WIDTH = 42_700_000, 28
-BYTES_IN = ROWS_IN * ROW_WIDTH
+DATASETS = {
+    "wind": dict(
+        title="Wind turbine readings",
+        source="DEBS wind turbine readings",
+        rows=200_001, row_width=28, repeats=3,
+        units=[16, 64, 256, 1024, 4096],
+        # MemoryStore is in the standalone set here: 2048 buffers hold 8 MB, which covers 5.6 MB
+        # without the ring wrapping. On solar it could not and was dropped.
+        standalone=[MEM, ("FileStore", "FileStore", None),
+                    ("CompressedStore", "CompressedStore", None)] + LOSSY,
+        chained=CHAIN,
+    ),
+    "solar": dict(
+        title="Solar panel readings",
+        source="DEBS solar panel readings",
+        rows=42_700_000, row_width=28, repeats=1,
+        units=[256, 1024, 4096, 16384],
+        standalone=[("FileStore", "FileStore", None),
+                    ("CompressedStore", "CompressedStore", None)] + LOSSY,
+        chained=CHAIN,
+    ),
+}
 
-STANDALONE = [
-    ("FileStore", "FileStore", None),
-    ("CompressedStore", "CompressedStore", None),
-    ("LossyStore lossless", "LossyStore", None),
-    ("LossyStore 0.1%", "LossyStore", 0.1),
-    ("LossyStore 1%", "LossyStore", 1),
-    ("LossyStore 5%", "LossyStore", 5),
-]
-CHAINED = [
-    ("-> CompressedStore", "MemoryStore->FileStore->CompressedStore", None),
-    ("-> LossyStore lossless", "MemoryStore->FileStore->LossyStore", None),
-    ("-> LossyStore 0.1%", "MemoryStore->FileStore->LossyStore", 0.1),
-    ("-> LossyStore 1%", "MemoryStore->FileStore->LossyStore", 1),
-    ("-> LossyStore 5%", "MemoryStore->FileStore->LossyStore", 5),
-]
+# Set from --dataset in main(); every sheet reads these rather than a literal.
+D: dict = {}
+PREFIX = ""
+BOOK: Path = Path()
+UNITS: list = []
+ROWS_IN = ROW_WIDTH = BYTES_IN = 0
+STANDALONE: list = []
+CHAINED: list = []
 BOUNDS = [0.0, 0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+
+
+def select(name: str) -> None:
+    global D, PREFIX, BOOK, UNITS, ROWS_IN, ROW_WIDTH, BYTES_IN, STANDALONE, CHAINED
+    D = DATASETS[name]
+    PREFIX = name
+    BOOK = RESULTS / f"{name}_analysis.xlsx"
+    UNITS = D["units"]
+    ROWS_IN, ROW_WIDTH = D["rows"], D["row_width"]
+    BYTES_IN = ROWS_IN * ROW_WIDTH
+    STANDALONE, CHAINED = D["standalone"], D["chained"]
+
 
 ARIAL = "Arial"
 HDR = PatternFill("solid", fgColor="2F5496")
@@ -59,6 +94,224 @@ SUB = PatternFill("solid", fgColor="D9E2F3")
 WARN = PatternFill("solid", fgColor="FFF2CC")
 GREEN, GREY = "1F6F3D", "555555"
 THIN = Border(bottom=Side(style="thin", color="B0B0B0"))
+
+# Where each analysis sheet put the table the Summary charts from. Filled in as the
+# sheets are built, so a table moving does not silently point a summary chart at the
+# wrong rows.
+COORDS: dict = {}
+
+
+# ---------------------------------------------------------------------------------------------
+# Per-dataset prose. The two experiments disagree on three of four axes, so almost none of this
+# can be shared -- which is exactly why it lives here rather than inline in the sheet builders.
+# ---------------------------------------------------------------------------------------------
+
+_SHARED_CAVEATS = [
+    "Encode and decode are wall time from the systest runner on a DEBUG build, covering the whole "
+    "query path. Useful for comparing configurations against each other, not as store throughput.",
+    "The achieved error is the encoder's own accounting, not an independent check against the "
+    "source rows. It tracks the ceiling at every bound, which is reassuring but not proof.",
+]
+
+DATASETS["wind"].update(
+    notes=dict(
+        bytes="The whole span is 5.3 MiB for FileStore down to 0.64 MiB for LossyStore at 5% and a "
+              "16 KB unit. Small in absolute terms, which is the point: on a 5.6 MB input the "
+              "RATIO is the interesting figure and the byte difference is not a capacity decision.",
+        disk="Here the two charts genuinely differ, unlike on solar. At a 16 KB unit LossyStore "
+             "pays 10.76% of the file in framing, so the on-disk ordering is not the same as the "
+             "encoded-size ordering. This is the dataset where framing changes an answer.",
+        chain_bytes="FileStore holds 367 KB, a flat 6.6% of the stream at every unit size, because "
+                    "its flush threshold is a fixed 4 MB against 5.6 MB of data. That is the whole "
+                    "of what chaining costs here, and on this input it is a lot.",
+        encode="Flat across the sweep and nearly identical across configurations. At 200k rows the "
+               "write is dominated by CSV parsing and the query engine, not by compressing.",
+        decode="Flat at 0.38-0.45 s across a 256x change in unit size. It was NOT flat before the "
+               "decoded-unit buffer was added to the read cursor: at 4096 KB LossyStore took "
+               "11.34 s, so this is a 25x improvement at the largest unit and 1.0x at the "
+               "smallest, tracking the re-decode factor exactly.",
+        throughput="Around 12-14 MiB/s either way, which is the query engine's per-buffer cost on "
+                   "a debug build rather than anything about storage. Every store lands in the "
+                   "same band because the codec is roughly 2% of the time.",
+        chain_time="Within noise of the standalone figures. Passing data through MemoryStore and "
+                   "FileStore on the way to the tail costs no measurable time, even though on this "
+                   "dataset it costs a great many bytes.",
+    ),
+    summary=[
+        ("1.  WHAT THE UNIT SIZE BUYS",
+         "Does a bigger granule compress better?",
+         "Not reliably -- LossyStore ZIGZAGS: 4.641, 3.736, 4.101, 3.588, 4.496 as the unit grows. "
+         "The swings are 15-25% and 16 KB happens to win. The timestamp column uses ForBitpack, its "
+         "bit width tracks the group's span, and this data's period-3 delta pattern aligns to a byte "
+         "boundary only at some widths. It is an artifact of wind's regularity and does NOT appear "
+         "on solar, where the same curves fall monotonically. Do not read 16 KB as a recommendation.",
+         ("line", "Compression ratio by unit size (standalone)", "ratio", "unit size (KB)", "ratio", True)),
+        ("2.  WHAT IT COSTS IN BYTES",
+         "Is the ratio difference worth anything in absolute terms?",
+         "Barely, on this input. The whole span is 5.3 MiB down to 0.64 MiB. That is why wind is the "
+         "wrong dataset for a capacity argument and the right one for a codec comparison -- 200k rows "
+         "is small enough that per-unit framing still shows, which is the next chart.",
+         ("bar", "Encoded size by unit size (standalone, MiB)", "MiB", "unit size (KB)", "bytes", True)),
+        ("3.  WHERE THE SAVING COMES FROM",
+         "Why have a lossy tier?",
+         "producedPower is 40% distinct and the single largest thing in a lossless store. The bound "
+         "reaches it and nothing else -- the two INT32 keys and the UINT64 timestamp are encoded "
+         "losslessly whatever it says -- so every byte the bound saves comes out of one column.",
+         ("line", "Float column: ratio against the accuracy bound", "x vs unencoded FLOAT64",
+          "accuracy bound (%)", "float", False)),
+        ("4.  THE ONE ANOMALY",
+         "The 5% bound stores MORE than the 2% bound. Is the quantiser broken?",
+         "No, and this is the interesting part: the SAME inversion appears on solar, to three decimal "
+         "places. Wind zstd x1.2148 at 2% and x1.0125 at 5%; solar x1.2085 and x1.0137. Two datasets "
+         "with nothing in common. At 9 bits the packing is loose relative to the codes' entropy so "
+         "zstd finds slack; at 7 bits it is near-entropy and finds none. The width is chosen BEFORE "
+         "zstd is considered, at LossyStore.cpp:314. That makes it a property of the pipeline, not "
+         "of either dataset.",
+         ("bar", "Bits per value removed by the zstd pass", "bits per value", "accuracy bound (%)",
+          "zstd", False)),
+        ("5.  WHAT THE UNIT SIZE COSTS IN TIME",
+         "If small units sometimes win on size, do they cost more to read?",
+         "No -- decode is flat at 0.38-0.45 s across the sweep. It was not: before the decoded-unit "
+         "buffer, LossyStore at 4096 KB took 11.34 s against 0.45 s now, a 25x difference, while the "
+         "16 KB point did not move at all. The speedup tracks the re-decode factor, which is the "
+         "evidence the mechanism was understood and not just made faster.",
+         ("line", "Decode time by unit size (standalone)", "seconds", "unit size (KB)", "decode", True)),
+        ("6.  WHAT THE TIERING COSTS",
+         "A chain keeps some data uncompressed. How much does that give away?",
+         "A great deal here: chained ratios are 0.87 of standalone for CompressedStore and 0.68-0.77 "
+         "for LossyStore, so 13-32%. FileStore holds a flat 6.6%. On SOLAR the identical code gives "
+         "0.995-1.001. The flush threshold is a fixed 4 MB, so the leftover is ~2.5 MB either way -- "
+         "6.6% of wind's 5.6 MB and 0.2% of solar's 1.2 GB. The cost of tiering is the threshold "
+         "relative to the dataset, not a property of chaining.",
+         ("bar", "Chained ratio as a fraction of standalone", "x", "unit size (KB)", "chain", True)),
+    ],
+    findings=[
+        ("Wind is an easy target", "26 distinct producer IDs and exactly two distinct timestamp "
+         "deltas. Best ratio 8.33 against solar's 3.31 on identical code. Quote it as a best case."),
+        ("Framing is real at this size", "LossyStore pays 10.76% of the file at a 16 KB unit, "
+         "against at most 0.30% anywhere on solar. This is the dataset where the unit size has to "
+         "be argued on disk cost and not only on ratio."),
+        ("CompressedStore is flat", "3.166 to 3.270 across the sweep. zstd does not care about the "
+         "block size on either dataset."),
+        ("MemoryStore is in this set and not in solar's", "2048 buffers hold 8 MB, enough for "
+         "5.6 MB. On solar the same ring would have wrapped about 150 times."),
+    ],
+    actions=[
+        ("Choose the bit width with zstd in the loop", "LossyStore.cpp:314 keeps whichever of "
+         "packed or zstd(packed) is smaller, but the width is fixed before that comparison. Now "
+         "known to affect both datasets identically, so it is not a one-dataset patch."),
+        ("Pin the write checksums again", "The three bounded-lossy read-backs use Void sinks "
+         "because their checksum moves with the group size. The writes and the lossless read-backs "
+         "are stable and still pinned."),
+        ("Make bench.py check systest's exit status", "It only parses timings, which is how three "
+         "failing queries went unnoticed across four grid points."),
+    ],
+    caveats=["Timings are N=3 medians here. Byte counts are deterministic and exact."] + _SHARED_CAVEATS,
+)
+
+DATASETS["solar"].update(
+    notes=dict(
+        bytes="The whole span is 1,140 MiB for FileStore down to 344 MiB for LossyStore at 5% and a "
+              "256 KB unit -- 796 MiB, which is the actual decision. The ratio chart says 1.00 to "
+              "3.31 for the same thing and cannot tell you whether that matters.",
+        disk="Visually identical to the chart above, which IS the finding: at 1.2 GB framing is "
+             "under 0.3% everywhere and never changes an answer. On wind at a 16 KB unit it reached "
+             "10.8% and did.",
+        chain_bytes="FileStore holds 2.4 MiB against totals of 344 to 690 MiB. That is the entire "
+                    "cost of chaining at this scale, and why the chained and standalone ratios "
+                    "agree to three decimals. The bars step up at 16384 KB because the leftover is "
+                    "one segment and the segment got bigger.",
+        encode="The 256 KB column is 12-19% slower than everything right of it, consistently across "
+               "all six configurations -- 4,561 seal operations against 72. Past 1024 KB it is "
+               "flat. The configurations barely differ from each other: compressing is not where "
+               "the time goes.",
+        decode="Flat at 85-95 s across a 64x change in unit size, which is the decoded-unit buffer "
+               "working at scale. One cell stands out, FileStore at 16384 KB at 113.6 s. That is "
+               "NOT interference: FileStore copies the whole unsealed segment on every read() call, "
+               "and this dataset leaves a 4.4 MB tail at 16 MB segments against 223 KB at the other "
+               "three sizes. See FileStoreUnsealedCopy.md.",
+        throughput="Encode 7-9 MiB/s, decode 12-13 MiB/s. Far below disk speed because this is a "
+                   "debug build, so compare configurations with these and do not quote them as "
+                   "store throughput.",
+        chain_time="126-133 s encode and 84-90 s decode, within noise of standalone. Passing data "
+                   "through two tiers on the way to the tail costs no measurable time, just as it "
+                   "costs almost no bytes.",
+    ),
+    summary=[
+        ("1.  WHAT THE UNIT SIZE BUYS",
+         "Does a bigger granule compress better, as it normally would?",
+         "No -- the opposite, and monotonically. Every bounded line slopes DOWN as the unit grows. "
+         "The quantiser is logarithmic and its bit width follows the GROUP's magnitude span, so a "
+         "smaller group needs fewer bits (confirmed in Quantize.cpp, not inferred). CompressedStore "
+         "is the flat line. Advice for this data: pick the smallest unit, because framing never "
+         "pushes back at 1.2 GB. Note WIND does the opposite and zigzags.",
+         ("line", "Compression ratio by unit size (standalone)", "ratio", "unit size (KB)", "ratio", True)),
+        ("2.  WHAT IT COSTS IN BYTES",
+         "A ratio of 1.00 to 3.31 -- is that difference worth anything?",
+         "796 MiB, which is the whole decision. FileStore writes 1,140 MiB; LossyStore at 5% and a "
+         "256 KB unit writes 344 MiB. The ratio chart above cannot tell you that, which is why both "
+         "are here. Framing is under 0.3% everywhere and changes none of it.",
+         ("bar", "Encoded size by unit size (standalone, MiB)", "MiB", "unit size (KB)", "bytes", True)),
+        ("3.  WHERE THE SAVING ACTUALLY COMES FROM",
+         "Why have a lossy tier at all?",
+         "Because losslessly this data barely compresses. producedPower is 51% of a lossless store "
+         "and is kept RAW at 61.2 bits for a 64-bit value -- a ratio of 1.046. It is 97.9% distinct "
+         "at six decimal places, so there is no redundancy to find. The first bound, 0.01%, takes it "
+         "to 3.95x on its own; everything out to 20% only reaches 11.24x. The curve flattens because "
+         "by then the float is 8.9% of the store and the other three columns cannot be quantised.",
+         ("line", "Float column: ratio against the accuracy bound", "x vs unencoded FLOAT64",
+          "accuracy bound (%)", "float", False)),
+        ("4.  THE ONE ANOMALY",
+         "The 5% bound stores MORE than the 2% bound. Is the quantiser broken?",
+         "No. At 5% it picks a 7-bit width against 2%'s 9 and its packed output really is smaller. "
+         "The zstd pass inverts it -- this chart is bits zstd removed, and the bar at 2% is fourteen "
+         "times its neighbour at 5%. WIND shows the same multipliers to three decimal places, so it "
+         "is a property of the pipeline and not of this data. The width is chosen BEFORE zstd is "
+         "considered, at LossyStore.cpp:314. That is the fix.",
+         ("bar", "Bits per value removed by the zstd pass", "bits per value", "accuracy bound (%)",
+          "zstd", False)),
+        ("5.  WHAT THE UNIT SIZE COSTS IN TIME",
+         "If small units compress better, do they cost more to read?",
+         "No -- decode is flat at 85-95 s across a 64x change, so nothing argues against small units. "
+         "Before the decoded-unit buffer, every tier re-decoded its whole unit per 4 KB output "
+         "buffer. The one spike, FileStore at 16384 KB, is a separate defect: it copies the entire "
+         "unsealed segment on every read call, and this dataset leaves a 4.4 MB tail at 16 MB "
+         "segments. Written up in FileStoreUnsealedCopy.md.",
+         ("line", "Decode time by unit size (standalone)", "seconds", "unit size (KB)", "decode", True)),
+        ("6.  WHAT THE TIERING COSTS",
+         "A three-tier chain keeps some data uncompressed. How much does that give away?",
+         "Here, nothing measurable -- 0.995 to 1.001 of the standalone ratio, with FileStore holding "
+         "0.35-0.93% of the stream raw. On WIND the same comparison cost 13-32%. The code is "
+         "identical; the flush threshold is a fixed 4 MB, so the leftover is ~2.5 MB either way, "
+         "6.6% of wind's 5.6 MB and 0.2% of solar's 1.2 GB.",
+         ("bar", "Chained ratio as a fraction of standalone", "x", "unit size (KB)", "chain", True)),
+    ],
+    findings=[
+        ("The dataset decides, not the codec", "Best ratio 3.31 here against wind's 8.33 on "
+         "identical code. Any ratio quoted without naming the data is close to meaningless."),
+        ("Framing stops mattering at this scale", "Under 0.3% everywhere against wind's 10.8%. At "
+         "1.2 GB nothing pushes back against small units."),
+        ("There is a hard ceiling on what accuracy can buy", "producerId (144 MB) and ts (150 MB) "
+         "are not floats, so no bound reaches them -- about 310 MB is untouchable. By 20% the float "
+         "is 8.9% of the store and widening further spends accuracy on a shrinking fraction."),
+        ("No MemoryStore in this set", "Standing alone it holds about 8 MB, so 1.2 GB would have "
+         "wrapped the ring roughly 150 times and the row would have measured an evicting store."),
+    ],
+    actions=[
+        ("Choose the bit width with zstd in the loop", "LossyStore.cpp:314. Now confirmed to affect "
+         "wind identically, so it is a pipeline fix and not a one-dataset patch."),
+        ("Fix FileStore's unsealed-segment copy", "It copies the whole active segment on every "
+         "read() call and uses at most 4 KB of it. Latent at every unit size; this dataset only "
+         "exposes it at 16384 KB. Written up in FileStoreUnsealedCopy.md with a proposed fix."),
+        ("Re-run the three chained rows that edge above standalone", "Up to +0.12% at 4096 KB, "
+         "which is the wrong sign. N=1, so one re-run settles it."),
+        ("Pin the write checksum", "Every sink here is Void because the full-scale checksum was "
+         "unknown when the tests were written. It is knowable now from any completed run."),
+    ],
+    caveats=["Timings are N=1. Byte counts are deterministic and exact; seconds are single samples.",
+             "Every sink in the solar tests is Void, so they assert nothing. What catches a broken "
+             "run is the per-tier byte count read off the store files."] + _SHARED_CAVEATS,
+)
 
 
 def f_title(ws, r, text, size=14):
@@ -234,7 +487,7 @@ def sheet_dataset(wb):
                       "disk-backed sort, extents and decimal places in one streaming pass.")
     r += 1
     r = f_section(ws, r, "FACTS", 2)
-    for row in csv.DictReader((RESULTS / "solar_dataset_facts.csv").open()):
+    for row in csv.DictReader((RESULTS / f"{PREFIX}_dataset_facts.csv").open()):
         ws.cell(row=r, column=1, value=row["item"]).font = Font(name=ARIAL, bold=True)
         v = row["value"]
         try:
@@ -248,7 +501,7 @@ def sheet_dataset(wb):
         r += 1
     r += 1
     r = f_section(ws, r, "PER COLUMN", 13)
-    cols = list(csv.DictReader((RESULTS / "solar_dataset_description.csv").open()))
+    cols = list(csv.DictReader((RESULTS / f"{PREFIX}_dataset_description.csv").open()))
     heads = list(cols[0])
     r = f_head(ws, r, heads)
     for row in cols:
@@ -292,6 +545,7 @@ def sheet_ratios(wb, S, C):
     f1, l1 = matrix(ws, r, "STANDALONE  -  ratio_on_data (bytes_in / data_out)", STANDALONE,
                     "Standalone", S, "ratio_on_data",
                     subtitle="One store, no tiering. Higher is better.")
+    COORDS["ratio"] = (ws, f1, l1, len(STANDALONE))
     add_chart(ws, "line", "Standalone: compression ratio by unit size", "ratio",
               len(STANDALONE), f1, "H3")
     r = l1 + 2
@@ -389,6 +643,7 @@ def sheet_chaining(wb, S, C):
             c = ws.cell(row=head2 + i, column=j, value=f"=IFERROR(({num})/({den}),0)")
             c.font, c.number_format = Font(name=ARIAL, color=GREEN), "0.000"
     add_chart(ws, "bar", "Chained ratio as a fraction of standalone", "x", len(CHAINED), head2, "H24")
+    COORDS["chain"] = (ws, head2, head2 + len(CHAINED) - 1, len(CHAINED))
     r = head2 + len(CHAINED) + 1
     r = chart_notes(ws, r,
         "How much of a single store's compression the three-tier chain keeps.",
@@ -446,7 +701,7 @@ def sheet_accuracy(wb, S, C):
                       "control: if a bound moved them, something would be wrong.")
     head3 = f_head(ws, r, ["bound %", "bytes", "bytes/row", "vs lossless", "codec",
                            "worst error", "error ceiling"])
-    fc = [x for x in csv.DictReader((RESULTS / "solar_float_column.csv").open())
+    fc = [x for x in csv.DictReader((RESULTS / f"{PREFIX}_float_column.csv").open())
           if x["column"] == "producedPower"]
     for i, x in enumerate(fc):
         rr = head3 + i
@@ -582,6 +837,7 @@ def sheet_float_detail(wb, F):
     ch.set_categories(Reference(ws, min_col=1, min_row=head, max_row=last))
     ws.add_chart(ch, "J3")
 
+    COORDS["float"] = (ws, head, last, 4)       # column 4 = x vs FLOAT64
     ch2 = LineChart()
     ch2.title = "producedPower: bits stored per value"
     ch2.y_axis.title, ch2.x_axis.title = "bits per value", "accuracy bound (%)"
@@ -673,7 +929,8 @@ def sheet_stages(wb, B):
 
     r = f_section(ws, r, "BITS PER VALUE AT EACH STAGE, AND WHAT EACH STAGE MULTIPLIED", 8)
     head = f_head(ws, r, ["bound %", "raw", "after quantise+bitpack", "after zstd",
-                          "x from quantise+bitpack", "x from zstd", "final x", "zstd kept"])
+                          "bits zstd removed", "x from quantise+bitpack", "x from zstd",
+                          "final x", "zstd kept"])
     first = head
     for i, b in enumerate(BOUNDS):
         rr = head + i
@@ -682,18 +939,24 @@ def sheet_stages(wb, B):
         for col, key, fmt in (
                 (3, "bitpacked_bits_per_value", "0.0000"),
                 (4, "zstd_bits_per_value", "0.0000"),
-                (5, "x_from_quantise_bitpack", "0.0000"),
-                (6, "x_from_zstd", "0.0000"),
-                (7, "final_ratio", "0.0000"),
-                (8, "zstd_kept_share", "0.0%")):
+                (6, "x_from_quantise_bitpack", "0.0000"),
+                (7, "x_from_zstd", "0.0000"),
+                (8, "final_ratio", "0.0000"),
+                (9, "zstd_kept_share", "0.0%")):
             c = ws.cell(row=rr, column=col, value=f"={b_sumifs(B, key, b)}")
             c.font, c.number_format = Font(name=ARIAL, color=GREEN), fmt
+        d = ws.cell(row=rr, column=5, value=f"=C{rr}-D{rr}")
+        d.font, d.number_format = Font(name=ARIAL, color=GREEN), "0.0000"
         if b in (2.0, 5.0):
-            for col in range(1, 9):
+            for col in range(1, 10):
                 ws.cell(row=rr, column=col).fill = WARN
     last = head + len(BOUNDS) - 1
 
-    def by_bound(title, y, cols, anchor, kind="line", gap=None):
+    def by_bound(title, y, cols, anchor, kind="line", gap=None, skip_lossless=False):
+        """skip_lossless drops the first point. Lossless sits at 64 bits and everything else is
+        between 4.7 and 16, so including it flattens the whole interesting range into the bottom
+        of the axis and the 2%-to-5% step becomes invisible."""
+        first_row = head + 1 if skip_lossless else head
         ch = LineChart() if kind == "line" else BarChart()
         if kind == "bar":
             ch.type, ch.gapWidth = "col", gap or 40
@@ -702,20 +965,37 @@ def sheet_stages(wb, B):
         for col in cols:
             ch.add_data(Reference(ws, min_col=col, min_row=head - 1, max_row=last),
                         titles_from_data=True)
-        ch.set_categories(Reference(ws, min_col=1, min_row=head, max_row=last))
+            if skip_lossless:
+                ch.series[-1].val.numRef.f = (
+                    f"'{ws.title}'!${get_column_letter(col)}${first_row}:"
+                    f"${get_column_letter(col)}${last}")
+        ch.set_categories(Reference(ws, min_col=1, min_row=first_row, max_row=last))
         ws.add_chart(ch, anchor)
 
-    by_bound("Bits per value after each stage", "bits per value", [3, 4], "J3")
-    by_bound("What each stage multiplied the ratio by", "x", [5, 6], "J22")
-    by_bound("Share of groups where zstd was kept", "share of groups", [8], "J41", kind="bar")
+    by_bound("Bits per value after each stage (lossless omitted, see note)", "bits per value",
+             [3, 4], "J3", skip_lossless=True)
+    by_bound("Bits per value removed by the zstd pass", "bits per value",
+             [5], "J22", kind="bar", skip_lossless=True)
+    COORDS["zstd"] = (ws, head + 1, last, 5)    # column 5 = bits removed, lossless dropped
+    by_bound("What each stage multiplied the ratio by", "x", [6, 7], "J41")
+    by_bound("Share of groups where zstd was kept", "share of groups", [9], "J60", kind="bar")
 
     r = last + 2
     r = chart_notes(ws, r,
-        "The same nine bounds seen three ways: the bits a value costs after packing and after zstd, "
-        "the multiplier each stage contributed, and how often zstd was worth keeping at all.",
-        "THE LOSSY STAGE HAS NO ANOMALY IN IT. 'x from quantise+bitpack' climbs 1.00, 3.99, 5.10, 6.31, "
-        "7.00, 7.85, 9.06, 10.54, 12.58 -- monotonic, no reversal anywhere. Every irregularity in the "
-        "final ratio comes from the other line.")
+        "The nine bounds seen four ways: bits per value after each stage, how many bits the zstd pass "
+        "removed, the multiplier each stage contributed, and how often zstd was worth keeping.",
+        "WHICH LINE BUMPS MATTERS. 'after quantise+bitpack' falls 16.03, 12.54, 10.15, 9.15, 8.15, "
+        "7.06, 6.07, 5.09 -- no reversal anywhere. The bump at 2%->5% is on 'AFTER ZSTD', which goes "
+        "6.7455 then back up to 6.9686. The lossy stage is not what misbehaves.")
+    r = f_note(ws, r, "THE LOSSLESS POINT IS LEFT OFF THE FIRST TWO CHARTS. It sits at 64 bits while "
+                      "everything else is between 4.7 and 16, so including it squeezes the whole "
+                      "interesting range into the bottom of the axis, puts the two lines almost on top "
+                      "of each other, and makes a 0.22-bit step impossible to see. It is still in the "
+                      "table above, at 64.0000 packed and 60.1835 stored.")
+    r = f_note(ws, r, "THE SECOND CHART IS THE CLEAREST VIEW OF ANOMALY 2. Bits removed by zstd: 0.85, "
+                      "0.14, 0.11, 0.04, then a spike to 1.41 at 2%, then a collapse to 0.10 at 5%, then "
+                      "0.72 and 0.40. A single bar twelve times taller than its neighbour, and the whole "
+                      "inversion lives in it.")
     r = f_note(ws, r, "ZSTD IS THE ERRATIC STAGE: x1.063, 1.056, 1.011, 1.011, 1.004, 1.209, 1.014, 1.134, "
                       "1.085. It swings between contributing nothing and contributing 21%, with no trend "
                       "in the bound at all.")
@@ -751,7 +1031,39 @@ def sheet_stages(wb, B):
     return ws
 
 
-ANOMALIES = [
+DATASETS["wind"]["anomalies"] = [
+    dict(n=1, title="LossyStore's ratio zigzags with unit size instead of trending",
+         status="Explained, and absent on solar",
+         what="Lossless goes 4.641, 3.736, 4.101, 3.588, 4.496 across 16 to 4096 KB. Swings of "
+              "15-25% with no direction. All four bounded lines do the same.",
+         why_odd="A ratio should move smoothly with the granule, as CompressedStore's does "
+                 "(3.166 to 3.270, flat).",
+         hypothesis="The timestamp column uses ForBitpack and its bit width tracks the group's "
+                    "span. This data has a period-3 delta pattern, so the span lands on a byte "
+                    "boundary only at certain group sizes. An artifact of wind's regularity: solar "
+                    "has no repeating delta and its curves fall monotonically instead.",
+         settle="Log the chosen bit width per group against group size, as for the solar anomaly. "
+                "The prediction is that it steps rather than climbs.",
+         matters="16 KB winning here is not a recommendation. It is the dataset, and the advice "
+                 "inverts on solar."),
+    dict(n=2, title="The 5% bound stores MORE than the 2% bound",
+         status="EXPLAINED, and identical on solar",
+         what="zstd multiplies by 1.2148 at 2% and only 1.0125 at 5%, kept in 93.0% of groups "
+              "against 43.0%. Solar gives 1.2085 and 1.0137, kept 91.3% and 39.1%.",
+         why_odd="A wider error allowance can always fall back on the tighter encoding, so it "
+                 "should never cost more.",
+         hypothesis="Confirmed. The quantiser is correct -- at 5% it picks a 7-bit width against "
+                    "2%'s 9 and packs smaller. The zstd pass afterwards gives it back: at 9 bits "
+                    "the packing is loose relative to the codes' entropy and zstd finds slack; at "
+                    "7 bits it is near-entropy and finds none.",
+         settle="Settled. That two datasets with nothing in common agree to three decimal places "
+                "makes it a property of the quantiser-to-zstd handoff, not of any data.",
+         matters="LossyStore.cpp:314 keeps whichever of packed or zstd(packed) is smaller, but the "
+                 "bit width is fixed before that comparison. Trying both widths and keeping the "
+                 "smaller result would fix it, and it would help both datasets."),
+]
+
+DATASETS["solar"]["anomalies"] = [
     dict(n=1, title="Bounded ratios get WORSE as the unit grows",
          status="CONFIRMED in the source — mechanism identified",
          what="All three bounded LossyStore configurations fall monotonically with unit size. At 5%: "
@@ -833,7 +1145,7 @@ def sheet_anomalies(wb):
     r = f_note(ws, r, "Read this before quoting any single number. Anomaly 2 is unexplained and could be a "
                       "defect; the others are understood or benign.")
     r += 1
-    for a in ANOMALIES:
+    for a in D["anomalies"]:
         r = f_section(ws, r, f"ANOMALY {a['n']}   —   {a['title']}", 2)
         st = ws.cell(row=r, column=1, value="STATUS")
         st.font = Font(name=ARIAL, bold=True, size=9)
@@ -867,6 +1179,194 @@ def sheet_anomalies(wb):
     return ws
 
 
+def sheet_bytes(wb, S, C):
+    """The same sweep in bytes rather than ratios. A ratio hides scale."""
+    ws = wb.create_sheet("A7 Bytes by Unit")
+    ws.column_dimensions["A"].width = 26
+    for c in "BCDEF":
+        ws.column_dimensions[c].width = 13
+    r = f_title(ws, 1, "What each configuration actually costs, in bytes")
+    r = f_note(ws, r, f"Input is {BYTES_IN:,} B. Tables are MiB, because a ratio does not tell you "
+                      f"how much disk you need.")
+    r += 1
+
+    def mib_block(top, heading, configs, sheet, cols, key, subtitle=None):
+        rr = f_section(ws, top, heading, width=1 + len(UNITS))
+        if subtitle:
+            rr = f_note(ws, rr, subtitle)
+        rr = f_head(ws, rr, ["Configuration"] + [f"{u} KB" for u in UNITS])
+        first = rr
+        for i, (label, order, bound) in enumerate(configs):
+            ws.cell(row=first + i, column=1, value=label).font = Font(name=ARIAL)
+            for j, u in enumerate(UNITS, start=2):
+                inner = sumifs(sheet, key, cols, order, bound, u)[1:]
+                c = ws.cell(row=first + i, column=j, value=f"=({inner})/1048576")
+                c.font, c.number_format = Font(name=ARIAL, color=GREEN), "#,##0.0"
+        return first, first + len(configs) - 1
+
+    f1, l1 = mib_block(r, "STANDALONE  -  data_out, the encoded data alone (MiB)", STANDALONE,
+                       "Standalone", S, "data_out",
+                       subtitle="Framing excluded. What the codec produced.")
+    add_chart(ws, "bar", "Standalone: encoded size (MiB)", "MiB", len(STANDALONE), f1, "H3")
+    COORDS["bytes"] = (ws, f1, l1, len(STANDALONE))
+    r = l1 + 2
+    r = chart_notes(ws, r,
+        "Bytes on disk for each configuration at each unit size, framing excluded.",
+        D["notes"]["bytes"])
+    r += 1
+
+    f2, l2 = mib_block(r, "STANDALONE  -  disk_bytes, the file as written (MiB)", STANDALONE,
+                       "Standalone", S, "disk_bytes",
+                       subtitle="Framing included: header, preallocated table, per-unit descriptors.")
+    add_chart(ws, "bar", "Standalone: file size on disk (MiB)", "MiB", len(STANDALONE), f2, "H24")
+    r = l2 + 2
+    r = chart_notes(ws, r,
+        "The same configurations counting everything the store writes.",
+        D["notes"]["disk"])
+    r += 1
+
+    f3, l3 = mib_block(r, "CHAINED  -  total across all tiers (MiB)", CHAINED,
+                       "Chained", C, "data_out")
+    add_chart(ws, "bar", "Chained: total encoded size (MiB)", "MiB", len(CHAINED), f3, "H45")
+    f4, l4 = mib_block(l3 + 2, "CHAINED  -  what FileStore still holds, uncompressed (MiB)",
+                       CHAINED, "Chained", C, "FileStore_data")
+    add_chart(ws, "bar", "Chained: bytes FileStore keeps raw (MiB)", "MiB", len(CHAINED), f4, "H66")
+    r = l4 + 2
+    r = chart_notes(ws, r,
+        "The two halves of a chained store: everything it wrote, and the part that never reached "
+        "a compressing tier.",
+        D["notes"]["chain_bytes"])
+    return ws
+
+
+def sheet_timing(wb, S, C):
+    """Encode and decode, in seconds and as a rate."""
+    ws = wb.create_sheet("A8 Timing")
+    ws.column_dimensions["A"].width = 26
+    for c in "BCDEF":
+        ws.column_dimensions[c].width = 13
+    r = f_title(ws, 1, "Time, and what it buys")
+    r = f_note(ws, r, f"N={D['repeats']}. Byte counts elsewhere are deterministic and exact; these "
+                      f"are wall time from the systest runner and cover the whole query path, not "
+                      f"just the codec.")
+    r += 1
+
+    f1, l1 = matrix(ws, r, "STANDALONE  -  encode seconds", STANDALONE,
+                    "Standalone", S, "encode_s", fmt="0.000")
+    add_chart(ws, "line", "Standalone: encode time", "seconds", len(STANDALONE), f1, "H3")
+    r = l1 + 2
+    r = chart_notes(ws, r, "Wall time to write the whole input through each configuration.",
+                    D["notes"]["encode"])
+    r += 1
+
+    f2, l2 = matrix(ws, r, "STANDALONE  -  decode seconds", STANDALONE,
+                    "Standalone", S, "decode_s", fmt="0.000")
+    add_chart(ws, "line", "Standalone: decode time", "seconds", len(STANDALONE), f2, "H24")
+    COORDS["decode"] = (ws, f2, l2, len(STANDALONE))
+    r = l2 + 2
+    r = chart_notes(ws, r, "Wall time to read it all back.", D["notes"]["decode"])
+    r += 1
+
+    r = f_section(ws, r, "THROUGHPUT  -  MiB per second, standalone", 1 + len(UNITS))
+    r = f_note(ws, r, f"{BYTES_IN:,} B over the times above.")
+    for label, src_first in (("encode", f1), ("decode", f2)):
+        r = f_note(ws, r, f"{label}:")
+        head = f_head(ws, r, ["Configuration"] + [f"{u} KB" for u in UNITS])
+        for i, (cfg, _o, _b) in enumerate(STANDALONE):
+            ws.cell(row=head + i, column=1, value=cfg).font = Font(name=ARIAL)
+            for j in range(len(UNITS)):
+                col = get_column_letter(2 + j)
+                c = ws.cell(row=head + i, column=2 + j,
+                            value=f"=IFERROR({BYTES_IN}/1048576/{col}{src_first + i},0)")
+                c.font, c.number_format = Font(name=ARIAL, color=GREEN), "#,##0.0"
+        add_chart(ws, "bar", f"Standalone: {label} throughput (MiB/s)", "MiB/s",
+                  len(STANDALONE), head, "H45" if label == "encode" else "H66")
+        r = head + len(STANDALONE) + 1
+    r = chart_notes(ws, r, "The same two measurements as a rate.", D["notes"]["throughput"])
+    r += 1
+
+    f3, l3 = matrix(ws, r, "CHAINED  -  encode seconds", CHAINED, "Chained", C, "encode_s",
+                    fmt="0.000")
+    add_chart(ws, "line", "Chained: encode time", "seconds", len(CHAINED), f3, "H87")
+    f4, l4 = matrix(ws, l3 + 2, "CHAINED  -  decode seconds", CHAINED, "Chained", C, "decode_s",
+                    fmt="0.000")
+    add_chart(ws, "line", "Chained: decode time", "seconds", len(CHAINED), f4, "H108")
+    r = l4 + 2
+    r = chart_notes(ws, r, "The same two through the full three-tier chain.", D["notes"]["chain_time"])
+    return ws
+
+
+def _summary_chart(target, r, kind, title, y_title, x_title, source_key, by_rows, log=False):
+    """A chart ON the Summary sheet, drawing from a table on another sheet, so no number is
+    retyped and correcting a measurement moves the summary with everything else."""
+    src, first, last, n = COORDS[source_key]
+    ch = LineChart() if kind == "line" else BarChart()
+    if kind == "bar":
+        ch.type, ch.gapWidth = "col", 45
+    ch.title, ch.y_axis.title, ch.x_axis.title = title, y_title, x_title
+    ch.height, ch.width = 9.5, 24
+    if log:
+        ch.y_axis.scaling.logBase = 10
+    if by_rows:
+        for i in range(n):
+            ch.add_data(Reference(src, min_col=1, max_col=1 + len(UNITS),
+                                  min_row=first + i, max_row=first + i),
+                        titles_from_data=True, from_rows=True)
+        ch.set_categories(Reference(src, min_col=2, max_col=1 + len(UNITS),
+                                    min_row=first - 1, max_row=first - 1))
+    else:
+        ch.add_data(Reference(src, min_col=n, min_row=first - 1, max_row=last), titles_from_data=True)
+        ch.set_categories(Reference(src, min_col=1, min_row=first, max_row=last))
+    target.add_chart(ch, f"A{r}")
+    return r + 20
+
+
+def sheet_summary(wb):
+    ws = wb.create_sheet("Summary")
+    ws.column_dimensions["A"].width = 3
+    ws.column_dimensions["B"].width = 150
+    r = f_title(ws, 1, "What this workbook found", 16)
+    r = f_note(ws, r, "Six charts, each drawn from a table on one of the analysis sheets -- no "
+                      "number here is retyped. Then the findings and what is worth doing.", col=2)
+    r += 1
+
+    def block(r, heading, question, answer):
+        r = f_section(ws, r, heading, 2)
+        ws.cell(row=r, column=1, value="Q").font = Font(name=ARIAL, bold=True, size=9, color=GREY)
+        c = ws.cell(row=r, column=2, value=question)
+        c.font, c.alignment = Font(name=ARIAL, bold=True), Alignment(wrap_text=True, vertical="top")
+        r += 1
+        ws.cell(row=r, column=1, value="A").font = Font(name=ARIAL, bold=True, size=9, color=GREEN)
+        d = ws.cell(row=r, column=2, value=answer)
+        d.font, d.alignment = Font(name=ARIAL), Alignment(wrap_text=True, vertical="top")
+        ws.row_dimensions[r].height = 30
+        return r + 2
+
+    for heading, q, a, chart in D["summary"]:
+        r = block(r, heading, q, a)
+        if chart:
+            kind, title, y, x, key, by_rows = chart
+            r = _summary_chart(ws, r, kind, title, y, x, key, by_rows)
+
+    for title_text, items in (("EVERYTHING ELSE WORTH KNOWING", D["findings"]),
+                              ("WORTH DOING NEXT", D["actions"])):
+        r = f_section(ws, r, title_text, 2)
+        for i, (head, body) in enumerate(items, start=1):
+            c = ws.cell(row=r, column=2, value=f"{i}.  {head}  —  {body}")
+            c.font, c.alignment = Font(name=ARIAL), Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[r].height = 30
+            r += 1
+        r += 1
+
+    r = f_section(ws, r, "WHAT THESE NUMBERS ARE NOT", 2)
+    for body in D["caveats"]:
+        c = ws.cell(row=r, column=2, value=body)
+        c.font, c.alignment = Font(name=ARIAL, italic=True, color=GREY), Alignment(wrap_text=True, vertical="top")
+        ws.row_dimensions[r].height = 28
+        r += 1
+    return ws
+
+
 def recalculate() -> bool:
     tmp = RESULTS / "_recalc"
     tmp.mkdir(exist_ok=True)
@@ -881,12 +1381,29 @@ def recalculate() -> bool:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("dataset", choices=sorted(DATASETS),
+                    help="which experiment to assemble; picks the units, the configurations, "
+                         "the row count and the prose")
+    args = ap.parse_args()
+    select(args.dataset)
+
+    missing = [n for n in (f"{PREFIX}_standalone.csv", f"{PREFIX}_chained.csv",
+                           f"{PREFIX}_float_column.csv", f"{PREFIX}_lossy_breakdown.csv",
+                           f"{PREFIX}_dataset_facts.csv", f"{PREFIX}_dataset_description.csv")
+               if not (RESULTS / n).is_file()]
+    if missing:
+        print(f"missing inputs for '{PREFIX}': {missing}", file=sys.stderr)
+        return 1
+
     wb = Workbook()
     wb.remove(wb.active)
-    S, ns = data_sheet(wb, "Standalone", "solar_standalone.csv")
-    C, nc = data_sheet(wb, "Chained", "solar_chained.csv")
-    F, nf = data_sheet(wb, "Float Column", "solar_float_column.csv")
-    B, nb = data_sheet(wb, "Lossy Breakdown", "solar_lossy_breakdown.csv")
+    S, ns = data_sheet(wb, "Standalone", f"{PREFIX}_standalone.csv")
+    C, nc = data_sheet(wb, "Chained", f"{PREFIX}_chained.csv")
+    F, nf = data_sheet(wb, "Float Column", f"{PREFIX}_float_column.csv")
+    B, nb = data_sheet(wb, "Lossy Breakdown", f"{PREFIX}_lossy_breakdown.csv")
+    COORDS.clear()
     sheet_readme(wb)
     sheet_dataset(wb)
     sheet_ratios(wb, S, C)
@@ -895,11 +1412,13 @@ def main() -> int:
     sheet_overhead(wb, S)
     sheet_float_detail(wb, F)
     sheet_stages(wb, B)
+    sheet_bytes(wb, S, C)
+    sheet_timing(wb, S, C)
     sheet_anomalies(wb)
+    sheet_summary(wb)
     wb.move_sheet("Dataset", offset=-len(wb.sheetnames) + 2)
     wb.save(BOOK)
-    print(f"  wrote {BOOK.name}: {len(wb.sheetnames)} sheets, "
-          f"{ns}+{nc}+{nf}+{nb} measured rows")
+    print(f"  wrote {BOOK.name}: {len(wb.sheetnames)} sheets, {ns}+{nc}+{nf}+{nb} measured rows")
     if not recalculate():
         print("  recalculation produced no file", file=sys.stderr)
         return 1
