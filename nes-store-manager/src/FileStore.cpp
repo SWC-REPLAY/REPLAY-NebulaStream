@@ -89,11 +89,7 @@ uint64_t FileStore::dataBytesLocked() const
 {
     /// Rows only, each file's header and preallocated table subtracted. This is what a FLUSH
     /// THRESHOLD is measured against.
-    ///
-    /// Framing is excluded because it is not accumulation: the table is preallocated from the
-    /// CAPACITY, so an empty store already "contains" it and a threshold smaller than the table
-    /// would be satisfied before a single row arrived. At a 48-byte segment that table reaches
-    /// 3.5 MB, which no sensible threshold could exceed.
+
     uint64_t total = 0;
     for (const auto& part : parts)
     {
@@ -124,7 +120,7 @@ void FileStore::evictOldestOverCapacity()
 {
     /// The oldest file goes whole, which is the entire reason for rolling: retention costs one
     /// unlink, with no rewrite and no holes to track. The newest file is never dropped -- it is the
-    /// one being written -- so a capacity smaller than a single file degrades to keeping that one.
+    /// one being written so a capacity smaller than a single file degrades to keeping that one.
     bool dropped = false;
     while (parts.size() > 1 && storedBytesLocked() > config.totalSize)
     {
@@ -143,15 +139,8 @@ void FileStore::evictOldestOverCapacity()
         return;
     }
 
-    /// The store-wide range has to shrink with the data. appendBuffer only ever widens it, so
-    /// without this the store keeps claiming a minimum timestamp for rows it has just deleted --
-    /// and read() opens by testing the query against that claim. A stale claim is only a missed
-    /// skip, but it is a skip that gets rarer the longer the store runs, which is backwards.
-    ///
-    /// Recomputed from what is left rather than adjusted: the evicted file's range and its
-    /// neighbour's can overlap, so subtracting one is not enough. The UNSEALED segment counts too
-    /// -- its rows are readable and belong to no part yet, and a range that excluded them would
-    /// make read() skip live data, turning a missed optimisation into a wrong answer.
+
+    /// After eviction, timestamps are updated.
     fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
     fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
     for (const auto& part : parts)
@@ -188,7 +177,7 @@ void FileStore::openCurrentPart()
 
 void FileStore::rollToNextFile()
 {
-    /// The finished file is NOT closed -- its rows are still part of this store and a read has to
+    /// The finished file is NOT closed , its rows are still part of this store and a read has to
     /// reach them. It simply stops being written to.
     parts.emplace_back();
     openCurrentPart();
@@ -199,8 +188,7 @@ void FileStore::open()
     std::unique_lock lock(mutex);
     fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
     fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
-    /// Start from one empty file. Anything left from a previous open is dropped, which is what
-    /// the old single-file store did by truncating.
+    /// Start from one empty file. Anything left from a previous open is dropped
     parts.clear();
     parts.emplace_back();
     nextPartNumber = 0;
