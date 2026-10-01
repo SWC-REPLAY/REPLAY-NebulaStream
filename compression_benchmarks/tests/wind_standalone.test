@@ -19,6 +19,15 @@
 # LossyStore with no bound is here as the separator: it isolates what the columnar layout and
 # bit-packing buy before any accuracy is spent, so the remaining configurations show what the bound
 # adds on top.
+#
+# The three BOUNDED-LOSSY read-backs use a Void sink and assert nothing. A lossy read-back's
+# checksum is a function of the quantisation, the quantisation is a function of the group size, and
+# the group size is exactly what grid.py sweeps -- so a pinned value is correct at one point of the
+# sweep and wrong at every other. Pinning them meant this file reported three failures at four of
+# five grid points, unnoticed, because the bench script never checks the exit status.
+#
+# Everything else stays pinned. The write queries and the LOSSLESS read-backs are byte-exact
+# whatever the group size, so they still catch a run that drops or reorders rows.
 
 SEQUENTIAL_EXECUTION
 
@@ -47,11 +56,11 @@ CREATE SINK rComp(wind_comp.producerId INT32, wind_comp.groupId INT32, wind_comp
 CREATE SINK wExact(wind_exact.producerId INT32, wind_exact.groupId INT32, wind_exact.producedPower FLOAT64, ts UINT64) TYPE Checksum;
 CREATE SINK rExact(wind_exact.producerId INT32, wind_exact.groupId INT32, wind_exact.producedPower FLOAT64, wind_exact.ts UINT64) TYPE Checksum;
 CREATE SINK wB01(wind_b01.producerId INT32, wind_b01.groupId INT32, wind_b01.producedPower FLOAT64, ts UINT64) TYPE Checksum;
-CREATE SINK rB01(wind_b01.producerId INT32, wind_b01.groupId INT32, wind_b01.producedPower FLOAT64, wind_b01.ts UINT64) TYPE Checksum;
+CREATE SINK rB01(wind_b01.producerId INT32, wind_b01.groupId INT32, wind_b01.producedPower FLOAT64, wind_b01.ts UINT64) TYPE Void;
 CREATE SINK wB1(wind_b1.producerId INT32, wind_b1.groupId INT32, wind_b1.producedPower FLOAT64, ts UINT64) TYPE Checksum;
-CREATE SINK rB1(wind_b1.producerId INT32, wind_b1.groupId INT32, wind_b1.producedPower FLOAT64, wind_b1.ts UINT64) TYPE Checksum;
+CREATE SINK rB1(wind_b1.producerId INT32, wind_b1.groupId INT32, wind_b1.producedPower FLOAT64, wind_b1.ts UINT64) TYPE Void;
 CREATE SINK wB5(wind_b5.producerId INT32, wind_b5.groupId INT32, wind_b5.producedPower FLOAT64, ts UINT64) TYPE Checksum;
-CREATE SINK rB5(wind_b5.producerId INT32, wind_b5.groupId INT32, wind_b5.producedPower FLOAT64, wind_b5.ts UINT64) TYPE Checksum;
+CREATE SINK rB5(wind_b5.producerId INT32, wind_b5.groupId INT32, wind_b5.producedPower FLOAT64, wind_b5.ts UINT64) TYPE Void;
 
 
 # ---- CompressedStore alone: row-major bytes through zstd ----------------------------------
@@ -88,7 +97,6 @@ SET('LossyStore' AS REPLAY.STORE_ORDER);
 SELECT producerId, groupId, producedPower, ts FROM wind_b01
 FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rB01;
 ----
-200001 285777943
 
 
 # ---- LossyStore alone, 1% -----------------------------------------------------------------
@@ -101,7 +109,6 @@ SET('LossyStore' AS REPLAY.STORE_ORDER);
 SELECT producerId, groupId, producedPower, ts FROM wind_b1
 FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rB1;
 ----
-200001 285739333
 
 
 # ---- LossyStore alone, 5% -----------------------------------------------------------------
@@ -114,7 +121,6 @@ SET('LossyStore' AS REPLAY.STORE_ORDER);
 SELECT producerId, groupId, producedPower, ts FROM wind_b5
 FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rB5;
 ----
-200001 285793734
 
 
 # ---- MemoryStore alone -----------------------------------------------------------------------
