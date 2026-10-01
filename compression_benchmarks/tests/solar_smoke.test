@@ -1,0 +1,153 @@
+# name: compression_benchmarks/solar_smoke.test
+# description: solar_standalone.test over the first 1,000,000 rows. Validates the pipeline and
+#              calibrates timing before committing to a full-scale sweep.
+# groups: [StoreBench]
+#
+# Input: 1,000,000 rows x 28 bytes = 28,000,000 bytes, which fits FileStore's DEFAULT 64 MB
+# totalSize -- so this variant runs without touching any header.
+#
+# Generated from solar_standalone.test; edit that one and regenerate.
+#
+# Original input: 42,700,000 rows x 28 bytes = 1,195,600,000 bytes. 28 is the STORED row width, not the
+# CSV's: INT32,INT32,FLOAT64,UINT64 each carry a null indicator byte, so (4+1)+(4+1)+(8+1)+(8+1).
+#
+# This data is hostile to compression, which is the point of running it. From
+# results/solar_dataset_description.csv:
+#
+#   producerId     42,700,000 distinct over the range 0 .. 42,699,999 -- a shuffled permutation of
+#                  the row numbers. No dictionary, no run length, and delta-of-delta is worse than
+#                  useless on a shuffled sequence. Bitpacking is all that is left, 32 bits -> 26.
+#   groupId        4 distinct. Two bits of real information.
+#   producedPower  97.90% distinct, six decimal places on 38.4M of 42.7M values. The only
+#                  quantisable column, so the accuracy bounds live or die on it.
+#   timestamp      100% distinct, monotonic, but over 4096 distinct deltas with no repeating
+#                  cycle -- mean 40,342, max 743,465. Delta plus bitpack takes 64 bits to ~20.
+#
+# Wind, by contrast, had 26 distinct producerIds and exactly TWO distinct timestamp deltas. Its
+# ratios are a best case and this is the other end.
+#
+# NO MEMORYSTORE HERE, unlike wind_standalone.test. Standing alone it holds
+# maxBufferCount x 4096 B; even at 2048 buffers that is 8 MB against 1.2 GB, so the ring would
+# wrap about 150 times and the configuration would be measuring an evicting store.
+#
+# THE THREE BOUNDED-LOSSY READ-BACKS USE A VOID SINK, and deliberately. A lossy read-back's
+# checksum depends on the quantisation, the quantisation depends on the group size, and the group
+# size is what the sweep varies -- so a pinned checksum is wrong at every point but one. Pinning
+# them is what makes wind_standalone.test report three failures whenever the grid moves off the
+# default group size, silently, because the bench script never checks the exit status. The write
+# queries and the LOSSLESS read-backs are byte-exact and stay pinned; those do catch a broken run.
+
+SEQUENTIAL_EXECUTION
+
+CREATE LOGICAL SOURCE sol_comp(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR sol_comp TYPE File;
+ATTACH FILE large/debs_bench/solar_1m.csv
+
+CREATE LOGICAL SOURCE sol_exact(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR sol_exact TYPE File;
+ATTACH FILE large/debs_bench/solar_1m.csv
+
+CREATE LOGICAL SOURCE sol_b01(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR sol_b01 TYPE File;
+ATTACH FILE large/debs_bench/solar_1m.csv
+
+CREATE LOGICAL SOURCE sol_b1(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR sol_b1 TYPE File;
+ATTACH FILE large/debs_bench/solar_1m.csv
+
+CREATE LOGICAL SOURCE sol_b5(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR sol_b5 TYPE File;
+ATTACH FILE large/debs_bench/solar_1m.csv
+
+CREATE LOGICAL SOURCE sol_file(producerId INT32, groupId INT32, producedPower FLOAT64, timestamp UINT64);
+CREATE PHYSICAL SOURCE FOR sol_file TYPE File;
+ATTACH FILE large/debs_bench/solar_1m.csv
+
+CREATE SINK wComp(sol_comp.producerId INT32, sol_comp.groupId INT32, sol_comp.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK rComp(sol_comp.producerId INT32, sol_comp.groupId INT32, sol_comp.producedPower FLOAT64, sol_comp.ts UINT64) TYPE Checksum;
+CREATE SINK wExact(sol_exact.producerId INT32, sol_exact.groupId INT32, sol_exact.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK rExact(sol_exact.producerId INT32, sol_exact.groupId INT32, sol_exact.producedPower FLOAT64, sol_exact.ts UINT64) TYPE Checksum;
+CREATE SINK wB01(sol_b01.producerId INT32, sol_b01.groupId INT32, sol_b01.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK rB01(sol_b01.producerId INT32, sol_b01.groupId INT32, sol_b01.producedPower FLOAT64, sol_b01.ts UINT64) TYPE Void;
+CREATE SINK wB1(sol_b1.producerId INT32, sol_b1.groupId INT32, sol_b1.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK rB1(sol_b1.producerId INT32, sol_b1.groupId INT32, sol_b1.producedPower FLOAT64, sol_b1.ts UINT64) TYPE Void;
+CREATE SINK wB5(sol_b5.producerId INT32, sol_b5.groupId INT32, sol_b5.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK rB5(sol_b5.producerId INT32, sol_b5.groupId INT32, sol_b5.producedPower FLOAT64, sol_b5.ts UINT64) TYPE Void;
+CREATE SINK wFile(sol_file.producerId INT32, sol_file.groupId INT32, sol_file.producedPower FLOAT64, ts UINT64) TYPE Checksum;
+CREATE SINK rFile(sol_file.producerId INT32, sol_file.groupId INT32, sol_file.producedPower FLOAT64, sol_file.ts UINT64) TYPE Checksum;
+
+
+# ---- CompressedStore alone: row-major bytes through zstd ----------------------------------
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM sol_comp INTO wComp
+REPLAYABLE WITH HISTORY OF '1MB' SET('CompressedStore' AS REPLAY.STORE_ORDER);
+----
+1000000 1668612152
+
+SELECT producerId, groupId, producedPower, ts FROM sol_comp
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rComp;
+----
+1000000 1668612152
+
+
+# ---- LossyStore alone, no bound: columnar and bit-packed, still lossless -------------------
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM sol_exact INTO wExact
+REPLAYABLE WITH HISTORY OF '1MB' SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+1000000 1668612152
+
+SELECT producerId, groupId, producedPower, ts FROM sol_exact
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rExact;
+----
+1000000 1668612152
+
+
+# ---- LossyStore alone, 0.1% ---------------------------------------------------------------
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM sol_b01 INTO wB01
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 0.1%
+SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+1000000 1668612152
+
+SELECT producerId, groupId, producedPower, ts FROM sol_b01
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rB01;
+----
+
+
+# ---- LossyStore alone, 1% -----------------------------------------------------------------
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM sol_b1 INTO wB1
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 1%
+SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+1000000 1668612152
+
+SELECT producerId, groupId, producedPower, ts FROM sol_b1
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rB1;
+----
+
+
+# ---- LossyStore alone, 5% -----------------------------------------------------------------
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM sol_b5 INTO wB5
+REPLAYABLE WITH HISTORY OF '1MB' WITH ACCURACY BOUND 5%
+SET('LossyStore' AS REPLAY.STORE_ORDER);
+----
+1000000 1668612152
+
+SELECT producerId, groupId, producedPower, ts FROM sol_b5
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rB5;
+----
+
+
+# ---- FileStore alone -------------------------------------------------------------------------
+# Row-major on disk, uncompressed, so this is the baseline the other two compress against and its
+# ratio should sit just under 1 -- the file header and the preallocated segment table are the
+# only excess. FileStore::Config::totalSize must be raised well above 1.2 GB before this runs or
+# the store evicts; the grid sets it, since the SQL path cannot reach it.
+SELECT producerId, groupId, producedPower, timestamp AS ts FROM sol_file INTO wFile
+REPLAYABLE WITH HISTORY OF '1MB' SET('FileStore' AS REPLAY.STORE_ORDER);
+----
+1000000 1668612152
+
+SELECT producerId, groupId, producedPower, ts FROM sol_file
+FOR EVENT_TIME AS OF TIMESTAMP ALL INTO rFile;
+----
+1000000 1668612152

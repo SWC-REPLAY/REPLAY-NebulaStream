@@ -1,4 +1,4 @@
-# name: compression_benchmarks/standalone_large.test
+# name: compression_benchmarks/wind_standalone.test
 # description: CompressedStore and LossyStore standing alone, at several accuracy bounds, over the
 #              200,001-row DEBS wind turbine readings.
 # groups: [StoreBench]

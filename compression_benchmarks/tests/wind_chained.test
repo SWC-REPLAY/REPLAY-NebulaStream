@@ -1,11 +1,11 @@
-# name: compression_benchmarks/chained_large.test
+# name: compression_benchmarks/wind_chained.test
 # description: The compression tiers at the bottom of a real chain, MemoryStore->FileStore->X, over
 #              the 200,001-row DEBS wind turbine readings.
 # groups: [StoreBench]
 #
 # Input: 200,001 rows x 28 bytes = 5,600,028 bytes.
 #
-# This is the configuration that actually ships. standalone_large.test writes straight into one tier
+# This is the configuration that actually ships. wind_standalone.test writes straight into one tier
 # and measures it in isolation, which is the right way to compare codecs but is NOT how a query
 # runs: records land in MemoryStore, drain into FileStore when the flush policy trips, and reach the
 # compression tier only as whole segments. Everything between the source and the codec -- buffer
@@ -16,7 +16,7 @@
 # chain's stored size is not its tail tier's ratio.
 #
 # MAX_BUFFER_COUNT is raised to 2048 on purpose, and not for the reason it is raised in
-# standalone_large.test. There, a standalone MemoryStore needs the room or it evicts. Here the ring
+# wind_standalone.test. There, a standalone MemoryStore needs the room or it evicts. Here the ring
 # MUST NOT WRAP, because wrapping a chained MemoryStore hits a crash: writeRecord does
 # `buffers.push_back(std::move(*active))` and then calls flush() while `activeBuffer` is still
 # engaged -- moving out of an optional does not disengage it -- so flush seals a moved-from
@@ -24,10 +24,10 @@
 # so the ring never wraps and the drain happens through the flush policy instead.
 #
 # That bug predates every branch in this repo and is not exercised by any other test: the systests
-# chain but never fill 128 buffers, and standalone_large.test fills them but never chains. Remove
+# chain but never fill 128 buffers, and wind_standalone.test fills them but never chains. Remove
 # the MAX_BUFFER_COUNT lines below to reproduce it.
 
-# On sweeping this file with grid_f2.py: vary FILESTORE's segment, not the tail's unit. LossyStore
+# On sweeping this file with grid.py: vary FILESTORE's segment, not the tail's unit. LossyStore
 # seals one group per incoming segment and ignores groupSize when a transformation feeds it, and
 # CompressedStore's output depends only on its final block size, not on how many segments merged
 # into it. A tail sweep therefore produces rows that are identical to the byte.

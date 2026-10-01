@@ -27,7 +27,7 @@
 # Chained cases raise MAX_BUFFER_COUNT to 2048. That is not tuning -- a chained MemoryStore whose
 # ring wraps crashes in flush(), because writeRecord moves out of `activeBuffer` without
 # disengaging the optional. 8 MB of ring against 5.6 MB of input means it never wraps. See
-# chained_large.test for the full account.
+# wind_chained.test for the full account.
 
 SEQUENTIAL_EXECUTION
 

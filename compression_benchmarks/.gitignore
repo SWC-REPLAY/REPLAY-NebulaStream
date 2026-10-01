@@ -3,4 +3,3 @@ working-dir/
 __pycache__/
 # Left behind only if a grid run is killed; the next run refuses to start until it is resolved.
 .grid-originals/
-.grid-f2-originals/

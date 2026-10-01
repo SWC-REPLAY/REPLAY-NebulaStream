@@ -1,0 +1,16 @@
+item,value
+dataset,debs_solar_panels
+source_file,large/debs/SOLAR_PANELS_TOPIC_1G.csv
+csv_bytes,1489260482
+rows,42700000
+columns,4
+stored_row_width_bytes,28
+stored_bytes_total,1195600000
+truncated,no - the whole shipped file
+timestamp_sorted,True
+timestamp_distinct_deltas,>4096
+timestamp_delta_pattern,"irregular - over 4096 distinct deltas, no repeating cycle; min 0, max 743465, mean 40342.3"
+timestamp_delta_min,0
+timestamp_delta_max,743465
+timestamp_delta_mean,40342.3
+timestamp_range,1680357514 .. 1724294922528

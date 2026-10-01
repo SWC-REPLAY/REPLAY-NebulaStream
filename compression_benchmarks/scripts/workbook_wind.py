@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Assemble the final CSVs into one spreadsheet, via flat ODS and LibreOffice.
+"""Assemble the WIND results into one spreadsheet, via flat ODS and LibreOffice.
 
-    ./compression_benchmarks/scripts/build_workbook.py
+    ./compression_benchmarks/scripts/workbook_wind.py
+
+Reads wind_standalone.csv and wind_chained.csv, and the f2 copies of the dataset
+description and the float-column analysis, which were not re-measured: the f3 standalone run came
+back byte-identical to f2 in all 35 rows, and both of those are standalone-only.
 
 openpyxl is not installed and pip is unavailable here, so the workbook is written as Flat ODS
 (.fods) -- a single plain-XML file LibreOffice reads natively -- and converted to .xlsx with
@@ -21,8 +25,8 @@ from xml.sax.saxutils import escape
 
 REPO = Path(__file__).resolve().parents[2]
 RESULTS = REPO / "compression_benchmarks/results"
-OUT_FODS = RESULTS / "f2_benchmark_analysis.fods"
-OUT_XLSX = RESULTS / "f2_benchmark_analysis.xlsx"
+OUT_FODS = RESULTS / "wind_analysis.fods"
+OUT_XLSX = RESULTS / "wind_analysis.xlsx"
 
 NS = (
     'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
@@ -151,8 +155,8 @@ def read(name):
 
 
 def description_sheet():
-    facts = read("f2_dataset_facts.csv")
-    cols = read("f2_dataset_description.csv")
+    facts = read("wind_dataset_facts.csv")
+    cols = read("wind_dataset_description.csv")
     out = ['<table:table table:name="Data Description">',
            '<table:table-column table:style-name="wide"/>',
            '<table:table-column table:style-name="wide" table:number-columns-repeated="11"/>']
@@ -186,6 +190,11 @@ def description_sheet():
         ("framing_ratio", "framing_bytes / disk_bytes."),
         ("ratio_on_data", "bytes_in / data_out. Compares codecs without format overhead in the way."),
         ("ratio_on_disk", "bytes_in / disk_bytes. What the data actually costs to keep."),
+        ("tail_in_bytes", "bytes_in minus what MemoryStore and FileStore are still holding -- the bytes "
+                          "that actually reached the compressing tier. Chained sheet only."),
+        ("ratio_on_tail", "tail_in_bytes / the tail's data. What the codec achieved on what it was "
+                          "GIVEN, with the uncompressed remainder in FileStore taken out. Compare "
+                          "codecs with this; budget a deployment with ratio_on_data."),
         ("encode_s", "wall time of the write query, median of the repeats."),
         ("decode_s", "wall time of the read-back query, median of the repeats."),
         ("unit_kb", "the granule each tier seals on: FileStore segment, LossyStore group, CompressedStore segment."),
@@ -207,11 +216,14 @@ def description_sheet():
         "regularity, so the 16 KB result should not be read as a recommendation.",
         "Wind turbine data is unusually compressible: 2 distinct timestamp deltas, 40% repeated "
         "floats. Treat its ratios as a best case.",
-        "In a CHAIN the unit size is min(segmentSize, flush threshold). HISTORY OF '1MB' drains "
-        "MemoryStore every 1 MB, so FileStore never accumulates more than that and a segment "
-        "larger than 1 MB cannot fill. The 1024 and 4096 chained rows are therefore the SAME "
-        "configuration -- 6 units each, identical bytes. Standalone has no flush policy and does "
-        "reach 4 MB units, 2 of them.",
+        "A CHAIN does not compress everything. FileStore migrates once it has accumulated its "
+        "flush threshold, 4 MB here, and keeps the sub-threshold remainder -- 367,248 bytes, 6.6% "
+        "of the stream -- uncompressed. ratio_on_data counts that remainder and is what the chain "
+        "costs; ratio_on_tail excludes it and is what the codec did.",
+        "This supersedes the f2 caveat that the 1024 and 4096 chained rows were the same "
+        "configuration. That held while FileStore drained on command and never accumulated past "
+        "MemoryStore's 1 MB, so a larger segment could not fill. It now accumulates to 4 MB, and "
+        "the two points differ: 6 units against 3, and different bytes at both tails.",
         "LossyStore's groupSize is ignored in a chain: it seals one group per incoming segment, "
         "so its group is FileStore's segment. Sweeping all three sizes together is the only shape "
         "that moves every tier's unit at once.",
@@ -225,9 +237,15 @@ def grid_sheet(name, csv_name, per_tier):
     rows = read(csv_name)
     base = ["store_order", "bound_pct", "unit_kb",
             "filestore_segment_kb", "lossystore_group_kb", "compressedstore_segment_kb",
+            "filestore_flush_threshold_kb",
             "flush_threshold", "rows", "row_width_bytes", "bytes_in",
             "encode_s", "decode_s", "data_out", "disk_bytes", "framing_bytes", "framing_ratio",
-            "ratio_on_data", "ratio_on_disk", "units", "runs"]
+            "ratio_on_data", "ratio_on_disk"]
+    # Only a chain has a tier above the tail, so only a chain can hold data back from it. On the
+    # standalone sheet these two would be bytes_in and a copy of ratio_on_data.
+    if per_tier:
+        base += ["tail_in_bytes", "ratio_on_tail"]
+    base += ["units", "runs"]
     tiers = ["MemoryStore", "FileStore", "CompressedStore", "LossyStore"]
     heads = list(base)
     if per_tier:
@@ -252,6 +270,7 @@ def grid_sheet(name, csv_name, per_tier):
             cell(r["unit_kb"], "int"),
             cell(r["filestore_segment_kb"], "int"), cell(r["lossystore_group_kb"], "int"),
             cell(r["compressedstore_segment_kb"], "int"),
+            cell(r["filestore_flush_threshold_kb"], "int"),
             cell(r["flush_threshold"], "txt", kind="s"),
             cell(r["rows"], "int"), cell(r["row_width_bytes"], "int"),
             cell(formula=f"[.{ROWS}]*[.{WID}]", style="calc"),
@@ -264,8 +283,23 @@ def grid_sheet(name, csv_name, per_tier):
             cell(formula=f"IFERROR([.{FRM}]/[.{DSK}];0)", style="calcp"),
             cell(formula=f"IFERROR([.{BIN}]/[.{DAT}];0)", style="calcr"),
             cell(formula=f"IFERROR([.{BIN}]/[.{DSK}];0)", style="calcr"),
-            cell(r["units"], "int"), cell(r["runs"], "int"),
         ]
+        if per_tier:
+            MEM = col_letter(idx["MemoryStore_data"]) + str(n)
+            FS = col_letter(idx["FileStore_data"]) + str(n)
+            CS = col_letter(idx["CompressedStore_data"]) + str(n)
+            LS = col_letter(idx["LossyStore_data"]) + str(n)
+            TIN = col_letter(idx["tail_in_bytes"]) + str(n)
+            # Bytes that actually reached the tail: everything written, less whatever the tiers
+            # above it are still holding. FileStore keeps a sub-threshold remainder uncompressed,
+            # so bytes_in overstates the tail's input and ratio_on_data charges the tail for rows
+            # it never saw. Exactly one of the two tail columns is populated per row; the other is
+            # empty and counts as zero.
+            cells += [
+                cell(formula=f"[.{BIN}]-[.{MEM}]-[.{FS}]", style="calc"),
+                cell(formula=f"IFERROR([.{TIN}]/([.{CS}]+[.{LS}]);0)", style="calcr"),
+            ]
+        cells += [cell(r["units"], "int"), cell(r["runs"], "int")]
         if per_tier:
             for t in tiers:
                 for suffix in ("data", "disk"):
@@ -277,7 +311,7 @@ def grid_sheet(name, csv_name, per_tier):
 
 
 def float_sheet():
-    rows = read("f2_float_column.csv")
+    rows = read("wind_float_column.csv")
     heads = ["column", "type", "is_quantisable", "bound_pct", "groups", "bytes",
              "bytes_per_row", "vs_lossless_bytes", "vs_lossless_pct", "codec",
              "worst_recorded_error", "bound_as_fraction", "error_within_bound"]
@@ -312,8 +346,8 @@ def float_sheet():
 
 def main() -> int:
     body = (description_sheet()
-            + grid_sheet("Standalone", "f2_standalone_large.csv", per_tier=False)
-            + grid_sheet("Chained", "f2_chained_large.csv", per_tier=True)
+            + grid_sheet("Standalone", "wind_standalone.csv", per_tier=False)
+            + grid_sheet("Chained", "wind_chained.csv", per_tier=True)
             + float_sheet())
     doc = (f'<?xml version="1.0" encoding="UTF-8"?>\n'
            f'<office:document {NS} '

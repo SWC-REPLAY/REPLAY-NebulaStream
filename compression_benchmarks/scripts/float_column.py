@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Run float_column.test and report, per accuracy bound, what happened to the FLOAT column alone.
+"""Report, per accuracy bound, what happened to the FLOAT column alone.
 
-    ./compression_benchmarks/scripts/float_column.py
+    ./compression_benchmarks/scripts/float_column.py \\
+        --test compression_benchmarks/tests/solar_float_column.test \\
+        --dataset debs_solar_panels --rows 42700000 --prefix solar
+
+Parameterised: the test file, row count, dataset label and output stem are all arguments,
+so the same script serves wind and solar.
 
 A whole-store ratio cannot answer "what does the bound buy", because the bound only touches columns
 it can quantise -- here exactly one of four. This walks each LossyStore file, reads the ColumnEntry
@@ -14,6 +19,7 @@ comparison against the source rows -- but a bound being exceeded in the encoder'
 would be conclusive, and it is the only per-group figure available without re-reading the CSV.
 """
 
+import argparse
 import csv
 import re
 import shutil
@@ -23,10 +29,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TEST = REPO / "compression_benchmarks/tests/float_column.test"
 STORE_DIR = REPO / "cmake-build-debug/nes-store-manager/working-dir"
 SYSTEST = REPO / "cmake-build-debug/nes-systests/systest/systest"
-REPORT = REPO / "compression_benchmarks/results/f2_float_column.csv"
 
 GROUP_HEADER, COLUMN_ENTRY = 36, 50
 HEADER_FIXED, HEADER_EXT, TABLE_SLOT = 41, 16, 40
@@ -67,15 +71,41 @@ def walk(raw: bytes):
     return groups, per_col, codecs, worst
 
 
+def dev_shell_library_path() -> str:
+    """systest needs the nix dev shell's LD_LIBRARY_PATH. float_column.py inherited it because it
+    was always run from inside `nix develop`; this one fetches it, so it works from any shell."""
+    out = subprocess.run(["nix", "develop", "--command", "bash", "-c", 'echo -n "$LD_LIBRARY_PATH"'],
+                         cwd=REPO, capture_output=True, text=True)
+    return out.stdout
+
+
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--test", type=Path, required=True)
+    ap.add_argument("--dataset", required=True, help="label recorded in every row")
+    ap.add_argument("--rows", type=int, required=True, help="rows in the input, for bytes_per_row")
+    ap.add_argument("--prefix", required=True, help="output is results/<prefix>_float_column.csv")
+    args = ap.parse_args()
+
+    global TEST, DATASET, ROWS, REPORT
+    TEST = args.test if args.test.is_absolute() else REPO / args.test
+    DATASET, ROWS = args.dataset, args.rows
+    REPORT = REPO / f"compression_benchmarks/results/{args.prefix}_float_column.csv"
+
     if STORE_DIR.is_dir():
         for child in STORE_DIR.iterdir():
             shutil.rmtree(child) if child.is_dir() else child.unlink()
 
+    # --log-path /dev/null for the same reason bench passes it: this build logs at DEBUG and a
+    # 42.7M-row run produced a 37 GB log before it was noticed.
     proc = subprocess.run(
         [str(SYSTEST), "-t", str(TEST), "--data", "cmake-build-debug/nes-systests/testdata",
+         "--log-path", "/dev/null",
          "--workingDir", "compression_benchmarks/working-dir", "--sequential"],
-        cwd=REPO, capture_output=True, text=True)
+        cwd=REPO, capture_output=True, text=True,
+        env={"LD_LIBRARY_PATH": dev_shell_library_path(), "PATH": "/usr/bin:/bin",
+             "HOME": str(Path.home())})
     if "All queries passed" not in proc.stdout:
         print("test run did not pass:\n" + proc.stdout[-1200:], file=sys.stderr)
         return 1
@@ -103,14 +133,14 @@ def main() -> int:
         for c, name in enumerate(COLS):
             col, ctype = name.rsplit(" ", 1)
             out.append({
-                "dataset": "debs_wind_turbines",
+                "dataset": DATASET,
                 "column": col,
                 "type": {"i32": "INT32", "f64": "FLOAT64", "u64": "UINT64"}[ctype],
                 "is_quantisable": "yes" if ctype == "f64" else "no",
                 "bound_pct": bound,
                 "groups": groups,
                 "bytes": per_col[c],
-                "bytes_per_row": f"{per_col[c] / 200001:.4f}",
+                "bytes_per_row": f"{per_col[c] / ROWS:.4f}",
                 "vs_lossless_bytes": per_col[c] - base[c],
                 "vs_lossless_pct": f"{100 * (per_col[c] - base[c]) / base[c]:.2f}",
                 "codec": "/".join(sorted(codecs[c])),

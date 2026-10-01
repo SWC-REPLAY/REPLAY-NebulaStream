@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Run one benchmark .test file and emit one row per configuration.
 
-    ./compression_benchmarks/scripts/bench.py compression_benchmarks/tests/standalone_large.test \
+Driven by grid.py, which sweeps the unit size. Every size the row reports is READ BACK from
+the headers rather than passed in, so a row cannot claim a configuration the build did not
+have -- including filestore_total_mb and filestore_files_at_capacity, which grid.py raises
+for a standalone run over a large input and leaves alone for a chained one.
+
+    ./compression_benchmarks/scripts/bench.py compression_benchmarks/tests/wind_standalone.test \
         --rows 200001 --row-width 28 -N 3
 
 A configuration is a write query followed by a read-back query, so the write's time is the encode
@@ -150,8 +155,13 @@ def run_once(systest: Path, test_file: Path, data: Path, working_dir: Path, stor
     log_dir = REPO / "cmake-build-debug/nes-systests"
     before = set(log_dir.glob("SystemTest_*.log"))
 
+    # --log-path /dev/null, because this build logs at DEBUG and the store read paths emit a line
+    # per read() call. At 42.7M rows against a 4 KB destination that is ~292,000 calls per query,
+    # and one grid point produced a 37 GB log before it was noticed -- enough to fill the disk
+    # mid-sweep, and the formatting cost dominated the measurement it was supposed to be timing.
+    # The log is never read on a successful run; run_once already deleted it afterwards.
     proc = subprocess.run(
-        [str(systest), "-t", str(test_file), "--data", str(data),
+        [str(systest), "-t", str(test_file), "--data", str(data), "--log-path", "/dev/null",
          "--workingDir", str(working_dir), "--show-query-performance", "--sequential"],
         cwd=REPO, capture_output=True, text=True,
         env={"LD_LIBRARY_PATH": llp, "PATH": "/usr/bin:/bin", "HOME": str(Path.home())})
@@ -175,11 +185,14 @@ def forced_parameters(test_file: Path) -> dict:
     tiers were doing.
     """
     def kb(path, pattern):
-        m = re.search(pattern + r"\s*=\s*(\d+)UZ \* 1024UZ(?: \* 1024UZ)?;", (REPO / path).read_text())
+        m = re.search(pattern + r"\s*=\s*(\d+)UZ((?: \* 1024UZ)+);", (REPO / path).read_text())
         if not m:
             return ""
-        raw = int(m.group(1))
-        return raw * 1024 if "1024UZ * 1024UZ" in m.group(0) else raw
+        # Count the 1024 factors rather than matching text: "1024UZ * 1024UZ" is 1024 KB with one
+        # factor, while "1UZ * 1024UZ * 1024UZ" is 1 MB with two. A substring test cannot tell
+        # them apart and reported the first as 1,048,576 KB.
+        factors = m.group(2).count("* 1024UZ")
+        return int(m.group(1)) * (1024 ** (factors - 1))
 
     def plain(path, pattern):
         m = re.search(pattern + r"\s*=\s*(\d+)", (REPO / path).read_text())
@@ -192,6 +205,7 @@ def forced_parameters(test_file: Path) -> dict:
         "filestore_segment_kb": kb("nes-store-manager/include/FileStore.hpp", "size_t segmentSize"),
         "filestore_total_mb": kb("nes-store-manager/include/FileStore.hpp", "size_t totalSize") // 1024,
         "filestore_files_at_capacity": plain("nes-store-manager/include/FileStore.hpp", "size_t filesAtCapacity"),
+        "filestore_flush_threshold_kb": _flush_threshold_kb(kb, plain),
         "lossystore_group_kb": kb("nes-store-manager/include/LossyStore.hpp", "size_t groupSize"),
         "compressedstore_segment_kb": kb("nes-store-manager/include/CompressedStore.hpp", "size_t segmentSize"),
         "compressedstore_level": plain("nes-store-manager/include/CompressedStore.hpp", "int compressionLevel"),
@@ -201,6 +215,20 @@ def forced_parameters(test_file: Path) -> dict:
                                    "DEFAULT_OPERATOR_BUFFER_SIZE"),
         "flush_threshold": history.group(1) if history else "",
     }
+
+
+def _flush_threshold_kb(kb, plain):
+    """Bytes FileStore accumulates before migrating, as StoreRegistry resolves it.
+
+    Config::flushThresholdBytes of 0 means one file's worth, totalSize / filesAtCapacity, so the
+    declared 0 is not the value in force and recording it would misreport every chained row.
+    """
+    declared = plain("nes-store-manager/include/FileStore.hpp", "size_t flushThresholdBytes")
+    if declared:
+        return declared // 1024
+    total_kb = kb("nes-store-manager/include/FileStore.hpp", "size_t totalSize")
+    files = plain("nes-store-manager/include/FileStore.hpp", "size_t filesAtCapacity")
+    return total_kb // files if (total_kb and files) else ""
 
 
 def store_sizes(store_dir: Path):
@@ -288,7 +316,7 @@ def main() -> int:
               "data_out", "disk_bytes", "framing_bytes", "framing_ratio",
               "ratio_on_data", "ratio_on_disk", "units", "runs"]
     forced = forced_parameters(args.test_file)
-    header += list(forced)
+    header += list(forced) + ["merge_factor"]
     for t in TIERS:
         header += [f"{t}_data", f"{t}_disk"]
 
@@ -319,6 +347,13 @@ def main() -> int:
                f"{bytes_in / disk:.4f}" if disk else "",
                str(units), str(len(enc))]
         row += [str(v) for v in forced.values()]
+        # How many FileStore segments accumulate into one unit of the tail tier. 1 means no
+        # merging happens at all -- the case the tiers are explicitly not supposed to be in.
+        tail = order.split("->")[-1]
+        tail_kb = {"LossyStore": forced["lossystore_group_kb"],
+                   "CompressedStore": forced["compressedstore_segment_kb"]}.get(tail)
+        fs_kb = forced["filestore_segment_kb"]
+        row.append(str(tail_kb // fs_kb) if (tail_kb and fs_kb and "->" in order) else "")
         for t in TIERS:
             got = per_tier.get(t)
             row += [str(got[0]), str(got[1])] if got else (
