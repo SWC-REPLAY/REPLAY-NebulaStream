@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 #include <ErrorHandling.hpp>
 
@@ -66,6 +67,25 @@ struct StoreReadCursor
         /// This tier has nothing further for this range. Set when its units run out, and read by
         /// the tier above so that a zero return means "done" rather than "empty this time".
         bool exhausted{false};
+
+        /// The unit named by `decodedUnit`, already decoded into rows.
+        ///
+        /// Only the compressing tiers fill it. A destination smaller than a unit means a reader
+        /// re-enters the unit it stopped in, and for MemoryStore and FileStore that costs a memcpy
+        /// from an offset -- but CompressedStore decompresses the whole segment again, and
+        /// LossyStore decodes every column and transposes them again. Holding the decoded bytes
+        /// here makes that once per UNIT rather than once per DESTINATION BUFFER: at a 1 MB
+        /// segment and a 4 KB destination it is the difference between 1 and 257 decodes.
+        ///
+        /// Here and not on the store deliberately. `read` takes a shared lock, so bytes kept on
+        /// the store would be a data race between concurrent readers and would need their own
+        /// mutex plus an eviction rule -- and would cost the store the stateless property this
+        /// file's header commits to. Per cursor it needs neither, and `generation` above is
+        /// already the invalidation: bindCursorFrame throws if the tier renumbered its units, so
+        /// bytes decoded against an older numbering cannot be reached.
+        std::vector<uint8_t> decoded;
+        uint64_t decodedUnit{0};
+        bool decodedValid{false};
     };
 
     std::array<Frame, MAX_TIERS> frames{};

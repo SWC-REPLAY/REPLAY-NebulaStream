@@ -99,14 +99,8 @@ LossyStore::LossyStore(Config cfg, const Schema& schemaIn)
 
         const auto name = field.getUnqualifiedName();
 
-        /// The store's budget reaches floating-point columns and nothing else. See
-        /// Config::accuracyBoundPercent for why integers are excluded categorically rather
-        /// than case by case.
-        ///
-        /// Applying it here, once, is what lets selection be uniform afterwards. A column that
-        /// may not lose anything carries a zero bound, and a zero bound is already enough to
-        /// keep every lossy codec out of its candidate set -- so nothing downstream needs to
-        /// know which columns are keys, or times, or anything else.
+        /// The store's budget reaches floating-point columns and nothing else.
+
         const bool eligibleForLoss = type == DataType::Type::FLOAT32 || type == DataType::Type::FLOAT64;
 
         /// The codecs are deliberately left at their defaults here. Which one suits a column is
@@ -486,8 +480,9 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
     size_t unit = frame.unitIndex;
     uint64_t rowOffset = frame.rowOffset;
 
+    /// Scratch for the raw group bytes. The DECODED rows are not here but on the cursor, so a
+    /// reader resuming inside a group does not decode it again.
     std::vector<uint8_t> groupBytes;
-    std::vector<uint8_t> rowScratch;
 
     for (; unit < groups.size(); ++unit, rowOffset = 0)
     {
@@ -510,75 +505,86 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
             continue;
         }
 
-        /// A group's columns are decoded as a whole, so resuming inside one decodes it again. That
-        /// is the price of a destination smaller than a group; sizing the read buffer above the
-        /// group size avoids it entirely.
-        groupBytes.resize(group.header.groupByteLength);
-        const ssize_t got = writer.readAt(groupBytes.data(), groupBytes.size(), group.offset);
-        PRECONDITION(
-            got == static_cast<ssize_t>(groupBytes.size()), "short read of group at offset {}", group.offset);
-
         const uint64_t rowCount = group.header.rowCount;
-        const size_t entriesOffset = GROUP_HEADER_BYTES;
-        const size_t dataOffset = entriesOffset + (group.header.numColumns * COLUMN_ENTRY_BYTES);
-        INVARIANT(
-            group.header.numColumns == fields.size(),
-            "group has {} columns, schema has {}",
-            group.header.numColumns,
-            fields.size());
 
-        /// Rebuild whole rows, then filter. Decoding only the timestamp column first and
-        /// touching the rest only for the rows that survive is the natural refinement here,
-        /// and columnar storage is what makes it possible -- but it only pays on the at most
-        /// two groups per query that straddle a range boundary, so it is left for later.
-        rowScratch.assign(static_cast<size_t>(rowCount) * rowWidth, 0);
-
-        for (size_t c = 0; c < fields.size(); ++c)
+        /// Decode the group, unless this cursor is resuming inside the one it already holds.
+        ///
+        /// A group's columns are decoded as a whole, so a destination smaller than a group means
+        /// several calls land in the same group. Decoding per call made each of them pay for every
+        /// column and the whole transpose again. The decoded rows live on the cursor rather than
+        /// here because `read` holds only a shared lock.
+        if (!frame.decodedValid || frame.decodedUnit != unit)
         {
-            const auto& field = fields[c];
-            const auto entry = parseColumnEntry(groupBytes.data() + entriesOffset + (c * COLUMN_ENTRY_BYTES));
+            groupBytes.resize(group.header.groupByteLength);
+            const ssize_t got = writer.readAt(groupBytes.data(), groupBytes.size(), group.offset);
+            PRECONDITION(
+                got == static_cast<ssize_t>(groupBytes.size()), "short read of group at offset {}", group.offset);
 
-            const uint8_t* stored = groupBytes.data() + dataOffset + entry.valuesOffset;
-
-            /// Equal lengths mean the writer found compression unprofitable and kept the
-            /// codec's own bytes, so there is nothing to undo.
-            std::vector<uint8_t> inflated;
-            if (entry.uncompressedLength != entry.valuesLength)
-            {
-                inflated = compressor.decompress(stored, entry.valuesLength, entry.uncompressedLength);
-                stored = inflated.data();
-            }
-
-            std::vector<uint8_t> values(static_cast<size_t>(rowCount) * field.valueWidth);
-            const MutableColumnValues out{
-                .type = field.type, .data = values.data(), .rowCount = rowCount, .valueWidth = field.valueWidth};
-            const std::span<const uint8_t> payload(stored, entry.uncompressedLength);
-
-            /// Mirrors `encodeWith`: whichever stage produced the bytes decodes them back
-            /// through the same `ColumnCodec` interface. See its comment for why a lossy codec
-            /// paired with a nonzero losslessCodecId is not a form any codec here still writes.
+            const size_t entriesOffset = GROUP_HEADER_BYTES;
+            const size_t dataOffset = entriesOffset + (group.header.numColumns * COLUMN_ENTRY_BYTES);
             INVARIANT(
-                entry.lossyCodecId == 0 || entry.losslessCodecId == 0,
-                "a second lossless stage ({}) over a lossy codec's codes is not implemented",
-                codecName(static_cast<CodecId>(entry.losslessCodecId)));
+                group.header.numColumns == fields.size(),
+                "group has {} columns, schema has {}",
+                group.header.numColumns,
+                fields.size());
 
-            const CodecId id = entry.lossyCodecId != 0 ? static_cast<CodecId>(entry.lossyCodecId)
-                                                         : static_cast<CodecId>(entry.losslessCodecId);
-            getCodec(id).decode(payload, out);
+            /// Rebuild whole rows, then filter. Decoding only the timestamp column first and
+            /// touching the rest only for the rows that survive is the natural refinement here,
+            /// and columnar storage is what makes it possible -- but it only pays on the at most
+            /// two groups per query that straddle a range boundary, so it is left for later.
+            frame.decoded.assign(static_cast<size_t>(rowCount) * rowWidth, 0);
 
-            const uint8_t* bits = entry.nullBitsLength > 0 ? groupBytes.data() + dataOffset + entry.nullBitsOffset : nullptr;
-
-            for (uint64_t r = 0; r < rowCount; ++r)
+            for (size_t c = 0; c < fields.size(); ++c)
             {
-                uint8_t* rowPtr = rowScratch.data() + (r * rowWidth);
-                std::memcpy(rowPtr + field.valueOffset, values.data() + (r * field.valueWidth), field.valueWidth);
-                if (bits != nullptr)
+                const auto& field = fields[c];
+                const auto entry = parseColumnEntry(groupBytes.data() + entriesOffset + (c * COLUMN_ENTRY_BYTES));
+
+                const uint8_t* stored = groupBytes.data() + dataOffset + entry.valuesOffset;
+
+                /// Equal lengths mean the writer found compression unprofitable and kept the
+                /// codec's own bytes, so there is nothing to undo.
+                std::vector<uint8_t> inflated;
+                if (entry.uncompressedLength != entry.valuesLength)
                 {
-                    const bool set = (bits[r / 8] & (1U << (r % 8))) != 0;
-                    rowPtr[field.valueOffset - 1] = set ? 1U : 0U;
+                    inflated = compressor.decompress(stored, entry.valuesLength, entry.uncompressedLength);
+                    stored = inflated.data();
+                }
+
+                std::vector<uint8_t> values(static_cast<size_t>(rowCount) * field.valueWidth);
+                const MutableColumnValues out{
+                    .type = field.type, .data = values.data(), .rowCount = rowCount, .valueWidth = field.valueWidth};
+                const std::span<const uint8_t> payload(stored, entry.uncompressedLength);
+
+                /// Mirrors `encodeWith`: whichever stage produced the bytes decodes them back
+                /// through the same `ColumnCodec` interface. See its comment for why a lossy codec
+                /// paired with a nonzero losslessCodecId is not a form any codec here still writes.
+                INVARIANT(
+                    entry.lossyCodecId == 0 || entry.losslessCodecId == 0,
+                    "a second lossless stage ({}) over a lossy codec's codes is not implemented",
+                    codecName(static_cast<CodecId>(entry.losslessCodecId)));
+
+                const CodecId id = entry.lossyCodecId != 0 ? static_cast<CodecId>(entry.lossyCodecId)
+                                                             : static_cast<CodecId>(entry.losslessCodecId);
+                getCodec(id).decode(payload, out);
+
+                const uint8_t* bits = entry.nullBitsLength > 0 ? groupBytes.data() + dataOffset + entry.nullBitsOffset : nullptr;
+
+                for (uint64_t r = 0; r < rowCount; ++r)
+                {
+                    uint8_t* rowPtr = frame.decoded.data() + (r * rowWidth);
+                    std::memcpy(rowPtr + field.valueOffset, values.data() + (r * field.valueWidth), field.valueWidth);
+                    if (bits != nullptr)
+                    {
+                        const bool set = (bits[r / 8] & (1U << (r % 8))) != 0;
+                        rowPtr[field.valueOffset - 1] = set ? 1U : 0U;
+                    }
                 }
             }
+            frame.decodedUnit = unit;
+            frame.decodedValid = true;
+            decodeCount.fetch_add(1, std::memory_order_relaxed);
         }
+        const std::vector<uint8_t>& rowScratch = frame.decoded;
 
         /// Whole group inside the range (or no range at all): take every row not yet taken.
         if (range.isUnbounded() || (groupMin >= range.start && groupMax < range.end))

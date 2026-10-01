@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <atomic>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -152,6 +153,10 @@ public:
     /// genuinely narrow and disjoint -- the property that makes skipping possible, and the one
     /// that a correct-rows assertion cannot distinguish from filtering every row.
     [[nodiscard]] std::vector<std::pair<uint64_t, uint64_t>> debugGroupRanges() const;
+    /// Groups actually decoded, rather than re-used from a cursor already holding them. Equal to
+    /// the number of groups a scan touches; a large multiple of it if resuming inside a group
+    /// decodes it again.
+    [[nodiscard]] uint64_t debugDecodeCount() const { return decodeCount.load(std::memory_order_relaxed); }
 
 private:
     /// Where one schema field sits inside a packed row, resolved once at construction.
@@ -236,6 +241,10 @@ private:
 
     bool opened{false};
     mutable std::shared_mutex mutex;
+
+    /// Counts real group decodes, for the tests that pin resume behaviour. Atomic and mutable
+    /// because `read` holds only a shared lock, so several readers may bump it at once.
+    mutable std::atomic<uint64_t> decodeCount{0};
 };
 
 }

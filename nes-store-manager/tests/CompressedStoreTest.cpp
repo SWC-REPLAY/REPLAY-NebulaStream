@@ -33,6 +33,7 @@
 #include <Util/Logger/impl/NesLogger.hpp>
 #include <CompressedStore.hpp>
 #include <Store.hpp>
+#include <StoreReadCursor.hpp>
 #include <TimeRange.hpp>
 
 namespace NES
@@ -213,6 +214,56 @@ TEST_F(CompressedStoreTest, ReadUnboundedRoundTrip)
             EXPECT_EQ(span.data()[(i * rowWidth) + b], static_cast<uint8_t>(0x10 + i));
         }
     }
+}
+
+/// A destination smaller than a segment makes several reads land in the same segment, and each
+/// of those used to decompress the whole segment again -- 32 decompressions for 4 segments here.
+/// The decoded bytes now live on the cursor, so a read resuming where it stopped reuses them.
+///
+/// Without the reuse this still returns every row: the count is the only thing that catches it,
+/// which is why debugDecodeCount exists.
+TEST_F(CompressedStoreTest, ResumingInsideASegmentDecompressesItOnce)
+{
+    const Schema schema = makeSchema();
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+
+    auto cfg = cfgFor("decode_once_test");
+    cfg.segmentSize = rowWidth * 64;
+    Store store = makeStore<CompressedStore>(cfg, schema);
+    store.open();
+
+    constexpr uint64_t numRows = 256;
+    for (uint64_t i = 0; i < numRows; ++i)
+    {
+        const auto row = makeRow(rowWidth, static_cast<uint8_t>(i));
+        store.writeRecord(row.data(), rowWidth, Timestamp(1000 + i));
+    }
+    store.flush();
+
+    const auto& impl = store.getAs<CompressedStore>().get();
+    const uint64_t segments = impl.debugSegmentCount();
+    ASSERT_GT(segments, 1U) << "the rows have to span several segments for this to mean anything";
+
+    /// Eight rows per call against 64 rows per segment, so every segment is re-entered eight times.
+    auto bufferManager = BufferManager::create(rowWidth * 8, 8);
+    auto out = bufferManager->getBufferBlocking();
+    StoreReadCursor cursor;
+    std::vector<uint8_t> seen;
+    uint64_t calls = 0;
+    while (const uint64_t got = store.read(out, schema, TimeRange{}, cursor))
+    {
+        ++calls;
+        const auto span = out.getAvailableMemoryArea<const uint8_t>();
+        seen.insert(seen.end(), span.data(), span.data() + (got * rowWidth));
+    }
+
+    ASSERT_EQ(seen.size(), numRows * rowWidth) << "every row must still come back";
+    for (uint64_t i = 0; i < numRows; ++i)
+    {
+        EXPECT_EQ(seen[i * rowWidth], static_cast<uint8_t>(i)) << "row " << i;
+    }
+    EXPECT_GT(calls, segments) << "the destination must be smaller than a segment, or this proves nothing";
+    EXPECT_EQ(impl.debugDecodeCount(), segments) << "each segment decompressed exactly once";
 }
 
 TEST_F(CompressedStoreTest, ReadPrunesByTimeRange)

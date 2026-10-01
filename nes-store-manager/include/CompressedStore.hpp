@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <atomic>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -138,6 +139,10 @@ public:
     [[nodiscard]] uint64_t debugSegmentCount() const;
     /// The [minTs, maxTs] of each sealed segment, in seal order. Mirrors LossyStore::debugGroupRanges.
     [[nodiscard]] std::vector<std::pair<uint64_t, uint64_t>> debugSegmentRanges() const;
+    /// Segments actually decompressed, rather than re-used from a cursor already holding them.
+    /// Equal to the number of segments a scan touches; a large multiple of it if resuming inside
+    /// a segment decompresses it again.
+    [[nodiscard]] uint64_t debugDecodeCount() const { return decodeCount.load(std::memory_order_relaxed); }
 
 private:
     /// Points at one sealed segment already written to disk: its file offset
@@ -187,6 +192,10 @@ private:
 
     bool opened{false};
     mutable std::shared_mutex mutex;
+
+    /// Counts real decompressions, for the tests that pin resume behaviour. Atomic and mutable
+    /// because `read` holds only a shared lock, so several readers may bump it at once.
+    mutable std::atomic<uint64_t> decodeCount{0};
 
     /// Chaining support (all empty for a standalone/tail store), mirroring
     /// MemoryStore/FileStore.

@@ -319,17 +319,26 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
             continue;
         }
 
-        /// Segment survived pruning — read just its compressed payload off disk.
+        /// Segment survived pruning -- decompress it, unless this cursor is resuming inside the
+        /// segment it already holds.
         ///
-        /// A segment is compressed as a whole, so resuming inside one costs a full decompression
-        /// again. That is the price of a destination smaller than a segment; sizing the read buffer
-        /// above the segment size avoids it entirely.
-        std::vector<uint8_t> compressed(seg.header.compressedBytes);
-        const auto payloadOffset = seg.offset + SEGMENT_HEADER_BYTES;
-        const ssize_t got = writer.readAt(compressed.data(), seg.header.compressedBytes, payloadOffset);
-        PRECONDITION(got == static_cast<ssize_t>(seg.header.compressedBytes), "Short read of compressed segment payload");
+        /// A segment is compressed as a whole, so a destination smaller than one means several
+        /// calls land in the same segment. Decompressing per call made that cost the whole segment
+        /// every time: 257 decompressions of a 1 MB segment to fill 4 KB buffers. The decoded bytes
+        /// live on the cursor rather than here because `read` holds only a shared lock.
+        if (!frame.decodedValid || frame.decodedUnit != unit)
+        {
+            std::vector<uint8_t> compressed(seg.header.compressedBytes);
+            const auto payloadOffset = seg.offset + SEGMENT_HEADER_BYTES;
+            const ssize_t got = writer.readAt(compressed.data(), seg.header.compressedBytes, payloadOffset);
+            PRECONDITION(got == static_cast<ssize_t>(seg.header.compressedBytes), "Short read of compressed segment payload");
 
-        const std::vector<uint8_t> raw = codec.decompress(compressed.data(), seg.header.compressedBytes, seg.header.uncompressedBytes);
+            frame.decoded = codec.decompress(compressed.data(), seg.header.compressedBytes, seg.header.uncompressedBytes);
+            frame.decodedUnit = unit;
+            frame.decodedValid = true;
+            decodeCount.fetch_add(1, std::memory_order_relaxed);
+        }
+        const std::vector<uint8_t>& raw = frame.decoded;
 
         /// Whole segment in range -> copy the rows not yet taken.
         if (range.isUnbounded() || (segMin >= range.start && segMax < range.end))

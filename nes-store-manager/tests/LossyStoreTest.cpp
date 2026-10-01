@@ -43,6 +43,7 @@
 #include <Util/Logger/impl/NesLogger.hpp>
 #include <LossyStore.hpp>
 #include <Store.hpp>
+#include <StoreReadCursor.hpp>
 #include <StoreRegistry.hpp>
 #include <TimeRange.hpp>
 
@@ -205,6 +206,54 @@ TEST_F(LossyStoreTest, BulkRoundTripIsBitExact)
 
     const auto read = readAll(store, schema, TimeRange{}, 200);
     EXPECT_EQ(read, rows);
+
+    store.getAs<LossyStore>().getMutable().removeFile();
+}
+
+/// A destination smaller than a group makes several reads land in the same group, and each of
+/// those used to decode every column and redo the whole transpose -- 32 decodes for 4 groups
+/// here. The decoded rows now live on the cursor, so a read resuming where it stopped reuses
+/// them.
+///
+/// Without the reuse this still returns every row unchanged; only the count catches it.
+TEST_F(LossyStoreTest, ResumingInsideAGroupDecodesItOnce)
+{
+    const Schema schema = makeSchema();
+    const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
+
+    Store store = makeStore<LossyStore>(cfgFor("decode_once", 64, rowWidth), schema);
+    store.open();
+    auto& lossy = store.getAs<LossyStore>().getMutable();
+
+    /// Four segments in, four groups out -- this tier seals one group per incoming segment.
+    std::vector<uint8_t> all;
+    for (uint64_t g = 0; g < 4; ++g)
+    {
+        const auto rows = makeRows(schema, 64, 1000 + (g * 1000), 10);
+        appendAsSegment(lossy, rows.data(), rows.size(), schema);
+        all.insert(all.end(), rows.begin(), rows.end());
+    }
+    store.flush();
+
+    const uint64_t groups = concrete(store).debugGroupCount();
+    ASSERT_EQ(groups, 4U) << "the rows have to span several groups for this to mean anything";
+
+    /// Eight rows per call against 64 rows per group, so every group is re-entered eight times.
+    auto bufferManager = BufferManager::create(rowWidth * 8, 8);
+    auto out = bufferManager->getBufferBlocking();
+    StoreReadCursor cursor;
+    std::vector<uint8_t> seen;
+    uint64_t calls = 0;
+    while (const uint64_t got = store.read(out, schema, TimeRange{}, cursor))
+    {
+        ++calls;
+        const auto area = out.getAvailableMemoryArea<const uint8_t>();
+        seen.insert(seen.end(), area.data(), area.data() + (got * rowWidth));
+    }
+
+    EXPECT_EQ(seen, all) << "every row must still come back, unchanged";
+    EXPECT_GT(calls, groups) << "the destination must be smaller than a group, or this proves nothing";
+    EXPECT_EQ(concrete(store).debugDecodeCount(), groups) << "each group decoded exactly once";
 
     store.getAs<LossyStore>().getMutable().removeFile();
 }
