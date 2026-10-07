@@ -566,6 +566,9 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     /// The unsealed segment is held in memory, not on disk, so its bytes are copied out here.
     /// Only this tier serves unsealed rows at all.
     std::vector<uint8_t> activeSnapshot;
+    /// Which row of the unsealed segment `activeSnapshot` begins at. It is a WINDOW, not the whole
+    /// segment, so the consumption below is relative to this rather than to the segment's start.
+    uint64_t activeWindowFrom = 0;
     uint64_t rowOffset = 0;
     auto& frame = cursor.frames.at(depth);
     {
@@ -582,7 +585,41 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         readable = collectReadableLocked(fromUnit, rowOffset, capacity, range, tupleSize);
         if (!readable.locations.empty() && readable.locations.back().writer == nullptr)
         {
-            activeSnapshot = activeBytes;
+            /// Copy only what this call can consume. The whole segment used to be copied on every
+            /// call and at most one destination buffer of it used -- 4.4 MB moved to read 4 KB at a
+            /// 16 MB segment, and 99.6% of calls never reached the unsealed unit at all.
+            ///
+            /// The copy STAYS here, under the same lock. Between this point and the memcpy below
+            /// the segment can seal, which clears `activeBytes` and moves its rows to disk, so a
+            /// reader that deferred the copy would serve bytes that had moved out from under it.
+            ///
+            /// A read enters the unsealed segment either already inside it -- then it is the only
+            /// unit collected and resumes at `rowOffset` -- or by spilling into it from an earlier
+            /// unit, and then it enters at row 0.
+            const uint64_t windowFrom = readable.locations.size() == 1 ? rowOffset : 0;
+
+            /// A window of `capacity` rows is only enough when every row qualifies. Filtering
+            /// advances by rows SCANNED and not rows kept (`rowOffset += progress.scanned`), so a
+            /// bounded range can walk arbitrarily far past `capacity` while keeping almost nothing
+            /// -- and straight off the end of a window sized for it. Segments that need filtering
+            /// therefore keep the whole copy; it is the unbounded reads that do the volume.
+            const bool everyRowQualifies = range.isUnbounded()
+                || (activeSegment.minTs >= range.start.getRawValue() && activeSegment.maxTs < range.end.getRawValue());
+
+            if (everyRowQualifies)
+            {
+                const size_t fromB = std::min<size_t>(windowFrom * tupleSize, activeBytes.size());
+                const size_t wantB = std::min<size_t>(capacity * tupleSize, activeBytes.size() - fromB);
+                activeSnapshot.assign(
+                    activeBytes.begin() + static_cast<std::ptrdiff_t>(fromB),
+                    activeBytes.begin() + static_cast<std::ptrdiff_t>(fromB + wantB));
+                activeWindowFrom = windowFrom;
+            }
+            else
+            {
+                activeSnapshot = activeBytes;
+                activeWindowFrom = 0;
+            }
         }
     }
 
@@ -626,8 +663,15 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
             /// no index to compare against.
             if (location.writer == nullptr)
             {
-                const size_t from = rowOffset * tupleSize;
-                const size_t want = std::min<size_t>(chunkRows * tupleSize, activeSnapshot.size() - from);
+                /// Relative to the window, which may start part-way into the segment.
+                PRECONDITION(
+                    rowOffset >= activeWindowFrom,
+                    "unsealed window starts at row {} but the read is at row {}",
+                    activeWindowFrom,
+                    rowOffset);
+                const size_t from = (rowOffset - activeWindowFrom) * tupleSize;
+                const size_t want
+                    = from < activeSnapshot.size() ? std::min<size_t>(chunkRows * tupleSize, activeSnapshot.size() - from) : 0;
                 std::memcpy(dest, activeSnapshot.data() + from, want);
                 bytesRead = static_cast<ssize_t>(want);
             }
