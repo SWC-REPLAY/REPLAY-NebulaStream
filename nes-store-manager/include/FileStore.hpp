@@ -28,6 +28,7 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <BinaryStoreWriter.hpp>
+#include <ErrorHandling.hpp>
 #include <FlushPolicy.hpp>
 #include <ReplayStoreFormat.hpp>
 #include <Store.hpp>
@@ -171,7 +172,83 @@ private:
         /// This file's own range, written into its header so a reader can dismiss the whole file.
         Timestamp minTs{Timestamp(Timestamp::INVALID_VALUE)};
         Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
+
+        /// Global position of this part's FIRST unit. Assigned once, when the part is created, and
+        /// never touched again: sealing appends to `segments`, which moves the END of the range and
+        /// not its start. Global, so eviction needs no fixup -- dropping an older part leaves every
+        /// surviving part's firstUnit exactly as it was, which is what lets a cursor keep its place.
+        uint64_t firstUnit{0};
+
+        /// Which units live here. The end is DERIVED: `segments.size()` already says how many there
+        /// are, and a stored lastUnit would be a second fact to keep in step on every seal.
+        ///
+        /// Note what this does NOT assume: nothing about how many segments a part holds. A roll
+        /// decided on bytes, on elapsed time, or on anything else makes parts of wildly different
+        /// sizes, and this still resolves exactly, because within one part segments are appended in
+        /// order -- sealActiveSegment places each descriptor at index `segments.size()` -- so that
+        /// part's segment i is unavoidably its (i+1)-th unit.
+        [[nodiscard]] bool holds(const uint64_t globalUnit) const
+        {
+            return globalUnit >= firstUnit && (globalUnit - firstUnit) < segments.size();
+        }
+
+        /// PRECONDITION: this part holds `globalUnit`.
+        ///
+        /// The subtraction is an offset into this part's own vector, and it is exact only while a
+        /// part's units are consecutive with no holes. They are: eviction drops whole files and
+        /// nothing removes a segment from the middle of one. Per-segment eviction INSIDE a file
+        /// would break it, and would do so silently one segment at a time -- hence the check.
+        [[nodiscard]] const SegmentDescriptor& unitAt(const uint64_t globalUnit) const
+        {
+            PRECONDITION(holds(globalUnit), "part starting at unit {} does not hold unit {}", firstUnit, globalUnit);
+            return segments[globalUnit - firstUnit];
+        }
     };
+
+    /// Where one unit physically lives. A descriptor's offsets are relative to its own file's data
+    /// region, so a descriptor alone locates nothing -- it only means something together with the
+    /// writer and data start that make sense of it.
+    struct SegmentLocation
+    {
+        /// Global position, so a cursor can resume on it without anything having to be renumbered.
+        uint64_t unit{0};
+        SegmentDescriptor descriptor;
+        /// Null for the UNSEALED segment, whose bytes are not on disk and are served from memory.
+        BinaryStoreWriter* writer{nullptr};
+        uint64_t dataStart{0};
+    };
+
+    /// What one read can serve.
+    struct ReadableUnits
+    {
+        std::vector<SegmentLocation> locations;
+        /// Set when the walk ran out of units rather than filling the destination. ONLY then is a
+        /// cursor exhausted -- stopping because the buffer is full is not the end of the store, and
+        /// conflating the two would end a replay early.
+        bool reachedEnd{false};
+    };
+
+    /// Resolve a GLOBAL unit position to the file holding it. nullopt when the position has been
+    /// evicted or is past the last sealed unit.
+    ///
+    /// A scan over `parts`, deliberately, and not index arithmetic over a fixed segments-per-file:
+    /// a scan does not care how a part came to be the size it is, so changing WHEN a file rolls
+    /// cannot make this resolve to the wrong segment. `parts` is bounded by `filesAtCapacity`,
+    /// since eviction holds the store under `totalSize`.
+    /// PRECONDITION: the caller holds `mutex`.
+    [[nodiscard]] std::optional<SegmentLocation> locateUnitLocked(uint64_t globalUnit) const;
+
+    /// The units one read can serve, from `fromUnit` onward and in order.
+    ///
+    /// Units the range cannot match are skipped HERE rather than materialised and skipped later,
+    /// and the walk stops once the gathered units can supply `capacityRows`. That is one unit
+    /// normally and two when a read straddles a segment boundary, because a destination holds a few
+    /// hundred rows and a sealed segment holds thousands. `fromRowOffset` is added to the budget:
+    /// the first unit is resumed part-way through, so its consumed prefix must not count as
+    /// available. The unsealed segment comes back last, with a null writer.
+    /// PRECONDITION: the caller holds `mutex`.
+    [[nodiscard]] ReadableUnits collectReadableLocked(
+        uint64_t fromUnit, uint64_t fromRowOffset, uint64_t capacityRows, const TimeRange& range, uint32_t tupleSize) const;
 
     /// Write the active segment's descriptor and payload into the current file, then start a new
     /// segment -- rolling to a new file first if this one has reached `totalSize`.
@@ -215,10 +292,6 @@ private:
     uint32_t nextPartNumber{0};
     /// Files unlinked for being over capacity, for tests and for reporting.
     size_t evictedFiles{0};
-    /// Units that have left the store through eviction. A cursor records a GLOBAL unit position,
-    /// so subtracting this turns it into an index into the units still held. Never decreases, so a
-    /// position never means two different units.
-    uint64_t evictedUnits{0};
 
     /// Bumped whenever the parts are emptied, i.e. whenever an index into them stops meaning what
     /// it did. Appending never invalidates an index, so sealing does not bump it.

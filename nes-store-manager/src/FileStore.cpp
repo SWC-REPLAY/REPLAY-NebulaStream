@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
-#include <limits>
 #include <iomanip>
 #include <mutex>
 #include <optional>
@@ -126,9 +125,8 @@ void FileStore::evictOldestOverCapacity()
     {
         parts.front().writer->close();
         parts.front().writer->removeFile();
-        /// Counted so a cursor can still say where it is: unit positions are global and never
-        /// reused, so an index into them keeps meaning the same unit after a file leaves.
-        evictedUnits += parts.front().segments.size();
+        /// Nothing to count. Unit positions are global and never reused, and every surviving part
+        /// already carries its own firstUnit, so a file leaving renumbers nothing.
         parts.erase(parts.begin());
         ++evictedFiles;
         dropped = true;
@@ -179,7 +177,12 @@ void FileStore::rollToNextFile()
 {
     /// The finished file is NOT closed , its rows are still part of this store and a read has to
     /// reach them. It simply stops being written to.
+    ///
+    /// Read before the emplace: `current()` is `parts.back()`, so growing the vector first would
+    /// make this the number of the new, empty part rather than of the one being finished.
+    const uint64_t nextFirstUnit = current().firstUnit + current().segments.size();
     parts.emplace_back();
+    parts.back().firstUnit = nextFirstUnit;
     openCurrentPart();
 }
 
@@ -454,6 +457,60 @@ FilterProgress filterBufferRows(
 
 }
 
+std::optional<FileStore::SegmentLocation> FileStore::locateUnitLocked(const uint64_t globalUnit) const
+{
+    for (const Part& part : parts)
+    {
+        if (part.holds(globalUnit))
+        {
+            return SegmentLocation{globalUnit, part.unitAt(globalUnit), part.writer.get(), part.dataStart};
+        }
+    }
+    return std::nullopt;
+}
+
+FileStore::ReadableUnits FileStore::collectReadableLocked(
+    const uint64_t fromUnit, const uint64_t fromRowOffset, const uint64_t capacityRows, const TimeRange& range,
+    const uint32_t tupleSize) const
+{
+    ReadableUnits readable;
+    /// The unsealed segment sits one past the last sealed unit of the last part. It has no
+    /// descriptor in any file header yet, but its rows are already readable.
+    const uint64_t unsealedUnit = current().firstUnit + current().segments.size();
+    const uint64_t budget = capacityRows + fromRowOffset;
+    uint64_t gathered = 0;
+
+    for (uint64_t unit = fromUnit; gathered < budget; ++unit)
+    {
+        SegmentLocation location;
+        if (const auto sealed = locateUnitLocked(unit))
+        {
+            location = *sealed;
+        }
+        else if (unit == unsealedUnit && activeSegment.byteLength > 0)
+        {
+            location = SegmentLocation{unit, activeSegment, nullptr, current().dataStart};
+        }
+        else
+        {
+            readable.reachedEnd = true;
+            break;
+        }
+
+        /// Pruned here, so a unit the range cannot match is never carried out of the lock. Its rows
+        /// do not count against the budget either -- skipping it bought no destination space.
+        if (!range.isUnbounded()
+            && !range.overlaps(Timestamp(location.descriptor.minTs), Timestamp(location.descriptor.maxTs)))
+        {
+            continue;
+        }
+
+        gathered += location.descriptor.byteLength / tupleSize;
+        readable.locations.push_back(location);
+    }
+    return readable;
+}
+
 uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
 {
     PRECONDITION(depth + 1 < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
@@ -490,91 +547,61 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
     }
 
-    /// Snapshot the divisions under the lock, then read them without holding it: pread is
-    /// position-independent, and a concurrent writer only ever appends past what is snapshotted.
-    ///
-    /// The segment still being filled is included as a division of its own. It has no descriptor
-    /// in the header yet, but its rows are already on disk and a read must see them.
-    /// One flat list across every rolled file, oldest first, so the cursor's unit index keeps
-    /// meaning one division and nothing has to track which file it is up to separately. A
-    /// descriptor's offset is relative to its own file, so each division carries the writer and
-    /// data start that make sense of it. The writers live on the heap, so growing `parts` does not
-    /// move them and these pointers stay good once the lock is dropped.
-    struct Division
-    {
-        SegmentDescriptor descriptor;
-        BinaryStoreWriter* writer;
-        uint64_t dataStart;
-    };
-    std::vector<Division> divisions;
-    /// The unsealed segment is held in memory, not on disk, so its bytes are copied out here
-    /// alongside its descriptor. Only this tier serves unsealed rows at all.
-    std::vector<uint8_t> activeSnapshot;
-    size_t activeIndex = std::numeric_limits<size_t>::max();
-    uint64_t evictedAtSnapshot = 0;
-    auto& frame = cursor.frames.at(depth);
-    {
-        const std::shared_lock lock(mutex);
-        evictedAtSnapshot = evictedUnits;
-        bindCursorFrame(frame, readGeneration, typeName());
-        for (const auto& part : parts)
-        {
-            for (const auto& descriptor : part.segments)
-            {
-                divisions.push_back(Division{descriptor, part.writer.get(), part.dataStart});
-            }
-        }
-        if (activeSegment.byteLength > 0)
-        {
-            activeIndex = divisions.size();
-            divisions.push_back(Division{activeSegment, current().writer.get(), current().dataStart});
-            activeSnapshot = activeBytes;
-        }
-    }
-
+    /// Resolved before the lock: it reads the destination buffer and not the store, and the
+    /// collector below needs it to know when it has gathered enough units.
     auto destSpan = buffer.getAvailableMemoryArea<char>();
     const uint64_t capacity = destSpan.size() / tupleSize;
     /// A destination that cannot hold one row would return zero forever, and a zero is read as
     /// end of stream -- so the whole replay would come back empty with no error at all.
     PRECONDITION(capacity > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), tupleSize);
-    uint64_t destTuples = 0;
 
-    /// Three decisions per division, exactly as MemoryStore makes them per buffer: skip it, take
-    /// all of it, or inspect its rows. Deciding per division is what makes the skip real -- a
-    /// span from the first match to the last would read everything in between, and segments are
-    /// held in write order, so a late arrival puts a non-matching one between two matches.
-    /// The cursor holds a GLOBAL unit position, not an index into `divisions`. Eviction removes
-    /// units from the front, so an index would silently come to mean a different unit; a position
-    /// minus the number evicted does not. This is what lets a read survive an eviction rather than
-    /// being told the store renumbered itself.
-    uint64_t rowOffset = frame.rowOffset;
-    size_t unit = 0;
-    if (frame.unitIndex >= evictedAtSnapshot)
+    /// Snapshot under the lock, then read without holding it: pread is position-independent, and a
+    /// concurrent writer only ever appends past what is snapshotted. The writers live on the heap,
+    /// so growing `parts` does not move them and the pointers stay good once the lock is dropped.
+    ///
+    /// Only the units THIS CALL can consume are taken. Flattening every unit in the store to serve
+    /// one destination used to cost a vector of every segment on every call -- 4,560 entries built
+    /// to read 146 rows, on each of 292,466 calls of a full replay.
+    ReadableUnits readable;
+    /// The unsealed segment is held in memory, not on disk, so its bytes are copied out here.
+    /// Only this tier serves unsealed rows at all.
+    std::vector<uint8_t> activeSnapshot;
+    uint64_t rowOffset = 0;
+    auto& frame = cursor.frames.at(depth);
     {
-        unit = static_cast<size_t>(frame.unitIndex - evictedAtSnapshot);
-    }
-    else
-    {
-        /// Where this read had got to has been evicted. Those rows are genuinely gone, so it
+        const std::shared_lock lock(mutex);
+        bindCursorFrame(frame, readGeneration, typeName());
+
+        /// Where this read had got to may have been evicted. Those rows are genuinely gone, so it
         /// resumes at the oldest unit still held rather than failing -- a replay of a store under
         /// a retention limit is allowed to lose its tail, not to stop working.
-        rowOffset = 0;
+        const uint64_t oldestUnit = parts.front().firstUnit;
+        const uint64_t fromUnit = std::max(frame.unitIndex, oldestUnit);
+        rowOffset = frame.unitIndex < oldestUnit ? 0 : frame.rowOffset;
+
+        readable = collectReadableLocked(fromUnit, rowOffset, capacity, range, tupleSize);
+        if (!readable.locations.empty() && readable.locations.back().writer == nullptr)
+        {
+            activeSnapshot = activeBytes;
+        }
     }
 
-    for (; unit < divisions.size(); ++unit, rowOffset = 0)
+    uint64_t destTuples = 0;
+
+    /// Two decisions per unit, as MemoryStore makes them per buffer: take all of it, or inspect its
+    /// rows. The third -- skip it -- was already made under the lock, which is what makes the skip
+    /// real: a span from the first match to the last would read everything in between, and segments
+    /// are held in write order, so a late arrival puts a non-matching one between two matches.
+    size_t taken = 0;
+    for (; taken < readable.locations.size(); ++taken, rowOffset = 0)
     {
         if (destTuples >= capacity)
         {
             break;
         }
 
-        const auto& division = divisions[unit].descriptor;
-
-        /// 1. Its range cannot meet the query: never touched.
-        if (!range.isUnbounded() && !range.overlaps(Timestamp(division.minTs), Timestamp(division.maxTs)))
-        {
-            continue;
-        }
+        const SegmentLocation& location = readable.locations[taken];
+        const SegmentDescriptor& division = location.descriptor;
 
         const uint64_t rowsInDivision = division.byteLength / tupleSize;
         if (rowOffset >= rowsInDivision)
@@ -595,7 +622,9 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
             const uint64_t chunkRows = std::min(rowsInDivision - rowOffset, capacity - destTuples);
             char* dest = destSpan.data() + (destTuples * tupleSize);
             ssize_t bytesRead = 0;
-            if (unit == activeIndex)
+            /// A null writer IS the unsealed segment: the location says how to read it, so there is
+            /// no index to compare against.
+            if (location.writer == nullptr)
             {
                 const size_t from = rowOffset * tupleSize;
                 const size_t want = std::min<size_t>(chunkRows * tupleSize, activeSnapshot.size() - from);
@@ -604,8 +633,8 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
             }
             else
             {
-                bytesRead = divisions[unit].writer->readAt(
-                    dest, chunkRows * tupleSize, divisions[unit].dataStart + division.byteOffset + (rowOffset * tupleSize));
+                bytesRead = location.writer->readAt(
+                    dest, chunkRows * tupleSize, location.dataStart + division.byteOffset + (rowOffset * tupleSize));
             }
             if (bytesRead <= 0)
             {
@@ -640,14 +669,26 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         }
     }
 
-    frame.unitIndex = unit + evictedAtSnapshot;
-    frame.rowOffset = rowOffset;
-    if (unit >= divisions.size())
+    /// Positions are global, so there is nothing to convert back: a position means the same unit
+    /// however many files have since been evicted.
+    if (taken < readable.locations.size())
+    {
+        frame.unitIndex = readable.locations[taken].unit;
+        frame.rowOffset = rowOffset;
+    }
+    else if (!readable.locations.empty())
+    {
+        frame.unitIndex = readable.locations.back().unit + 1;
+        frame.rowOffset = 0;
+    }
+    /// Exhausted only when the WALK ran out of units. Running out of collected ones means the
+    /// destination filled, and ending the replay there would silently truncate it.
+    if (readable.reachedEnd && taken >= readable.locations.size())
     {
         frame.exhausted = true;
     }
 
-    NES_DEBUG("FileStore::read: {} divisions across {} files, {} tuples", divisions.size(), parts.size(), destTuples);
+    NES_DEBUG("FileStore::read: {} units of {} files, {} tuples", readable.locations.size(), parts.size(), destTuples);
 
     buffer.setNumberOfTuples(destTuples);
     return destTuples;
