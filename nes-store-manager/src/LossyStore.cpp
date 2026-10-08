@@ -25,6 +25,7 @@
 
 #include <ErrorHandling.hpp>
 #include <ReplayStoreFormat.hpp>
+#include <StoreProfile.hpp>
 #include <StoreTypeRegistry.hpp>
 
 namespace NES
@@ -212,6 +213,10 @@ void LossyStore::sealPending()
 
 void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const Timestamp minTs, const Timestamp maxTs)
 {
+    /// The write total minus this is writeRecord's own per-row cost. It cannot be timed from
+    /// inside writeRecord: at one row per call the clock reads would outweigh the work.
+    NES_PROFILE_SCOPE(sealGroupNs);
+    NES_PROFILE_COUNT(groupsSealed);
     /// Caller holds the unique lock.
     if (rowCount == 0)
     {
@@ -250,6 +255,10 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
             nullBits[c].assign(nullBitsBytesFor(rowCount), 0);
         }
 
+        {
+        /// Row-major -> columnar. The store fuses the transpose into the column build rather than
+        /// staging a row-major copy, so this scope is the whole of it for this column.
+        NES_PROFILE_SCOPE(transposeOutNs);
         for (uint64_t r = 0; r < rowCount; ++r)
         {
             const uint8_t* rowPtr = rows + (r * rowWidth);
@@ -272,6 +281,7 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
                     nullBits[c][r / 8] |= static_cast<uint8_t>(1U << (r % 8));
                 }
             }
+        }
         }
 
         const ColumnValues columnValues{
@@ -309,7 +319,13 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
             StoredColumn stored;
             stored.uncompressedLength = encoded.bytes.size();
             stored.achievedError = encoded.achievedError;
-            auto compressed = compressor.compress(encoded.bytes.data(), encoded.bytes.size());
+            std::vector<uint8_t> compressed;
+            {
+                /// Paid on every column, kept only when smaller -- so this is spent whether or not
+                /// the result is used.
+                NES_PROFILE_SCOPE(compressNs);
+                compressed = compressor.compress(encoded.bytes.data(), encoded.bytes.size());
+            }
             stored.bytes = compressed.size() < encoded.bytes.size() ? std::move(compressed) : std::move(encoded.bytes);
             return stored;
         };
@@ -428,7 +444,10 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
         header.groupByteLength);
 
     const uint64_t offset = writer.size();
-    writer.append(out.data(), out.size());
+    {
+        NES_PROFILE_SCOPE(writeIoNs);
+        writer.append(out.data(), out.size());
+    }
     groups.push_back(GroupIndexEntry{.offset = offset, .header = header});
 
     {
@@ -449,6 +468,10 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
 uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
 {
     PRECONDITION(depth < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
+
+    /// Minus the four stage timers below, this is cursor and buffer bookkeeping.
+    NES_PROFILE_SCOPE(readTotalNs);
+    NES_PROFILE_COUNT(readCalls);
 
     const std::shared_lock lock(mutex);
 
@@ -516,7 +539,11 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
         if (!frame.decodedValid || frame.decodedUnit != unit)
         {
             groupBytes.resize(group.header.groupByteLength);
-            const ssize_t got = writer.readAt(groupBytes.data(), groupBytes.size(), group.offset);
+            ssize_t got = 0;
+            {
+                NES_PROFILE_SCOPE(readIoNs);
+                got = writer.readAt(groupBytes.data(), groupBytes.size(), group.offset);
+            }
             PRECONDITION(
                 got == static_cast<ssize_t>(groupBytes.size()), "short read of group at offset {}", group.offset);
 
@@ -546,6 +573,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
                 std::vector<uint8_t> inflated;
                 if (entry.uncompressedLength != entry.valuesLength)
                 {
+                    NES_PROFILE_SCOPE(decompressNs);
                     inflated = compressor.decompress(stored, entry.valuesLength, entry.uncompressedLength);
                     stored = inflated.data();
                 }
@@ -565,10 +593,16 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
 
                 const CodecId id = entry.lossyCodecId != 0 ? static_cast<CodecId>(entry.lossyCodecId)
                                                              : static_cast<CodecId>(entry.losslessCodecId);
-                getCodec(id).decode(payload, out);
+                {
+                    NES_PROFILE_SCOPE(decodeNs);
+                    getCodec(id).decode(payload, out);
+                }
 
                 const uint8_t* bits = entry.nullBitsLength > 0 ? groupBytes.data() + dataOffset + entry.nullBitsOffset : nullptr;
 
+                {
+                /// Columnar -> row-major, the inverse of the fused transpose on the write side.
+                NES_PROFILE_SCOPE(transposeInNs);
                 for (uint64_t r = 0; r < rowCount; ++r)
                 {
                     uint8_t* rowPtr = frame.decoded.data() + (r * rowWidth);
@@ -578,6 +612,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
                         const bool set = (bits[r / 8] & (1U << (r % 8))) != 0;
                         rowPtr[field.valueOffset - 1] = set ? 1U : 0U;
                     }
+                }
                 }
             }
             frame.decodedUnit = unit;

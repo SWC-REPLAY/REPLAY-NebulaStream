@@ -12,6 +12,7 @@
     limitations under the License.
 */
 
+#include <StoreProfile.hpp>
 #include <lossy/ColumnCodec.hpp>
 
 #include <algorithm>
@@ -268,12 +269,23 @@ class QuantizedCodec final : public ColumnCodec
 public:
     [[nodiscard]] EncodedColumn encode(const ColumnValues& in, const double relativeBoundPercent) const override
     {
-        const auto quantized = quantizeColumn(in, relativeBoundPercent);
+        /// The two stages the lossy codec is made of, timed apart: quantising maps magnitudes
+        /// onto a log grid, bit-packing writes the resulting codes at the group's width.
+        ///
+        /// The lambda is what BOUNDS the timer. A scope guard declared plainly here would run to
+        /// the end of this function and swallow the bit-pack too -- the very stage it is meant to
+        /// be measured against.
+        const auto quantized = [&]
+        {
+            NES_PROFILE_SCOPE(quantizeNs);
+            return quantizeColumn(in, relativeBoundPercent);
+        }();
 
         std::vector<uint8_t> out;
         writeQuantizeHeader(out, quantized);
         if (!quantized.isConstant)
         {
+            NES_PROFILE_SCOPE(bitpackNs);
             bitPack(quantized.codes, quantized.bitWidth, out);
         }
         return EncodedColumn{.bytes = std::move(out), .achievedError = quantized.achievedError};
