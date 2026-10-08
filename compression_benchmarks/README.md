@@ -5,10 +5,18 @@ numbers come from the real engine — the binding rule, the source, buffer seali
 transformations between tiers — rather than from a harness wrapped around the codecs.
 
 ```
-tests/     the .test files, one per experiment
-scripts/   run, measure, sweep, and assemble
-results/   the CSVs and the two workbooks
+tests/              the .test files, one per experiment
+scripts/            run, measure, sweep, and assemble
+results/            Debug-build CSVs and the two workbooks
+results/benchmark/  Benchmark-build CSVs and workbooks
 ```
+
+**The two builds are kept apart on disk, deliberately.** A Debug number and a Benchmark number for
+the same configuration can differ by 9x on the read path, so a directory is cheaper than a
+convention for not confusing them. `bench.py`, `grid.py`, `float_column.py`, `lossy_breakdown.py`
+and `workbook.py` work against `cmake-build-debug` and write to `results/`; `grid_release.py` and
+`standalone_workbook.py` work against `cmake-build-release` and write to `results/benchmark/`. The
+dataset descriptions sit at the top of `results/` because they describe the input CSV and not a run.
 
 **Two datasets, one toolchain.** Everything is named `wind_*` or `solar_*`; there are no
 generation suffixes. Earlier generations were deleted in favour of a single current set — recover
@@ -63,6 +71,20 @@ rounds to 1.000 at three decimals. The workbook reports framing in **bytes** as 
 ./scripts/workbook.py solar    # -> solar_analysis.xlsx
 ```
 
+Against the **Benchmark** build, writing to `results/benchmark/`. Both patch the store headers and
+restore them in a `finally`; both refuse to start unless the headers read their declared defaults.
+
+```bash
+# the standalone sweep, with a store-free baseline measured at every grid point.
+# one unit size per invocation: a point that fails costs only itself, and the four
+# CSVs merge afterwards. --build-jobs and --pause keep a laptop from cooking.
+./scripts/grid_release.py --test tests/solar_standalone.test --dataset debs_solar_panels \
+    --configuration standalone --points 256:256 -N 1 --rows 42700000 \
+    --prefix solar_standalone_release_256 --filestore-total-mb 4096 \
+    --build-jobs 4 --pause 60
+./scripts/standalone_workbook.py             # -> benchmark/solar_standalone_release.xlsx
+```
+
 `--filestore-total-mb` only for a **standalone** run over a large input. A chain must not have it:
 the flush threshold is derived as `totalSize / filesAtCapacity`, so raising capacity to 4 GB would
 set the threshold to 1 GB and FileStore would sit on nearly the whole dataset uncompressed.
@@ -103,6 +125,24 @@ how three failing queries went unnoticed across four wind grid points before the
 
 **Timings are N=3 on wind and N=1 on solar.** Byte counts are deterministic and exact either way.
 
+**Every timing here is a Debug build, and on the read path that is 88% of it.** Measured against
+the Benchmark build at full scale: the read-back floor is 10.4 s, not 93. That is why `decode_s`
+cannot rank codecs — FileStore decodes nothing and LossyStore at 1% runs all three stages, yet
+Debug puts them within 2% of each other. Two conclusions here do not survive an optimised build:
+
+- **Decode is NEGATIVE.** All three compressed stores read back *faster* than raw FileStore rows,
+  by 1–9%, in 12 of 12 comparisons across four sessions. The decode costs less than the I/O it
+  saves — 375 MB off the disk instead of 1,196 MB. Debug shows FileStore mid-pack; it is reliably
+  the *slowest* reader.
+- **The unit-size ranking on encode inverts.** Debug makes 1024 KB look 16% faster than 256 KB on
+  CompressedStore (135.7 s against 156.8 s); in the Benchmark build they are tied with 256 KB
+  marginally ahead (33.8 s against 34.4 s). Since the byte counts also favour 256 KB, it wins on
+  both axes rather than trading off.
+
+The byte counts are unaffected and reproduce the Debug run exactly, digit for digit, across four
+independent runs. `grid_release.py` is the Benchmark-build measurement; `bench.py` and `grid.py`
+still run against Debug.
+
 ## Anomalies
 
 Both workbooks have an Anomalies sheet. Three were chased to the source:
@@ -130,6 +170,7 @@ Both workbooks have an Anomalies sheet. Three were chased to the source:
 | `solar_chained.test` | the same chain at full scale |
 | `solar_float_column.test` | 9 bounds at full scale |
 | `solar_smoke.test` | 1M-row copy of `solar_standalone`; validates a pipeline before a 2-hour run |
+| `solar_baseline.test` | the same query with NO store, so a store's cost is a difference |
 | `filestore_mechanics.test` | correctness, not timing: unsealed reads, pruning, rolling, chaining |
 | `repro_store_selection.test` | reproduction for the store-selection issue |
 
