@@ -245,7 +245,7 @@ RunLengthResult rleEncode(const std::span<const uint64_t> values)
     return result;
 }
 
-void rleDecode(const RunLengthResult& encoded, const size_t count, const std::span<uint64_t> out)
+void rleDecode(const RunLengthResult& encoded, [[maybe_unused]] const size_t count, const std::span<uint64_t> out)
 {
     PRECONDITION(out.size() >= count, "output holds {} values, {} requested", out.size(), count);
     PRECONDITION(
