@@ -27,8 +27,7 @@ namespace NES::Lossy
 
 namespace
 {
-/// Reconstruct exactly the way decoding will, sign and narrowing included, so the measured
-/// error is the error a reader will actually see.
+// Reconstruct exactly as decoding will, sign and narrowing included.
 double reconstruct(
     const double minMagnitude, const double deltaLog, const uint64_t code, const bool negative, const bool singlePrecision)
 {
@@ -37,8 +36,7 @@ double reconstruct(
     return singlePrecision ? static_cast<double>(static_cast<float>(value)) : value;
 }
 
-/// Zero has no logarithm; NaN and the infinities have no place on a grid. All three are held
-/// out and stored as they arrived.
+// Zero, NaN and the infinities cannot go on the grid; held out and stored verbatim.
 bool goesOnTheGrid(const double value) noexcept
 {
     return std::isfinite(value) && value != 0.0;
@@ -66,8 +64,7 @@ QuantizedColumn quantize(const std::span<const double> values, const double rela
     QuantizedColumn result;
     result.requestedRelative = relativeBoundPercent / 100.0;
 
-    /// One pass to separate what can be quantized from what cannot, and to find the frame of
-    /// reference in log space.
+    // One pass: separate grid-able values from exceptions and find the log-space reference.
     double minMagnitude = std::numeric_limits<double>::infinity();
     double maxMagnitude = 0.0;
     uint64_t quantizable = 0;
@@ -91,9 +88,7 @@ QuantizedColumn quantize(const std::span<const double> values, const double rela
         ++quantizable;
     }
 
-    /// Nothing to put on a grid. The exception list already holds every value exactly, so the
-    /// column is complete without any codes. This happens for real -- an all-zero column, or a
-    /// gap in a sensor feed -- and is a normal path, not an error.
+    // Nothing to put on a grid; the exception list already holds every value exactly.
     if (quantizable == 0)
     {
         result.isConstant = true;
@@ -101,9 +96,7 @@ QuantizedColumn quantize(const std::span<const double> values, const double rela
         return result;
     }
 
-    /// The step depends on the requested bound and on nothing else. That is the whole point:
-    /// every group computes the same step, so a value's accuracy does not depend on which
-    /// group it landed in or on what else shared it.
+    // Grid step depends only on the requested bound.
     const double deltaLog = 2.0 * std::log1p(relativeBoundPercent / 100.0);
 
     const double logMin = std::log(minMagnitude);
@@ -127,7 +120,7 @@ QuantizedColumn quantize(const std::span<const double> values, const double rela
         const double value = values[i];
         if (!goesOnTheGrid(value))
         {
-            continue; /// stored verbatim; its code is never read
+            continue; // stored verbatim; its code is never read
         }
 
         const auto code = static_cast<uint64_t>(std::llround((std::log(std::abs(value)) - logMin) / deltaLog));
@@ -141,11 +134,7 @@ QuantizedColumn quantize(const std::span<const double> values, const double rela
     result.bitWidth = bitWidthFor(maxCode);
     result.achievedError = achieved;
 
-    /// The guarantee, checked rather than trusted. Kept in production code, not just in tests:
-    /// if the arithmetic above ever stops holding, silently handing back data that misses its
-    /// stated accuracy is the worst possible failure for a store whose whole contract is that
-    /// bound. The slack absorbs the rounding of log and exp themselves, nothing more -- a
-    /// FLOAT32 column asked for a bound finer than the type can represent is meant to fail.
+    // The bound, checked in production rather than trusted; slack absorbs log/exp rounding.
     const double slack = 8.0 * std::numeric_limits<double>::epsilon();
     INVARIANT(
         achieved <= result.requestedRelative + slack,

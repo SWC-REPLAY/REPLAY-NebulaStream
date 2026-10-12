@@ -25,8 +25,7 @@ add_nes_test(store-lossy-primitives-tests PrimitivesTest.cpp)
 target_link_libraries(store-lossy-primitives-tests nes-store-manager nes-test-util)
 add_nes_test(store-lossy-codec-tests ColumnCodecTest.cpp)
 target_link_libraries(store-lossy-codec-tests nes-store-manager nes-test-util)
-add_nes_test(store-lossy-stats-tests ColumnStatsTest.cpp)
-target_link_libraries(store-lossy-stats-tests nes-store-manager nes-test-util)
+
 
 add_nes_test(store-segmented-file-tests SegmentedFileStoreTest.cpp)
 target_link_libraries(store-segmented-file-tests nes-store-manager nes-test-util)

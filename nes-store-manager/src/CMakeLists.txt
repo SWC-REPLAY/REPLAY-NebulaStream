@@ -22,7 +22,6 @@ add_source_files(nes-store-manager
         CompressedStore.cpp
         FileToCompressedTransformation.cpp
         lossy/ColumnCodec.cpp
-        lossy/ColumnStats.cpp
         lossy/Primitives.cpp
         lossy/Quantize.cpp
         lossy/LossyGroupFormat.cpp

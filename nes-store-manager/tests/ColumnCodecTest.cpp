@@ -12,18 +12,23 @@
     limitations under the License.
 */
 
-/// Tests for the codecs at the ColumnCodec interface, without a store underneath.
+/// Tests for the shipped codecs -- Raw, ForBitpack and Quantized -- at the ColumnCodec
+/// interface, without a store underneath. These are the three the store selects by type.
 ///
-/// Every codec here is reachable through selection, which filters by what each one supports and
-/// then ranks the survivors by estimated size. Testing them at this level rather than through a
-/// store round trip is what keeps them honest: a codec whose output drifts fails here, whereas
-/// through a store it would only show up as a file that quietly got bigger.
+/// Testing them at this level rather than through a store round trip is what keeps them honest:
+/// a codec whose output drifts fails here, whereas through a store it would only show up as a
+/// file that quietly got bigger.
+///
+/// The extra codecs (DeltaOfDelta, Dictionary, DictRle, Bool) live in the local-only
+/// ExtraColumnCodecs (not pushed); their tests are in ExtraColumnCodecsTest.
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <random>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -93,14 +98,13 @@ RoundTrip roundTrip(
     return RoundTrip{.values = unpack(output, valueWidth), .encodedBytes = encoded.bytes.size()};
 }
 
-/// Every lossless codec that accepts integers. Raw is included deliberately: it is the
-/// identity the others are compared against, so a shape that breaks it breaks the premise.
-constexpr CodecId LOSSLESS_INTEGER_CODECS[]{
-    CodecId::Raw, CodecId::ForBitpack, CodecId::DeltaOfDelta, CodecId::Dictionary, CodecId::DictRle};
+/// The shipped lossless integer codecs. Raw is included deliberately: it is the identity the
+/// other is compared against, so a shape that breaks it breaks the premise.
+constexpr CodecId LOSSLESS_INTEGER_CODECS[]{CodecId::Raw, CodecId::ForBitpack};
 
 }
 
-/// Same claim for all of them, over the shapes that tend to break one codec but not another:
+/// Same claim for both of them, over the shapes that tend to break one codec but not another:
 /// empty, single row, all-identical, alternating, monotonic, and the extremes of the range.
 TEST_F(ColumnCodecTest, LosslessCodecsReproduceTheirInput)
 {
@@ -131,9 +135,9 @@ TEST_F(ColumnCodecTest, LosslessCodecsReproduceTheirInput)
     }
 }
 
-/// Narrower columns are handed to a codec zero-extended and truncated on the way back. Every
-/// codec differences or indexes those values, so the truncation has to be exact -- including
-/// for signed columns, whose negative values arrive as large unsigned patterns.
+/// Narrower columns are handed to a codec zero-extended and truncated on the way back. The codec
+/// differences those values, so the truncation has to be exact -- including for signed columns,
+/// whose negative values arrive as large unsigned patterns.
 TEST_F(ColumnCodecTest, NarrowAndSignedColumnsReproduceTheirInput)
 {
     const std::vector<std::pair<DataType::Type, uint32_t>> narrowTypes{
@@ -164,117 +168,6 @@ TEST_F(ColumnCodecTest, NarrowAndSignedColumnsReproduceTheirInput)
             EXPECT_EQ(result.values, values) << codecName(codecId) << " on DataType::Type " << static_cast<int>(type);
         }
     }
-}
-
-/// The point of delta-of-delta: a steady stream costs its header and nothing more, where
-/// frame-of-reference still pays for every row's growing offset from the group minimum.
-TEST_F(ColumnCodecTest, DeltaOfDeltaCostsNothingPerRowOnASteadyStream)
-{
-    std::vector<uint64_t> timestamps(8192);
-    for (size_t i = 0; i < timestamps.size(); ++i)
-    {
-        timestamps[i] = 1700000000000ULL + (i * 100);
-    }
-
-    const auto dod = roundTrip(CodecId::DeltaOfDelta, DataType::Type::UINT64, 8, timestamps);
-    const auto forBitpack = roundTrip(CodecId::ForBitpack, DataType::Type::UINT64, 8, timestamps);
-
-    EXPECT_EQ(dod.values, timestamps);
-    EXPECT_EQ(dod.encodedBytes, 17U) << "a constant rate should leave only the header";
-    EXPECT_LT(dod.encodedBytes, forBitpack.encodedBytes / 100);
-}
-
-/// Jitter perturbs individual second differences rather than the baseline, so the column stays
-/// cheap. This is the realistic case, not the noise-free one above.
-TEST_F(ColumnCodecTest, DeltaOfDeltaStaysCheapUnderJitter)
-{
-    std::mt19937_64 rng(3);
-    std::uniform_int_distribution<int> jitter(-2, 2);
-
-    std::vector<uint64_t> timestamps(8192);
-    uint64_t now = 1700000000000ULL;
-    for (uint64_t& timestamp : timestamps)
-    {
-        timestamp = now;
-        now += static_cast<uint64_t>(100 + jitter(rng));
-    }
-
-    const auto result = roundTrip(CodecId::DeltaOfDelta, DataType::Type::UINT64, 8, timestamps);
-    EXPECT_EQ(result.values, timestamps);
-
-    /// Second differences land in [-4, 4], so four bits plus a sign is ample.
-    EXPECT_LT(result.encodedBytes, timestamps.size());
-}
-
-/// What a dictionary is for, and what frame-of-reference cannot do: the cost is set by how
-/// many distinct values there are, not by how far apart they sit.
-TEST_F(ColumnCodecTest, DictionaryCostFollowsDistinctCountNotMagnitude)
-{
-    std::mt19937_64 rng(5);
-
-    /// 200 ids scattered across the whole 64-bit range, so the span is maximal.
-    std::vector<uint64_t> distinct(200);
-    for (uint64_t& id : distinct)
-    {
-        id = rng();
-    }
-
-    std::vector<uint64_t> values(8192);
-    for (uint64_t& value : values)
-    {
-        value = distinct[rng() % distinct.size()];
-    }
-
-    const auto dictionary = roundTrip(CodecId::Dictionary, DataType::Type::UINT64, 8, values);
-    const auto forBitpack = roundTrip(CodecId::ForBitpack, DataType::Type::UINT64, 8, values);
-
-    EXPECT_EQ(dictionary.values, values);
-
-    /// 8 bits per row plus a 200-entry table, against 64 bits per row for a span this wide.
-    EXPECT_LT(dictionary.encodedBytes, forBitpack.encodedBytes / 4);
-}
-
-/// The trade dict-RLE makes, in both directions. Long runs turn a code per row into a code per
-/// change; alternating values turn it into a code *and* a length per row, which is worse than
-/// the plain dictionary. Selecting between them is what the run count is for.
-TEST_F(ColumnCodecTest, DictRleShrinksLongRunsAndGrowsOnAlternation)
-{
-    std::vector<uint64_t> runs(8192);
-    for (size_t i = 0; i < runs.size(); ++i)
-    {
-        runs[i] = 100 + (i / 512);
-    }
-
-    const auto rleOnRuns = roundTrip(CodecId::DictRle, DataType::Type::UINT64, 8, runs);
-    const auto dictOnRuns = roundTrip(CodecId::Dictionary, DataType::Type::UINT64, 8, runs);
-    EXPECT_EQ(rleOnRuns.values, runs);
-    EXPECT_LT(rleOnRuns.encodedBytes, dictOnRuns.encodedBytes / 10);
-
-    std::vector<uint64_t> alternating(8192);
-    for (size_t i = 0; i < alternating.size(); ++i)
-    {
-        alternating[i] = 100 + (i % 2);
-    }
-
-    const auto rleOnAlternating = roundTrip(CodecId::DictRle, DataType::Type::UINT64, 8, alternating);
-    const auto dictOnAlternating = roundTrip(CodecId::Dictionary, DataType::Type::UINT64, 8, alternating);
-    EXPECT_EQ(rleOnAlternating.values, alternating);
-    EXPECT_GT(rleOnAlternating.encodedBytes, dictOnAlternating.encodedBytes)
-        << "dict-RLE is expected to lose here; that is why it is not applied unconditionally";
-}
-
-TEST_F(ColumnCodecTest, BoolSpendsOneBitPerValue)
-{
-    std::mt19937_64 rng(13);
-    std::vector<uint64_t> flags(8192);
-    for (uint64_t& flag : flags)
-    {
-        flag = rng() % 2;
-    }
-
-    const auto result = roundTrip(CodecId::Bool, DataType::Type::BOOLEAN, 1, flags);
-    EXPECT_EQ(result.values, flags);
-    EXPECT_EQ(result.encodedBytes, flags.size() / 8);
 }
 
 /// The closed form behind the quantized codec: maxCode = range / delta = 50 / X, in which the
@@ -397,12 +290,11 @@ TEST_F(ColumnCodecTest, CodecsRejectTypesTheyCannotEncode)
     EXPECT_TRUE(getCodec(CodecId::Raw).supports(DataType::Type::FLOAT64));
     EXPECT_FALSE(getCodec(CodecId::Raw).supports(DataType::Type::VARSIZED));
 
-    EXPECT_FALSE(getCodec(CodecId::DeltaOfDelta).supports(DataType::Type::FLOAT64));
-    EXPECT_FALSE(getCodec(CodecId::Dictionary).supports(DataType::Type::FLOAT64));
-    EXPECT_FALSE(getCodec(CodecId::DictRle).supports(DataType::Type::FLOAT64));
+    EXPECT_TRUE(getCodec(CodecId::ForBitpack).supports(DataType::Type::UINT64));
+    EXPECT_FALSE(getCodec(CodecId::ForBitpack).supports(DataType::Type::FLOAT64));
 
-    EXPECT_TRUE(getCodec(CodecId::Bool).supports(DataType::Type::BOOLEAN));
-    EXPECT_FALSE(getCodec(CodecId::Bool).supports(DataType::Type::UINT64));
+    EXPECT_TRUE(getCodec(CodecId::Quantized).supports(DataType::Type::FLOAT64));
+    EXPECT_FALSE(getCodec(CodecId::Quantized).supports(DataType::Type::UINT64));
 }
 
 }

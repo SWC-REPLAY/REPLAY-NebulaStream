@@ -21,8 +21,6 @@
 #include <sstream>
 #include <utility>
 
-#include <lossy/ColumnStats.hpp>
-
 #include <ErrorHandling.hpp>
 #include <ReplayStoreFormat.hpp>
 #include <StoreProfile.hpp>
@@ -36,8 +34,7 @@ using namespace Lossy;
 namespace
 {
 
-/// Distinct filename prefix from the other stores': several tiers share a storeName and a
-/// storeDir, so they must not collide on a generated path.
+// Distinct filename prefix so tiers sharing a storeName/storeDir don't collide on a path.
 std::string generateFilePath(const LossyStore::Config& cfg)
 {
     const auto now = std::chrono::system_clock::now();
@@ -48,8 +45,7 @@ std::string generateFilePath(const LossyStore::Config& cfg)
     return cfg.storeDir + "/lossy_" + cfg.storeName + "_" + ts.str() + ".bin";
 }
 
-/// Byte offset of a field's VALUE within a packed row, matching the layout the other tiers
-/// use: a nullable field carries a one-byte indicator immediately before its value.
+// Byte offset of a field's value within a packed row (past the null indicator when present).
 uint32_t valueOffsetOf(const Schema& schema, const size_t fieldIndex)
 {
     uint32_t offset = 0;
@@ -69,8 +65,7 @@ LossyStore::LossyStore(Config cfg, const Schema& schemaIn)
     , writer(BinaryStoreWriter::Config{.storeName = config.storeName, .filePath = filePath, .schemaText = config.schemaText})
 {
 
-    /// 100% would let a value move by the column's whole range, which is not an accuracy
-    /// bound in any useful sense.
+    // 100% would let a value move by its whole magnitude -- not a useful bound.
     PRECONDITION(
         config.accuracyBoundPercent >= 0.0 && config.accuracyBoundPercent < 100.0,
         "accuracyBoundPercent is {}%, must be in [0, 100)",
@@ -89,33 +84,39 @@ LossyStore::LossyStore(Config cfg, const Schema& schemaIn)
         const auto& field = schema.getFieldAt(i);
         const auto type = field.dataType.type;
 
-        /// Reject rather than silently mishandle: VARSIZED stores only an index in the row
-        /// with its payload elsewhere, so columnarizing the row bytes would capture the
-        /// index and lose the data.
+        // Reject VARSIZED: the row holds only an index, so columnarizing would capture the index, not the data.
         PRECONDITION(
             isSupportedType(type),
             "LossyStore supports fixed-width types only; field '{}' has DataType::Type {}",
             field.getUnqualifiedName(),
             static_cast<int>(type));
 
-        const auto name = field.getUnqualifiedName();
-
-        /// The store's budget reaches floating-point columns and nothing else.
-
+        // Codec fixed from type and bound: bounded float -> lossy (codes inline, losslessCodec 0);
+        // otherwise ForBitpack for integer-like, Raw for the rest (including unbounded floats).
         const bool eligibleForLoss = type == DataType::Type::FLOAT32 || type == DataType::Type::FLOAT64;
+        const double bound = eligibleForLoss ? config.accuracyBoundPercent : 0.0;
 
-        /// The codecs are deliberately left at their defaults here. Which one suits a column is
-        /// a question about the data, and no data has arrived yet -- it is answered when the
-        /// first group is sealed, then held for the column's lifetime.
+        uint8_t lossyCodec = 0;
+        uint8_t losslessCodec = 0;
+        if (bound > 0.0)
+        {
+            lossyCodec = static_cast<uint8_t>(config.lossyCodec);
+        }
+        else
+        {
+            losslessCodec = isIntegerLike(type) ? static_cast<uint8_t>(CodecId::ForBitpack) : static_cast<uint8_t>(CodecId::Raw);
+        }
+
         fields.push_back(
             FieldLayout{
-                .name = name,
+                .name = field.getUnqualifiedName(),
                 .type = type,
                 .valueOffset = valueOffsetOf(schema, i),
                 .valueWidth = field.dataType.getSizeInBytesWithoutNull(),
                 .nullable = field.dataType.nullable,
-                .policy = CompressionPolicy{.errorBoundPercent = eligibleForLoss ? config.accuracyBoundPercent : 0.0}});
-
+                .errorBoundPercent = bound,
+                .lossyCodec = lossyCodec,
+                .losslessCodec = losslessCodec});
     }
 }
 
@@ -165,9 +166,7 @@ void LossyStore::writeRecord(const uint8_t* recordData, const uint32_t recordSiz
         recordSize == rowWidth, "record is {} bytes, schema row width is {}", recordSize, rowWidth);
     pending.insert(pending.end(), recordData, recordData + recordSize);
 
-    /// The range of what is accumulating, built from the timestamps handed in rather than read
-    /// back out of the rows. This is the standalone path; in a chain the tier above has already
-    /// done exactly this and hands over whole segments instead.
+    // Range built from the timestamps handed in, not read back from the rows (standalone path).
     pendingMinTs = std::min(pendingMinTs, ts);
     pendingMaxTs = std::max(pendingMaxTs, ts);
 
@@ -190,17 +189,14 @@ void LossyStore::appendSegment(
     PRECONDITION(
         len / rowWidth == rowCount, "segment claims {} rows but carries {} bytes at {} per row", rowCount, len, rowWidth);
 
-    /// A segment is already the unit this tier stores, so it becomes one group as it stands --
-    /// no re-division, and the range it arrived with goes straight into the group header.
-    /// Anything the standalone write path left accumulating is sealed first, so groups stay in
-    /// arrival order.
+    // A segment is already one group; seal any pending rows first to keep groups in arrival order.
     sealPending();
     sealGroup(data, rowCount, minTs, maxTs);
 }
 
 void LossyStore::sealPending()
 {
-    /// Caller holds the unique lock.
+    // Caller holds the lock.
     if (pending.empty())
     {
         return;
@@ -213,11 +209,10 @@ void LossyStore::sealPending()
 
 void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const Timestamp minTs, const Timestamp maxTs)
 {
-    /// The write total minus this is writeRecord's own per-row cost. It cannot be timed from
-    /// inside writeRecord: at one row per call the clock reads would outweigh the work.
+    // Timed here; writeRecord's per-row cost is the write total minus this.
     NES_PROFILE_SCOPE(sealGroupNs);
     NES_PROFILE_COUNT(groupsSealed);
-    /// Caller holds the unique lock.
+    // Caller holds the lock.
     if (rowCount == 0)
     {
         return;
@@ -229,21 +224,16 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
     std::vector<std::vector<uint8_t>> nullBits(numColumns);
     std::vector<double> achievedErrors(numColumns, 0.0);
 
-    /// One column as it will be written: the bytes themselves, plus the two figures the
-    /// ColumnEntry carries alongside them. Grouped so that a candidate codec's whole result
-    /// can be held and discarded as one thing.
+    // One column as it will be written: its bytes plus the two figures ColumnEntry carries.
     struct StoredColumn
     {
         std::vector<uint8_t> bytes;
-        /// What the codec produced, before the compressor. Equal to `bytes.size()` when the
-        /// compressor did not win.
+        // Codec output size before the compressor; equals bytes.size() when the compressor did not win.
         uint64_t uncompressedLength{0};
         double achievedError{0.0};
     };
 
-    /// Columnarize and encode one column at a time. Scattering row-major bytes into
-    /// per-column arrays IS the transpose; there is no separate pass over a staged
-    /// row-major copy, which is also how Arrow, DuckDB and ClickHouse build columns.
+    // Columnarize and encode one column at a time; scattering into per-column arrays is the transpose.
     std::vector<uint8_t> values;
     for (size_t c = 0; c < numColumns; ++c)
     {
@@ -256,8 +246,7 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
         }
 
         {
-        /// Row-major -> columnar. The store fuses the transpose into the column build rather than
-        /// staging a row-major copy, so this scope is the whole of it for this column.
+        // Row-major -> columnar, fused into the column build.
         NES_PROFILE_SCOPE(transposeOutNs);
         for (uint64_t r = 0; r < rowCount; ++r)
         {
@@ -266,10 +255,7 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
 
             if (field.nullable)
             {
-                /// The indicator sits immediately before the value. Its two possible meanings
-                /// are not pinned down anywhere in the codebase, so the bit records what the
-                /// byte was rather than what it means -- and anything but 0 or 1 is refused
-                /// instead of being guessed at and silently corrupted.
+                // Record what the indicator byte was (0/1); reject anything else rather than guess its meaning.
                 const uint8_t indicator = rowPtr[field.valueOffset - 1];
                 PRECONDITION(
                     indicator <= 1,
@@ -287,33 +273,18 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
         const ColumnValues columnValues{
             .type = field.type, .data = values.data(), .rowCount = rowCount, .valueWidth = field.valueWidth};
 
-        /// Encode with an explicit two-stage choice, then run the byte compressor over the
-        /// result.
-        ///
-        /// The compressor runs last, over whatever the stages produced. It is looking for the
-        /// redundancy they left behind -- repeated headers, patterns across packed values --
-        /// which is a different kind from the structure they removed.
-        ///
-        /// Its output is kept only when it actually wins. A well bit-packed column is already
-        /// dense, and zstd over it regularly comes out larger; storing the stages' own bytes
-        /// then is both smaller and cheaper to read.
+        // Encode through the codec, then byte-compress; keep the compressed form only when it is smaller.
         const auto encodeWith = [&](const uint8_t lossyId, const uint8_t losslessId)
         {
-            /// Whichever stage is real, it is asked through the same `ColumnCodec` interface --
-            /// nothing here has to know which lossy method LossyGroupFormat's `lossyCodecId`
-            /// names, so a new one is a new CodecId and a new class, not a new branch here.
-            ///
-            /// `losslessId != 0` alongside a lossy stage would mean a second codec re-encoding
-            /// the lossy stage's own codes -- a form no lossy codec here still exercises now
-            /// that the choice is fixed rather than ranked (see the comment above this lambda's
-            /// call site), so it stays unimplemented rather than silently ignored.
+            // Either stage goes through the same ColumnCodec interface. A lossless stage over a
+            // lossy codec's codes is not implemented.
             INVARIANT(
                 lossyId == 0 || losslessId == 0,
                 "a second lossless stage ({}) over a lossy codec's codes is not implemented",
                 codecName(static_cast<CodecId>(losslessId)));
 
             const CodecId id = lossyId != 0 ? static_cast<CodecId>(lossyId) : static_cast<CodecId>(losslessId);
-            const double bound = lossyId != 0 ? field.policy.errorBoundPercent : 0.0;
+            const double bound = lossyId != 0 ? field.errorBoundPercent : 0.0;
             auto encoded = getCodec(id).encode(columnValues, bound);
 
             StoredColumn stored;
@@ -321,8 +292,7 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
             stored.achievedError = encoded.achievedError;
             std::vector<uint8_t> compressed;
             {
-                /// Paid on every column, kept only when smaller -- so this is spent whether or not
-                /// the result is used.
+                // Paid on every column, kept only when smaller.
                 NES_PROFILE_SCOPE(compressNs);
                 compressed = compressor.compress(encoded.bytes.data(), encoded.bytes.size());
             }
@@ -330,71 +300,16 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
             return stored;
         };
 
-        /// Chosen once, from the first group that carries data, and then fixed -- so a column's
-        /// encoding does not depend on where group boundaries happened to fall.
-        ///
-        /// The choice is a fixed, type-only rule, not a measurement: a floating-point column the
-        /// policy permits to round gets the lossy stage (the only lossy codec today); every other
-        /// column is encoded losslessly with ForBitpack when its type is integer-like, Raw
-        /// otherwise. That is what keeps the store general -- the rule is the same for a schema
-        /// it has never seen, with nothing to configure per column.
-        ///
-        /// A statistics-driven ranking across several lossless codecs (delta-of-delta,
-        /// dictionary, dict-RLE, ...) used to run here instead, picking whichever measured
-        /// smallest per column -- see `ColumnStats.hpp`'s `computeStats`/`filterCandidates`/
-        /// `rank`. That code is kept in the tree, tested, and reachable for a benchmark to call
-        /// directly; it is deliberately not wired into this pipeline, because a general store
-        /// does not need a per-column measurement pass to be *correct*, only to be smaller, and
-        /// that ratio-vs-complexity tradeoff is exactly what the benchmarks decide.
-        StoredColumn stored;
-        if (codecsSelected)
-        {
-            stored = encodeWith(field.lossyCodec, field.losslessCodec);
-        }
-        else
-        {
-            const auto candidates = filterCandidates(field.type, field.policy);
-            INVARIANT(!candidates.empty(), "no codec can encode field '{}'", field.name);
-
-            /// Whether to spend accuracy was settled by the policy, so a surviving lossy codec
-            /// is used rather than weighed. Which one is `config.lossyCodec` -- see its comment
-            /// for why that is a fixed knob and not a measurement across the candidates.
-            if (getCodec(candidates.front()).isLossy())
-            {
-                INVARIANT(
-                    std::ranges::find(candidates, config.lossyCodec) != candidates.end(),
-                    "field '{}' (type {}) does not support the configured lossy codec '{}'",
-                    field.name,
-                    static_cast<int>(field.type),
-                    codecName(config.lossyCodec));
-
-                fields[c].lossyCodec = static_cast<uint8_t>(config.lossyCodec);
-                /// The codes are already zero-based grid indices, so a frame-of-reference codec
-                /// on top of them would spend a header subtracting a minimum that is already
-                /// ~0. The one-piece form -- plain bit-packing, losslessCodec == 0 -- is the
-                /// fixed choice for them.
-                fields[c].losslessCodec = 0;
-            }
-            else
-            {
-                fields[c].lossyCodec = 0;
-                fields[c].losslessCodec
-                    = isIntegerLike(field.type) ? static_cast<uint8_t>(CodecId::ForBitpack) : static_cast<uint8_t>(CodecId::Raw);
-            }
-            stored = encodeWith(fields[c].lossyCodec, fields[c].losslessCodec);
-        }
+        /// The codec was fixed at construction from the column's type and the store's bound; no
+        /// measurement pass runs here, so every group encodes the column the same way.
+        const StoredColumn stored = encodeWith(field.lossyCodec, field.losslessCodec);
 
         achievedErrors[c] = stored.achievedError;
         uncompressedLengths[c] = stored.uncompressedLength;
         encodedValues[c] = std::move(stored.bytes);
     }
 
-    codecsSelected = true;
-
-    /// The group's time range arrives with its rows; it is never recovered by reading them
-    /// back. MemoryStore measured it from the timestamps handed to writeRecord, FileStore
-    /// folded it into the segment, and it lands here unchanged -- which is why this tier needs
-    /// no knowledge of which column holds record time.
+    // The group's time range arrives with its rows; never recovered by reading them back.
     GroupHeader header;
     header.rowCount = rowCount;
     header.numColumns = static_cast<uint32_t>(numColumns);
@@ -402,9 +317,7 @@ void LossyStore::sealGroup(const uint8_t* rows, const uint64_t rowCount, const T
     header.minTs = minTs.getRawValue();
     header.maxTs = maxTs.getRawValue();
 
-    /// Lay the group out: header, then the column table, then the column bytes. Offsets in
-    /// the table are relative to the start of the data region, so a reader that has the
-    /// table can pread any single column.
+    // Layout: header, column table, column bytes. Table offsets are relative to the data region.
     std::vector<ColumnEntry> entries(numColumns);
     uint64_t dataOffset = 0;
     for (size_t c = 0; c < numColumns; ++c)
@@ -469,7 +382,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
 {
     PRECONDITION(depth < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
 
-    /// Minus the four stage timers below, this is cursor and buffer bookkeeping.
+    // Minus the stage timers below, this is cursor and buffer bookkeeping.
     NES_PROFILE_SCOPE(readTotalNs);
     NES_PROFILE_COUNT(readCalls);
 
@@ -486,25 +399,17 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
     PRECONDITION(
         readRowWidth == rowWidth, "read schema row width {} does not match store's {}", readRowWidth, rowWidth);
 
-    /// Group ranges may only be used to skip when they describe the very field being
-    /// filtered on. Ranges measured over one column say nothing about another, so skipping
-    /// on a mismatch could drop groups that do contain matching rows -- a silently short
-    /// answer. Falling back to per-row filtering is slower and always right.
-    /// Every group carries a real range now, so there is nothing to gate skipping on -- the
-    /// same unconditional overlap test MemoryStore applies to its buffers.
-
+    // Every group carries a real range, so the overlap test is unconditional, like MemoryStore's.
     auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
     const uint64_t maxDestTuples = destSpan.size() / rowWidth;
-    /// A destination that cannot hold one row would return zero forever, and a zero is read as
-    /// end of stream -- so the whole replay would come back empty with no error at all.
+    // A zero-capacity destination would return 0 forever, read as end of stream.
     PRECONDITION(maxDestTuples > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), rowWidth);
 
     uint64_t destTuples = 0;
     size_t unit = frame.unitIndex;
     uint64_t rowOffset = frame.rowOffset;
 
-    /// Scratch for the raw group bytes. The DECODED rows are not here but on the cursor, so a
-    /// reader resuming inside a group does not decode it again.
+    // Scratch for raw group bytes; decoded rows live on the cursor so a resume doesn't re-decode.
     std::vector<uint8_t> groupBytes;
 
     for (; unit < groups.size(); ++unit, rowOffset = 0)
@@ -530,12 +435,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
 
         const uint64_t rowCount = group.header.rowCount;
 
-        /// Decode the group, unless this cursor is resuming inside the one it already holds.
-        ///
-        /// A group's columns are decoded as a whole, so a destination smaller than a group means
-        /// several calls land in the same group. Decoding per call made each of them pay for every
-        /// column and the whole transpose again. The decoded rows live on the cursor rather than
-        /// here because `read` holds only a shared lock.
+        // Decode the group unless the cursor is resuming inside the one it already holds.
         if (!frame.decodedValid || frame.decodedUnit != unit)
         {
             groupBytes.resize(group.header.groupByteLength);
@@ -555,10 +455,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
                 group.header.numColumns,
                 fields.size());
 
-            /// Rebuild whole rows, then filter. Decoding only the timestamp column first and
-            /// touching the rest only for the rows that survive is the natural refinement here,
-            /// and columnar storage is what makes it possible -- but it only pays on the at most
-            /// two groups per query that straddle a range boundary, so it is left for later.
+            // Rebuild whole rows, then filter. Decoding only the ts column first is a later refinement.
             frame.decoded.assign(static_cast<size_t>(rowCount) * rowWidth, 0);
 
             for (size_t c = 0; c < fields.size(); ++c)
@@ -568,8 +465,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
 
                 const uint8_t* stored = groupBytes.data() + dataOffset + entry.valuesOffset;
 
-                /// Equal lengths mean the writer found compression unprofitable and kept the
-                /// codec's own bytes, so there is nothing to undo.
+                // Equal lengths mean the column was stored uncompressed; nothing to undo.
                 std::vector<uint8_t> inflated;
                 if (entry.uncompressedLength != entry.valuesLength)
                 {
@@ -583,9 +479,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
                     .type = field.type, .data = values.data(), .rowCount = rowCount, .valueWidth = field.valueWidth};
                 const std::span<const uint8_t> payload(stored, entry.uncompressedLength);
 
-                /// Mirrors `encodeWith`: whichever stage produced the bytes decodes them back
-                /// through the same `ColumnCodec` interface. See its comment for why a lossy codec
-                /// paired with a nonzero losslessCodecId is not a form any codec here still writes.
+                // Mirrors encodeWith: whichever stage wrote the bytes decodes them through the same interface.
                 INVARIANT(
                     entry.lossyCodecId == 0 || entry.losslessCodecId == 0,
                     "a second lossless stage ({}) over a lossy codec's codes is not implemented",
@@ -601,7 +495,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
                 const uint8_t* bits = entry.nullBitsLength > 0 ? groupBytes.data() + dataOffset + entry.nullBitsOffset : nullptr;
 
                 {
-                /// Columnar -> row-major, the inverse of the fused transpose on the write side.
+                // Columnar -> row-major, inverse of the write-side transpose.
                 NES_PROFILE_SCOPE(transposeInNs);
                 for (uint64_t r = 0; r < rowCount; ++r)
                 {
@@ -621,7 +515,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
         }
         const std::vector<uint8_t>& rowScratch = frame.decoded;
 
-        /// Whole group inside the range (or no range at all): take every row not yet taken.
+        // Whole group in range (or unbounded): take every row not yet taken.
         if (range.isUnbounded() || (groupMin >= range.start && groupMax < range.end))
         {
             const uint64_t toCopy = std::min(rowCount - rowOffset, maxDestTuples - destTuples);
@@ -630,12 +524,12 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
             rowOffset += toCopy;
             if (rowOffset < rowCount)
             {
-                break; /// destination filled part-way through this group; resume here
+                break; // destination filled mid-group; resume here
             }
             continue;
         }
 
-        /// Otherwise the rows have to be looked at one by one.
+        // Otherwise filter rows one by one.
         const auto tsField = std::ranges::find_if(fields, [&](const auto& f) { return f.name == range.fieldName; });
         PRECONDITION(tsField != fields.end(), "TimeRange field '{}' not found in schema", range.fieldName);
 
@@ -651,7 +545,7 @@ uint64_t LossyStore::read(TupleBuffer& buffer, const Schema& readSchema, const T
                 ++destTuples;
             }
         }
-        /// Rows LOOKED AT, not rows kept.
+        // Rows LOOKED AT, not rows kept.
         rowOffset = row;
         if (row < rowCount)
         {
@@ -758,7 +652,7 @@ StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterLossyStoreStore
     {
         cfg.groupSize = std::stoull(it->second);
     }
-    /// Absent means lossless. Precision is only ever given up because someone said so here.
+    // Absent means lossless.
     if (const auto it = args.config.find("accuracyBoundPercent"); it != args.config.end())
     {
         cfg.accuracyBoundPercent = std::stod(it->second);

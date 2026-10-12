@@ -12,11 +12,15 @@
     limitations under the License.
 */
 
-/// Tests for the lossless building blocks, in isolation from any store.
+/// Tests for the shipped lossless building blocks, in isolation from any store: bit-packing,
+/// zig-zag, and the little-endian load/store helpers.
 ///
 /// Bit-packing gets the most attention because it is the piece most able to fail quietly:
 /// an off-by-one in the accumulator corrupts values without corrupting sizes, so a store
 /// round trip would notice only for some widths and some counts.
+///
+/// The delta-of-delta, dictionary and run-length primitives live in the local-only
+/// ExtraPrimitives (not pushed); their tests are in ExtraPrimitivesTest.
 
 #include <cstdint>
 #include <limits>
@@ -142,147 +146,6 @@ TEST_F(PrimitivesTest, LoadSignExtendsAndStoreTruncates)
 
     storeLow(buffer.data(), 0x0123456789ABCDEFULL, 8);
     EXPECT_EQ(loadUnsigned(buffer.data(), 8), 0x0123456789ABCDEFULL);
-}
-
-namespace
-{
-
-std::vector<uint64_t> dodRoundTrip(const std::vector<uint64_t>& values)
-{
-    const auto encoded = dodEncode(values);
-    std::vector<uint64_t> restored(values.size(), 0xDEAD);
-    dodDecode(encoded, values.size(), restored);
-    return restored;
-}
-
-}
-
-/// The case delta-of-delta exists for: a fixed sampling rate makes every second difference
-/// zero, so the sequence costs its two header values and no bits at all.
-TEST_F(PrimitivesTest, RegularSequencesCostNoBits)
-{
-    std::vector<uint64_t> values(4096);
-    for (size_t i = 0; i < values.size(); ++i)
-    {
-        values[i] = 1700000000000ULL + (i * 100);
-    }
-
-    const auto encoded = dodEncode(values);
-    EXPECT_EQ(encoded.bitWidth, 0);
-    EXPECT_EQ(encoded.first, 1700000000000ULL);
-    EXPECT_EQ(encoded.firstDelta, 100);
-    EXPECT_EQ(dodRoundTrip(values), values);
-}
-
-/// A rate that changes, gaps, and going backwards -- none of which the codec is optimised for,
-/// all of which it still has to reproduce exactly.
-TEST_F(PrimitivesTest, IrregularSequencesRoundTrip)
-{
-    EXPECT_EQ(dodRoundTrip({}), std::vector<uint64_t>{});
-    EXPECT_EQ(dodRoundTrip({42}), std::vector<uint64_t>{42});
-    EXPECT_EQ(dodRoundTrip({42, 17}), (std::vector<uint64_t>{42, 17}));
-    EXPECT_EQ(dodRoundTrip({5, 5, 5}), (std::vector<uint64_t>{5, 5, 5}));
-
-    /// A stream that stalls, resumes at a different rate, then jumps backwards.
-    const std::vector<uint64_t> uneven{1000, 1100, 1200, 1200, 1200, 1500, 1501, 900, 40000, 40001};
-    EXPECT_EQ(dodRoundTrip(uneven), uneven);
-
-    std::mt19937_64 rng(99);
-    std::vector<uint64_t> random(1000);
-    for (uint64_t& value : random)
-    {
-        value = rng();
-    }
-    EXPECT_EQ(dodRoundTrip(random), random);
-}
-
-/// Neighbouring values at opposite ends of the range make the differences overflow. The
-/// encoding is modular, so that has to round trip like anything else rather than saturate.
-TEST_F(PrimitivesTest, DifferencesThatOverflowStillRoundTrip)
-{
-    const std::vector<uint64_t> extremes{
-        0,
-        std::numeric_limits<uint64_t>::max(),
-        0,
-        std::numeric_limits<uint64_t>::max(),
-        std::numeric_limits<uint64_t>::max() / 2,
-        1};
-    EXPECT_EQ(dodRoundTrip(extremes), extremes);
-}
-
-TEST_F(PrimitivesTest, DictionaryIsSortedDeduplicatedAndSizedByDistinctCount)
-{
-    const std::vector<uint64_t> values{700, 100, 700, 400, 100, 100, 400};
-    const auto encoded = dictEncode(values);
-
-    EXPECT_EQ(encoded.dictionary, (std::vector<uint64_t>{100, 400, 700}));
-    EXPECT_EQ(encoded.codes, (std::vector<uint64_t>{2, 0, 2, 1, 0, 0, 1}));
-
-    /// Three entries need two bits, whatever the entries themselves are worth.
-    EXPECT_EQ(encoded.bitWidth, 2);
-
-    std::vector<uint64_t> restored(values.size(), 0xDEAD);
-    dictDecode(encoded, restored);
-    EXPECT_EQ(restored, values);
-}
-
-/// One distinct value means every code is the same, so the codes cost nothing -- the table
-/// alone is the column.
-TEST_F(PrimitivesTest, SingleEntryDictionaryNeedsNoCodeBits)
-{
-    const std::vector<uint64_t> values(500, 0xABCDEF0123456789ULL);
-    const auto encoded = dictEncode(values);
-
-    EXPECT_EQ(encoded.dictionary.size(), 1U);
-    EXPECT_EQ(encoded.bitWidth, 0);
-
-    std::vector<uint64_t> restored(values.size(), 0xDEAD);
-    dictDecode(encoded, restored);
-    EXPECT_EQ(restored, values);
-}
-
-TEST_F(PrimitivesTest, RunLengthCollapsesRunsAndSurvivesAlternation)
-{
-    const std::vector<uint64_t> runs{7, 7, 7, 7, 3, 3, 9};
-    const auto encoded = rleEncode(runs);
-    EXPECT_EQ(encoded.values, (std::vector<uint64_t>{7, 3, 9}));
-    EXPECT_EQ(encoded.runLengths, (std::vector<uint64_t>{4, 2, 1}));
-
-    std::vector<uint64_t> restored(runs.size(), 0xDEAD);
-    rleDecode(encoded, runs.size(), restored);
-    EXPECT_EQ(restored, runs);
-
-    /// The adversarial case, and the reason this is never applied unconditionally: alternating
-    /// values produce as many runs as there are values, so nothing is collapsed.
-    std::vector<uint64_t> alternating(1000);
-    for (size_t i = 0; i < alternating.size(); ++i)
-    {
-        alternating[i] = i % 2;
-    }
-    const auto worstCase = rleEncode(alternating);
-    EXPECT_EQ(worstCase.values.size(), alternating.size());
-
-    std::vector<uint64_t> restoredWorstCase(alternating.size(), 0xDEAD);
-    rleDecode(worstCase, alternating.size(), restoredWorstCase);
-    EXPECT_EQ(restoredWorstCase, alternating);
-}
-
-TEST_F(PrimitivesTest, RunLengthHandlesEmptyAndSingleRunInput)
-{
-    const auto empty = rleEncode({});
-    EXPECT_TRUE(empty.values.empty());
-
-    std::vector<uint64_t> nothing;
-    rleDecode(empty, 0, nothing);
-
-    const std::vector<uint64_t> uniform(8192, 4);
-    const auto encoded = rleEncode(uniform);
-    EXPECT_EQ(encoded.values, std::vector<uint64_t>{4});
-    EXPECT_EQ(encoded.runLengths, std::vector<uint64_t>{8192});
-
-    std::vector<uint64_t> restored(uniform.size(), 0xDEAD);
-    rleDecode(encoded, uniform.size(), restored);
-    EXPECT_EQ(restored, uniform);
 }
 
 }
