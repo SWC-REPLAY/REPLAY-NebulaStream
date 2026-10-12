@@ -25,21 +25,17 @@ namespace NES
 
 void FileToCompressedTransformation::execute(Store& source, Store& dest)
 {
-    /// 1. Drain the FileStore: read its segments off disk and truncate its file.
-    ///    (drainSegments() empties the source, so the data has genuinely moved down a tier.)
+    // Drain the FileStore (empties the source, moving its data down a tier).
     auto typedSource = source.getAs<FileStore>();
     auto& fileStore = typedSource.getMutable();
     auto segments = fileStore.drainSegments();
 
     if (segments.empty())
     {
-        return; /// nothing to move
+        return; // nothing to move
     }
 
-    /// 2. Hand each segment down with the range its rows already carry. The CompressedStore
-    ///    accumulates them into blocks of its own size and seals on its own threshold, so a
-    ///    block's range is the union of the segments inside it -- not one span over the whole
-    ///    drain. That is what lets its read() skip a block without decompressing it.
+    // Hand each segment down with its range; the CompressedStore accumulates them into its own blocks.
     auto typedDest = dest.getAs<CompressedStore>();
     auto& compressedStore = typedDest.getMutable();
     for (const auto& segment : segments)

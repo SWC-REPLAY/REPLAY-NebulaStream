@@ -55,7 +55,7 @@ std::string generateFilePath(const FileStore::Config& cfg, const uint32_t partNu
     ts << std::put_time(std::localtime(&timeT), "%Y%m%d_%H%M%S") << '_' << std::setfill('0') << std::setw(3) << ms.count();
     std::ostringstream part;
     part << std::setfill('0') << std::setw(4) << partNumber;
-    /// The part number, not just the timestamp: two rolls can land in the same millisecond.
+    // The part number, not just the timestamp: two rolls can land in the same millisecond.
     return cfg.storeDir + "/replay_" + cfg.storeName + "_" + ts.str() + "_" + part.str() + ".bin";
 }
 }
@@ -78,17 +78,14 @@ FileStore::~FileStore() = default;
 
 uint32_t FileStore::segmentsPerFile() const
 {
-    /// A file is the capacity divided by how many files hold it, and it must hold at least one
-    /// segment or it could never make progress.
+    // A file holds totalSize/filesAtCapacity bytes, and at least one segment.
     const size_t perFile = config.totalSize / std::max<size_t>(config.filesAtCapacity, 1);
     return static_cast<uint32_t>(std::max<size_t>(perFile / std::max<size_t>(config.segmentSize, 1), 1));
 }
 
 uint64_t FileStore::dataBytesLocked() const
 {
-    /// Rows only, each file's header and preallocated table subtracted. This is what a FLUSH
-    /// THRESHOLD is measured against.
-
+    // Row bytes only, each file's header and table subtracted -- what a flush threshold measures against.
     uint64_t total = 0;
     for (const auto& part : parts)
     {
@@ -102,8 +99,7 @@ uint64_t FileStore::dataBytesLocked() const
 
 uint64_t FileStore::storedBytesLocked() const
 {
-    /// The whole footprint, framing included. This is what CAPACITY is measured against: a disk
-    /// budget has to count the bytes the disk actually holds, and the table is among them.
+    // Whole footprint, framing included -- what capacity measures against.
     uint64_t total = 0;
     for (const auto& part : parts)
     {
@@ -117,16 +113,13 @@ uint64_t FileStore::storedBytesLocked() const
 
 void FileStore::evictOldestOverCapacity()
 {
-    /// The oldest file goes whole, which is the entire reason for rolling: retention costs one
-    /// unlink, with no rewrite and no holes to track. The newest file is never dropped -- it is the
-    /// one being written so a capacity smaller than a single file degrades to keeping that one.
+    // The oldest file is dropped whole; the newest (being written) is never dropped.
     bool dropped = false;
     while (parts.size() > 1 && storedBytesLocked() > config.totalSize)
     {
         parts.front().writer->close();
         parts.front().writer->removeFile();
-        /// Nothing to count. Unit positions are global and never reused, and every surviving part
-        /// already carries its own firstUnit, so a file leaving renumbers nothing.
+        // Unit positions are global and never reused, so a file leaving renumbers nothing.
         parts.erase(parts.begin());
         ++evictedFiles;
         dropped = true;
@@ -138,7 +131,7 @@ void FileStore::evictOldestOverCapacity()
     }
 
 
-    /// After eviction, timestamps are updated.
+    // Recompute the store range after eviction.
     fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
     fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
     for (const auto& part : parts)
@@ -162,8 +155,7 @@ void FileStore::openCurrentPart()
         .filePath = part.path,
         .schemaText = config.schemaText,
         .segmentSize = config.segmentSize,
-        /// Exactly the segments this file can hold before it rolls. Right-sized rather than a cap:
-        /// the file rolls when the table fills, so the two conditions are the same one.
+        // Exactly the segments this file can hold before it rolls.
         .maxSegments = segmentsPerFile()});
     part.writer->open();
     part.writer->ensureHeader();
@@ -175,11 +167,8 @@ void FileStore::openCurrentPart()
 
 void FileStore::rollToNextFile()
 {
-    /// The finished file is NOT closed , its rows are still part of this store and a read has to
-    /// reach them. It simply stops being written to.
-    ///
-    /// Read before the emplace: `current()` is `parts.back()`, so growing the vector first would
-    /// make this the number of the new, empty part rather than of the one being finished.
+    // The finished file is not closed; its rows stay readable, it just stops being written to.
+    // Read firstUnit before the emplace, while current() is still the part being finished.
     const uint64_t nextFirstUnit = current().firstUnit + current().segments.size();
     parts.emplace_back();
     parts.back().firstUnit = nextFirstUnit;
@@ -191,7 +180,7 @@ void FileStore::open()
     std::unique_lock lock(mutex);
     fileMinTs = Timestamp(Timestamp::INVALID_VALUE);
     fileMaxTs = Timestamp(Timestamp::INITIAL_VALUE);
-    /// Start from one empty file. Anything left from a previous open is dropped
+    // Start from one empty file; anything left from a previous open is dropped.
     parts.clear();
     parts.emplace_back();
     nextPartNumber = 0;
@@ -212,10 +201,7 @@ void FileStore::close([[maybe_unused]] Store& self)
         const std::unique_lock lock(mutex);
         if (writerOpened)
         {
-            /// The segment still being filled is held in memory, so closing without sealing it
-            /// drops every row since the last seal -- up to one segment's worth. Reads inside this
-            /// process would still find them, which is what makes the loss quiet: it only shows up
-            /// in the file, and only once someone opens it again.
+            // Seal the in-memory active segment, or closing drops up to one segment's worth of rows.
             sealActiveSegment();
             for (auto& part : parts)
             {
@@ -240,14 +226,7 @@ void FileStore::flush(Store& self)
         return;
     }
 
-    /// This tier's own policy decides when its contents move down. Until now it never asked:
-    /// MemoryStore::flush ends with nextLevel->flush(), so FileStore drained everything on every
-    /// MemoryStore flush and never held anything at all. Its capacity, its rolling and its
-    /// eviction were unreachable in a chain -- every chained measurement showed 0 data bytes
-    /// here, the file on disk nothing but a header and an empty table.
-    ///
-    /// A tier with no policy -- a tail, or a standalone store -- still drains on demand, because
-    /// the guard only applies when there is a policy to consult.
+    // This tier's own policy decides when its contents move down; with no policy it drains on demand.
     uint64_t accumulated = 0;
     {
         const std::shared_lock lock(mutex);
@@ -267,19 +246,14 @@ void FileStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Time
     PRECONDITION(ts.getRawValue() != Timestamp::INVALID_VALUE, "FileStore was passed a record with an invalid timestamp!");
 
 
-    /// Accumulated into the segment being filled, exactly as MemoryStore accumulates a record
-    /// into the buffer being filled. A record does NOT become a segment of its own -- the
-    /// segment seals when it reaches `segmentSize`, so this path builds the same segments the
-    /// bulk path does and nothing has to special-case it.
+    // Accumulated into the segment being filled, like MemoryStore accumulates into a buffer.
     appendBuffer(recordData, recordSize, 1, ts, ts);
 
-    /// Check flush policy and flush to next level if triggered (mirrors MemoryStore::writeRecord).
-    /// Measured across every rolled file, not just the one being written -- they are all still this
-    /// store's data until something drains them.
+    // Flush if the policy triggers, measured across every rolled file.
     uint64_t stored = 0;
     {
         const std::shared_lock lock(mutex);
-        /// The same measure flush uses -- one threshold, one meaning.
+        // The same measure flush uses.
         stored = dataBytesLocked();
     }
     if (flushPolicy && flushPolicy->shouldFlush(stored))
@@ -297,22 +271,16 @@ void FileStore::appendBuffer(
         return;
     }
 
-    /// Serialises the whole append: the segment being filled, the file-wide range and the
-    /// append frontier have to move together, or a concurrent writer could land its bytes
-    /// inside another's segment.
+    // Serialises the whole append so a concurrent writer can't land bytes inside another's segment.
     const std::unique_lock lock(mutex);
 
-    /// Held in memory until the segment seals. The descriptor is written immediately in front of
-    /// its payload, and it is not final until then -- byteLength, rowCount and the range are all
-    /// still moving -- so the bytes cannot go down before it. Where they land is settled at seal.
+    // Held in memory until the segment seals; where the bytes land is settled at seal.
     activeBytes.insert(activeBytes.end(), data, data + len);
 
     activeSegment.byteLength += len;
     activeSegment.rowCount += rowCount;
 
-    /// Union rather than overwrite: a segment spans every buffer that went into it. This is the
-    /// whole point -- the range is carried down from where it was measured, never recomputed by
-    /// reading the rows back.
+    // Union, not overwrite: a segment spans every buffer in it; the range is carried down, never recomputed.
     if (minTs.getRawValue() != Timestamp::INVALID_VALUE)
     {
         activeSegment.minTs = std::min(activeSegment.minTs, minTs.getRawValue());
@@ -341,13 +309,7 @@ void FileStore::sealActiveSegment()
         return;
     }
 
-    /// [descriptor][payload], written together. byteOffset points past the descriptor at the rows
-    /// themselves, so a read needs no second hop, and nothing has to be reserved up front: the file
-    /// costs SEGMENT_DESCRIPTOR_BYTES per segment that actually exists and nothing for ones that
-    /// do not. There is no slot count left to outgrow.
-    /// A full table and a full file are the same condition, because the table is sized to the roll
-    /// point. So this is where the file rolls -- and it is why the table can never be outgrown, the
-    /// failure the old unbounded version had.
+    // A full table and a full file are the same condition, so this is where the file rolls.
     if (current().segments.size() >= segmentsPerFile())
     {
         rollToNextFile();
@@ -355,21 +317,18 @@ void FileStore::sealActiveSegment()
 
     auto& part = current();
 
-    /// The payload is appended past the table, which stays at the front where one read reaches all
-    /// of it. Offsets are relative to THIS file, so a descriptor only means anything with its part.
+    // Payload appended past the table; offsets are relative to THIS file.
     activeSegment.byteOffset = part.writer->size() - part.dataStart;
     part.writer->append(activeBytes.data(), activeBytes.size());
     activeBytes.clear();
 
-    /// The descriptor goes into its preallocated slot, in place.
+    // Descriptor written into its preallocated slot.
     const auto index = static_cast<uint32_t>(part.segments.size());
     part.writer->writeAt(&activeSegment, SEGMENT_DESCRIPTOR_BYTES, segmentSlotOffset(config.schemaText.size(), index));
     const uint32_t sealedCount = index + 1;
     part.writer->writeAt(&sealedCount, sizeof(sealedCount), sealedCountOffset(config.schemaText.size()));
 
-    /// Each file carries its own range, not the store's, so a reader holding one file can dismiss
-    /// it on its own terms. Written here rather than per append: it is a pwrite, and the append
-    /// path carries one row at a time when this store stands alone.
+    // Each file carries its own range in its header so a reader can dismiss the whole file.
     part.minTs = Timestamp(std::min(part.minTs.getRawValue(), activeSegment.minTs));
     part.maxTs = Timestamp(std::max(part.maxTs.getRawValue(), activeSegment.maxTs));
     part.writer->updateTimestamps(part.minTs.getRawValue(), part.maxTs.getRawValue());
@@ -377,8 +336,7 @@ void FileStore::sealActiveSegment()
     part.segments.push_back(activeSegment);
     activeSegment = SegmentDescriptor{};
 
-    /// Capacity is enforced after the write, never before it: the newest rows always land, and the
-    /// oldest file leaves to make room.
+    // Capacity enforced after the write: the newest rows always land, the oldest file leaves.
     evictOldestOverCapacity();
 }
 
@@ -395,7 +353,7 @@ size_t FileStore::debugSegmentCount() const
 
 namespace
 {
-/// Compute the byte offset of a field within a row, using the packed binary layout.
+// Byte offset of a field within a packed row.
 std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string& fieldName)
 {
     uint32_t offset = 0;
@@ -404,10 +362,7 @@ std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string&
         const auto& field = schema.getFieldAt(i);
         if (field.getUnqualifiedName() == fieldName)
         {
-            /// Past the null indicator when the field has one. Returning the field's start
-            /// instead and assuming an indicator unconditionally reads a value straddling two
-            /// fields on a non-nullable schema, which matches nothing and silently drops every
-            /// row.
+            // Past the null indicator when the field has one.
             return offset + (field.dataType.nullable ? 1 : 0);
         }
         offset += field.dataType.isType(DataType::Type::VARSIZED) ? sizeof(uint32_t) : field.dataType.getSizeInBytesWithNull();
@@ -415,17 +370,14 @@ std::optional<uint32_t> findFieldOffset(const Schema& schema, const std::string&
     return std::nullopt;
 }
 
-/// How far a filtering pass got, in both senses. The two differ whenever the range drops rows, and
-/// a resumable read needs them apart: `kept` says how much of the destination was used, `scanned`
-/// says which row nobody has looked at yet.
+// How far a filtering pass got: kept = destination rows used, scanned = next row to look at.
 struct FilterProgress
 {
     uint64_t kept{0};
     uint64_t scanned{0};
 };
 
-/// Filter rows in a buffer in-place, keeping only rows whose timestamp field falls within the range.
-/// Stops once `maxKept` rows have been kept, so the caller can fill a destination exactly.
+// Filter rows in place, keeping those whose timestamp falls in range; stops after maxKept kept.
 FilterProgress filterBufferRows(
     const std::span<char> data,
     const uint64_t numRows,
@@ -439,7 +391,7 @@ FilterProgress filterBufferRows(
     {
         const auto row = data.subspan(i * rowWidth, rowWidth);
         uint64_t tsValue = 0;
-        /// tsFieldOffset already points past any null indicator.
+        // tsFieldOffset already points past any null indicator.
         const auto tsBytes = row.subspan(tsFieldOffset, sizeof(uint64_t));
         std::memcpy(&tsValue, tsBytes.data(), tsBytes.size());
         if (range.contains(Timestamp(tsValue)))
@@ -474,8 +426,7 @@ FileStore::ReadableUnits FileStore::collectReadableLocked(
     const uint32_t tupleSize) const
 {
     ReadableUnits readable;
-    /// The unsealed segment sits one past the last sealed unit of the last part. It has no
-    /// descriptor in any file header yet, but its rows are already readable.
+    // The unsealed segment sits one past the last sealed unit; its rows are readable with no descriptor yet.
     const uint64_t unsealedUnit = current().firstUnit + current().segments.size();
     const uint64_t budget = capacityRows + fromRowOffset;
     uint64_t gathered = 0;
@@ -497,8 +448,7 @@ FileStore::ReadableUnits FileStore::collectReadableLocked(
             break;
         }
 
-        /// Pruned here, so a unit the range cannot match is never carried out of the lock. Its rows
-        /// do not count against the budget either -- skipping it bought no destination space.
+        // Pruned here, so a non-matching unit never leaves the lock and costs no budget.
         if (!range.isUnbounded()
             && !range.overlaps(Timestamp(location.descriptor.minTs), Timestamp(location.descriptor.maxTs)))
         {
@@ -525,7 +475,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         cursor.frames.at(depth + 1).exhausted = true;
     }
 
-    /// Skip entire file if its timestamp range falls outside the query range
+    // Skip everything if the store's range misses the query.
     if (!range.isUnbounded())
     {
         const std::shared_lock lock(mutex);
@@ -539,7 +489,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
     const uint32_t tupleSize = calculateRowWidth(readSchema);
     PRECONDITION(tupleSize > 0, "Schema must have at least one field to compute row width");
 
-    /// The field the range filters on, resolved once rather than per segment.
+    // The field the range filters on, resolved once.
     std::optional<uint32_t> tsOffset;
     if (!range.isUnbounded())
     {
@@ -547,27 +497,18 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
     }
 
-    /// Resolved before the lock: it reads the destination buffer and not the store, and the
-    /// collector below needs it to know when it has gathered enough units.
+    // Resolved before the lock: reads the destination, not the store.
     auto destSpan = buffer.getAvailableMemoryArea<char>();
     const uint64_t capacity = destSpan.size() / tupleSize;
-    /// A destination that cannot hold one row would return zero forever, and a zero is read as
-    /// end of stream -- so the whole replay would come back empty with no error at all.
+    // A zero-capacity destination would return 0 forever, read as end of stream.
     PRECONDITION(capacity > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), tupleSize);
 
-    /// Snapshot under the lock, then read without holding it: pread is position-independent, and a
-    /// concurrent writer only ever appends past what is snapshotted. The writers live on the heap,
-    /// so growing `parts` does not move them and the pointers stay good once the lock is dropped.
-    ///
-    /// Only the units THIS CALL can consume are taken. Flattening every unit in the store to serve
-    /// one destination used to cost a vector of every segment on every call -- 4,560 entries built
-    /// to read 146 rows, on each of 292,466 calls of a full replay.
+    // Snapshot under the lock, read without it: pread is position-independent and writers only append.
+    // Only the units this call can consume are taken.
     ReadableUnits readable;
-    /// The unsealed segment is held in memory, not on disk, so its bytes are copied out here.
-    /// Only this tier serves unsealed rows at all.
+    // The unsealed segment is in memory, so its bytes are copied out here.
     std::vector<uint8_t> activeSnapshot;
-    /// Which row of the unsealed segment `activeSnapshot` begins at. It is a WINDOW, not the whole
-    /// segment, so the consumption below is relative to this rather than to the segment's start.
+    // Which row of the unsealed segment the snapshot window begins at.
     uint64_t activeWindowFrom = 0;
     uint64_t rowOffset = 0;
     auto& frame = cursor.frames.at(depth);
@@ -585,24 +526,11 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         readable = collectReadableLocked(fromUnit, rowOffset, capacity, range, tupleSize);
         if (!readable.locations.empty() && readable.locations.back().writer == nullptr)
         {
-            /// Copy only what this call can consume. The whole segment used to be copied on every
-            /// call and at most one destination buffer of it used -- 4.4 MB moved to read 4 KB at a
-            /// 16 MB segment, and 99.6% of calls never reached the unsealed unit at all.
-            ///
-            /// The copy STAYS here, under the same lock. Between this point and the memcpy below
-            /// the segment can seal, which clears `activeBytes` and moves its rows to disk, so a
-            /// reader that deferred the copy would serve bytes that had moved out from under it.
-            ///
-            /// A read enters the unsealed segment either already inside it -- then it is the only
-            /// unit collected and resumes at `rowOffset` -- or by spilling into it from an earlier
-            /// unit, and then it enters at row 0.
+            // Copy only what this call can consume, under the same lock: sealing would clear activeBytes.
+            // A read already inside the segment resumes at rowOffset; one spilling in from earlier enters at row 0.
             const uint64_t windowFrom = readable.locations.size() == 1 ? rowOffset : 0;
 
-            /// A window of `capacity` rows is only enough when every row qualifies. Filtering
-            /// advances by rows SCANNED and not rows kept (`rowOffset += progress.scanned`), so a
-            /// bounded range can walk arbitrarily far past `capacity` while keeping almost nothing
-            /// -- and straight off the end of a window sized for it. Segments that need filtering
-            /// therefore keep the whole copy; it is the unbounded reads that do the volume.
+            // A capacity-sized window is enough only when every row qualifies; filtered reads keep the whole copy.
             const bool everyRowQualifies = range.isUnbounded()
                 || (activeSegment.minTs >= range.start.getRawValue() && activeSegment.maxTs < range.end.getRawValue());
 
@@ -625,10 +553,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
 
     uint64_t destTuples = 0;
 
-    /// Two decisions per unit, as MemoryStore makes them per buffer: take all of it, or inspect its
-    /// rows. The third -- skip it -- was already made under the lock, which is what makes the skip
-    /// real: a span from the first match to the last would read everything in between, and segments
-    /// are held in write order, so a late arrival puts a non-matching one between two matches.
+    // Two decisions per unit: take all of it, or inspect its rows. Skip was already done under the lock.
     size_t taken = 0;
     for (; taken < readable.locations.size(); ++taken, rowOffset = 0)
     {
@@ -649,21 +574,16 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         const bool whollyInRange
             = range.isUnbounded() || (division.minTs >= range.start.getRawValue() && division.maxTs < range.end.getRawValue());
 
-        /// Read in chunks of at most the remaining destination capacity. One chunk suffices when
-        /// every row qualifies, because then rows read and rows kept are the same number. Filtering
-        /// breaks that equality -- a chunk may yield almost nothing -- so that case keeps pulling
-        /// chunks until the destination is full or the division runs out, instead of returning a
-        /// nearly empty buffer and a resume point.
+        // Read in chunks of the remaining capacity; filtering may yield little, so keep pulling until full.
         while (rowOffset < rowsInDivision && destTuples < capacity)
         {
             const uint64_t chunkRows = std::min(rowsInDivision - rowOffset, capacity - destTuples);
             char* dest = destSpan.data() + (destTuples * tupleSize);
             ssize_t bytesRead = 0;
-            /// A null writer IS the unsealed segment: the location says how to read it, so there is
-            /// no index to compare against.
+            // A null writer is the unsealed segment, served from the snapshot.
             if (location.writer == nullptr)
             {
-                /// Relative to the window, which may start part-way into the segment.
+                // Relative to the window, which may start part-way into the segment.
                 PRECONDITION(
                     rowOffset >= activeWindowFrom,
                     "unsealed window starts at row {} but the read is at row {}",
@@ -690,7 +610,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
                 break;
             }
 
-            /// 2. Wholly inside the query: every row qualifies, so none of them is examined.
+            // Wholly inside the query: every row qualifies, none is examined.
             if (whollyInRange)
             {
                 destTuples += rowsRead;
@@ -698,23 +618,21 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
                 continue;
             }
 
-            /// 3. Straddling a bound: the only case that reads timestamps. Filtering compacts the
-            /// survivors in place, so the next chunk continues straight after them.
+            // Straddling a bound: filter, compacting survivors in place.
             const auto progress = filterBufferRows(
                 std::span<char>(dest, rowsRead * tupleSize), rowsRead, tupleSize, *tsOffset, range, capacity - destTuples);
             destTuples += progress.kept;
-            /// Rows LOOKED AT, not rows kept: a row this pass rejected has been decided.
+            // Rows LOOKED AT, not rows kept.
             rowOffset += progress.scanned;
         }
 
         if (rowOffset < rowsInDivision)
         {
-            break; /// destination filled part-way through this division; resume here
+            break; // destination filled mid-division; resume here
         }
     }
 
-    /// Positions are global, so there is nothing to convert back: a position means the same unit
-    /// however many files have since been evicted.
+    // Positions are global, so nothing to convert back after eviction.
     if (taken < readable.locations.size())
     {
         frame.unitIndex = readable.locations[taken].unit;
@@ -725,8 +643,7 @@ uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema, const Ti
         frame.unitIndex = readable.locations.back().unit + 1;
         frame.rowOffset = 0;
     }
-    /// Exhausted only when the WALK ran out of units. Running out of collected ones means the
-    /// destination filled, and ending the replay there would silently truncate it.
+    // Exhausted only when the walk ran out of units, not when the destination filled.
     if (readable.reachedEnd && taken >= readable.locations.size())
     {
         frame.exhausted = true;
@@ -769,9 +686,7 @@ Schema FileStore::getSchema() const
 
 uint64_t FileStore::size() const
 {
-    /// Just the locking wrapper. The sum lives in storedBytesLocked and only there -- it was
-    /// written out twice, which is how three call sites came to disagree about what a threshold
-    /// counts in the first place.
+    // Locking wrapper; the sum lives only in storedBytesLocked.
     const std::shared_lock lock(mutex);
     return storedBytesLocked();
 }
@@ -829,7 +744,7 @@ std::vector<FileStore::DrainedSegment> FileStore::drainSegments()
 {
     std::unique_lock lock(mutex);
 
-    /// Anything still accumulating goes down too, so the drain leaves nothing behind.
+    // Seal the active segment too, so the drain leaves nothing behind.
     sealActiveSegment();
 
     std::vector<DrainedSegment> out;
@@ -849,16 +764,10 @@ std::vector<FileStore::DrainedSegment> FileStore::drainSegments()
         }
     }
 
-    /// Let go of the data: cut the file back past the header and the (now stale) table, and
-    /// reset both the table and the file-wide range. Every index into `segments` stops meaning
-    /// anything, so a cursor holding one has to be told rather than left to read the wrong bytes.
-    /// Let go of the data. Every index into the parts stops meaning anything, so a cursor holding
-    /// one has to be told rather than left to read the wrong bytes.
+    // Let go of the data; every index into parts stops meaning anything, so bump the generation.
     ++readGeneration;
 
-    /// The rolled files are deleted outright -- their rows have moved to the tier below and nothing
-    /// will be appended to them again. The first is kept and cut back to its header instead, so the
-    /// store keeps one open file and the path it has been reporting all along.
+    // Rolled files are deleted; the first is kept and cut back to its header.
     for (size_t i = 1; i < parts.size(); ++i)
     {
         parts[i].writer->close();
@@ -889,7 +798,7 @@ uint32_t FileStore::calculateRowWidth(const Schema& schema)
         auto type = schema.getFieldAt(i).dataType;
         if (type.isType(DataType::Type::VARSIZED))
         {
-            width += sizeof(uint32_t); /// TODO #11: Add Varsized Support
+            width += sizeof(uint32_t); // TODO #11: Add Varsized Support
         }
         else
         {

@@ -21,8 +21,7 @@
 namespace NES
 {
 
-/// Transformation that drains a FileStore and writes its rows into a downstream
-/// CompressedStore. The on-disk analog of MemoryToCompressedTransformation.
+// Drains a FileStore and writes its rows into a downstream CompressedStore.
 class FileToCompressedTransformation
 {
 public:

@@ -22,19 +22,9 @@
 namespace NES
 {
 
-/// On-disk layout of the compressed store:
-///
-///   [ file header  ]   (reuse ReplayStoreFormat: MAGIC, VERSION, schema, file minTs/maxTs)
-///   [ SegmentHeader ][ compressed bytes ]   <- segment 0
-///   [ SegmentHeader ][ compressed bytes ]   <- segment 1
-///   ...
-///
-/// Each segment is compressed AS A WHOLE. The SegmentHeader is stored
-/// UNCOMPRESSED, in front of its payload, for two reasons:
-///   1. minTs/maxTs let read() skip a whole segment via TimeRange::overlaps()
-///      WITHOUT decompressing it (this is the main speed win).
-///   2. uncompressedBytes tells the codec how big the output buffer must be;
-///      compressedBytes tells us how many bytes the payload occupies on disk.
+// On-disk layout: a reused file header, then one [SegmentHeader][compressed bytes] record per
+// segment. The header is uncompressed so read() can skip a segment by range without decompressing,
+// and gives the codec the output and payload sizes.
 struct SegmentHeader
 {
     uint64_t minTs{0};             /// smallest timestamp of any row in this segment

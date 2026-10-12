@@ -21,11 +21,7 @@
 namespace NES
 {
 
-/// Moves a FileStore's rows down into a LossyStore.
-///
-/// Same shape as the other transformations: drain the source (which empties it, so the data
-/// has genuinely moved a tier down) and hand the raw row-major bytes to the destination.
-/// The destination decides how to group and encode them.
+// Moves a FileStore's rows down into a LossyStore: drains the source and hands its segments over.
 struct FileToLossyTransformation
 {
     void execute(Store& source, Store& dest);

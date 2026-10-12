@@ -37,23 +37,10 @@
 namespace NES
 {
 
-/// Lossless, segment-based, compressed store, backed by a file on disk (one
-/// [SegmentHeader][compressed bytes] record per sealed segment, per
-/// CompressedSegmentFormat.hpp). A full peer of MemoryStore/FileStore:
-/// it can RECEIVE data from a prior layer (via a transformation calling
-/// appendRawBytes) and CHAIN to a next layer (flush forwards downstream), with the
-/// same method duties as MemoryStore.
-///
-/// Duties (mirroring MemoryStore):
-///   writeRecord : append into the active buffer; seal to a segment when full;
-///                 flush downstream if the flush policy trips.
-///   flush       : seal the active buffer into a compressed segment (finalize own
-///                 pending data), THEN transformation->execute + nextLevel->flush.
-///   read        : read nextLevel first, then own segments.
-///   open/close  : propagate to nextLevel.
-///
-/// Sealing a segment = compressing the whole active buffer once. It is the direct
-/// analog of MemoryStore sealing its active TupleBuffer into `buffers`.
+// Lossless, segment-based compressed store backed by a file (one [SegmentHeader][compressed bytes]
+// record per sealed segment; see CompressedSegmentFormat.hpp). A peer of MemoryStore/FileStore:
+// receives data from a prior tier and chains to a next one. Sealing a segment compresses the
+// whole active buffer at once.
 class CompressedStore
 {
 public:
@@ -66,14 +53,11 @@ public:
         CompressionCodec::Type codec = CompressionCodec::Type::ZSTD;
         int compressionLevel = 3; /// zstd: 1 (fast) .. 22 (small)
 
-        /// Seal + compress the active segment once its raw size reaches this many bytes.
-        size_t segmentSize = 1UZ * 1024UZ * 1024UZ; /// 1 MB
+        // Seal and compress the active segment once its raw size reaches this.
+        size_t segmentSize = 1UZ * 1024UZ * 1024UZ; // 1 MB
     };
 
-    /// Raw row-major bytes read off of every sealed segment (decompressed) plus the
-    /// still-pending active buffer, handed to whatever tier drains this store. Every
-    /// transformation boundary in this store chain speaks row-major bytes matching the
-    /// schema's packed layout, regardless of how a given tier stores them internally.
+    // Decompressed row-major bytes of every sealed segment plus the pending buffer, for the tier draining this store.
     struct DrainedData
     {
         std::vector<uint8_t> bytes;
@@ -84,9 +68,7 @@ public:
     /// Standalone (tail) store — no next level.
     CompressedStore(Config config, const Schema& schema);
 
-    /// Chained store: flushes to `nextLevel` when the policy trips. Looks up the
-    /// "CompressedStore -> <nextLevel>" transformation in the registry, exactly
-    /// like MemoryStore's chained constructor.
+    // Chained store: flushes to nextLevel when the policy trips.
     CompressedStore(Config config, const Schema& schema, Store nextLevel, FlushPolicy policy);
 
     ~CompressedStore();
@@ -113,54 +95,33 @@ public:
 
     [[nodiscard]] const std::string& getFilePath() const { return filePath; }
 
-    /// ---- bulk ingest from a prior layer (used by a transformation) ---------
-    /// Take one whole segment from the tier above, carrying the range its rows already
-    /// have. This is writeRecord's path with a segment in place of a row: the bytes go
-    /// into the active block, the range is unioned into the active block's range, and
-    /// the block seals once it reaches config.segmentSize.
-    ///
-    /// The tiers do NOT share a segment size, and should not. Each one picks the unit
-    /// that suits it -- FileStore 64 KB because that is its transfer and index
-    /// granularity, this store 1 MB because that is what zstd compresses at once and a
-    /// larger block compresses better. So several segments from above accumulate into
-    /// one block here, and that block's range is the union of theirs: narrow enough to
-    /// prune on, which is all read() needs.
+    // Take one segment from the tier above with its range; accumulate into the active block and
+    // seal at segmentSize. Tiers don't share a segment size, so several accumulate into one block here.
     void appendSegment(const uint8_t* data, size_t len, uint64_t rowCount, Timestamp minTs, Timestamp maxTs);
-    /// ----------------------------------------------------------------------
 
-    /// Read every sealed segment out (decompressing each), plus the pending active
-    /// buffer, as one row-major byte blob, then reset this store back to empty (segments
-    /// cleared, file truncated to just its header). Used by a transformation to hand this
-    /// store's data down to the next tier (e.g. ColumnStore), mirroring FileStore::drain().
+    // Read every sealed segment (decompressed) plus the pending buffer as one row-major blob, then reset to empty.
     [[nodiscard]] DrainedData drain();
 
     /// test introspection
     [[nodiscard]] uint64_t debugActiveRowCount() const;
     [[nodiscard]] uint64_t debugSegmentCount() const;
-    /// The [minTs, maxTs] of each sealed segment, in seal order. Mirrors LossyStore::debugGroupRanges.
+    // Each sealed segment's [minTs, maxTs], in seal order.
     [[nodiscard]] std::vector<std::pair<uint64_t, uint64_t>> debugSegmentRanges() const;
-    /// Segments actually decompressed, rather than re-used from a cursor already holding them.
-    /// Equal to the number of segments a scan touches; a large multiple of it if resuming inside
-    /// a segment decompresses it again.
+    // Count of real decompressions, for resume-behaviour tests.
     [[nodiscard]] uint64_t debugDecodeCount() const { return decodeCount.load(std::memory_order_relaxed); }
 
 private:
-    /// Points at one sealed segment already written to disk: its file offset
-    /// (of the SegmentHeader) plus the header itself, so read() can prune by
-    /// timestamp range and know exactly where/how much to pread, without
-    /// holding any compressed payload bytes in memory.
+    // One sealed segment on disk: its file offset and header, enough to prune by range and pread it.
     struct SegmentIndexEntry
     {
         uint64_t offset;
         SegmentHeader header;
     };
 
-    /// Compress the active buffer, write [header][payload] to disk, and reset it.
-    /// PRECONDITION: the caller already holds `mutex` (unique lock).
+    // Compress the active buffer, write [header][payload], reset it. Caller holds the lock.
     void sealActiveSegment();
 
-    /// Total bytes currently stored (sealed segments' compressed size + pending buffer).
-    /// PRECONDITION: the caller already holds `mutex`.
+    // Total bytes stored (sealed compressed size + pending buffer). Caller holds the lock.
     [[nodiscard]] uint64_t currentSizeLocked() const;
 
     Config config;
@@ -177,8 +138,7 @@ private:
     std::string filePath;
     BinaryStoreWriter writer;
     bool writerOpened{false};
-    /// Byte offset where segment data begins (i.e. just past the file header). Computed
-    /// once in open(); drain() truncates the file back to this offset.
+    // Byte offset where segment data begins; drain() truncates the file back to it.
     uint64_t dataStartOffset{0};
     Timestamp fileMinTs{Timestamp(Timestamp::INVALID_VALUE)};
     Timestamp fileMaxTs{Timestamp(Timestamp::INITIAL_VALUE)};
@@ -186,19 +146,16 @@ private:
     /// Lightweight index of sealed segments (headers only — payload lives on disk).
     std::vector<SegmentIndexEntry> segments;
 
-    /// Bumped whenever `segments` is emptied, i.e. whenever an index into it stops meaning what it
-    /// did. Appending never invalidates an index, so sealing does not bump it.
+    // Bumped when segments is emptied, invalidating any index into it.
     uint64_t readGeneration{0};
 
     bool opened{false};
     mutable std::shared_mutex mutex;
 
-    /// Counts real decompressions, for the tests that pin resume behaviour. Atomic and mutable
-    /// because `read` holds only a shared lock, so several readers may bump it at once.
+    // Counts real decompressions for resume tests; atomic because read holds only a shared lock.
     mutable std::atomic<uint64_t> decodeCount{0};
 
-    /// Chaining support (all empty for a standalone/tail store), mirroring
-    /// MemoryStore/FileStore.
+    // Chaining support (empty for a standalone/tail store).
     std::optional<Store> nextLevel;
     std::optional<StoreTransformation> transformation;
     std::optional<FlushPolicy> flushPolicy;

@@ -37,9 +37,7 @@ void FileToLossyTransformation::execute(Store& source, Store& dest)
     auto typedDest = dest.getAs<LossyStore>();
     auto& lossyStore = typedDest.getMutable();
 
-    /// One segment becomes one group, carrying the range that arrived with it. Nothing is
-    /// re-divided here and no timestamp is read back out of the row bytes: the tier above knows
-    /// both the boundaries and the ranges already, so both are simply handed over.
+    // One segment becomes one group, carrying the range it arrived with.
     for (const auto& segment : segments)
     {
         if (segment.bytes.empty())

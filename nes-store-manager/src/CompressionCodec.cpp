@@ -20,11 +20,6 @@
 
 #include <zstd.h>
 #include <snappy.h>
-/// NOTE ON ERROR HANDLING:
-/// This file uses plain std::runtime_error so it compiles anywhere. Inside the
-/// NebulaStream module you may prefer the project's own macros from
-/// <ErrorHandling.hpp> (e.g. PRECONDITION / INVARIANT). Swapping them in is a
-/// mechanical change and does not affect the logic below.
 
 namespace NES
 {
@@ -40,7 +35,7 @@ std::vector<uint8_t> CompressionCodec::compress(const uint8_t* src, size_t len) 
     {
         case Type::ZSTD:
         {
-            /// Worst-case output size for `len` input bytes.
+            // Worst-case output size for len input bytes.
             const size_t bound = ZSTD_compressBound(len);
             std::vector<uint8_t> out(bound);
 
@@ -50,7 +45,7 @@ std::vector<uint8_t> CompressionCodec::compress(const uint8_t* src, size_t len) 
                 throw std::runtime_error(std::string("zstd compress failed: ") + ZSTD_getErrorName(written));
             }
 
-            out.resize(written); /// shrink to what was actually produced
+            out.resize(written); // shrink to what was actually produced
             return out;
         }
         case Type::SNAPPY:

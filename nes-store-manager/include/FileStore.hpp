@@ -38,8 +38,7 @@
 namespace NES
 {
 
-/// File-backed store wrapping BinaryStoreWriter/ReplayStoreReader. Satisfies StoreConcept.
-/// Optionally chains to a next-level store with a flush policy and transformation.
+// File-backed store of rolled, segmented files; optionally chains to a next-level store. Satisfies StoreConcept.
 class FileStore
 {
 public:
@@ -49,51 +48,20 @@ public:
         std::string storeDir;
         std::string schemaText;
 
-        /// Bytes per segment. Buffers accumulate into the segment being filled; once it reaches
-        /// this size the segment seals and its descriptor is written into the header.
-        ///
-        /// The segment is also the unit a read skips on, so this is the granularity of time-range
-        /// pruning: a query that touches one minute of a file still reads whole segments.
+        // Bytes per segment; also the unit a read skips on (the time-range pruning granularity).
         size_t segmentSize = 64UZ * 1024UZ;
 
-        /// How much this store may hold on disk, across every file it has rolled through. Once the
-        /// total passes this, the OLDEST file is unlinked -- so the store keeps the newest
-        /// `totalSize` worth of history and a write is never refused.
-        ///
-        /// This is the capacity, not the size of a file. A file holds `filesAtCapacity` fewer bytes
-        /// than this, which is what makes eviction an unlink of one whole file rather than a rewrite.
-        ///
-        /// Deliberately NOT the history size from the query. That figure already decides the memory
-        /// buffer and MemoryStore's flush threshold, and how much a file store may keep is a third
-        /// question with no relation to it -- tying them made a '1MB' history reserve 16 descriptor
-        /// slots while the default reserved 1024, so two chains differed by 40 KB of zeroed table
-        /// for reasons nobody chose. Set here so the geometry is identical wherever a store is built.
+        // Max bytes on disk across all rolled files; once exceeded, the oldest whole file is unlinked.
         size_t totalSize = 64UZ * 1024UZ * 1024UZ;
 
-        /// How many files the store is spread over when it is full, which fixes both the roll point
-        /// (totalSize / filesAtCapacity bytes per file) and how coarsely eviction bites: dropping
-        /// the oldest file discards that fraction of the history at once.
-        ///
-        /// The roll point is also the slot count: a file's descriptor table is preallocated to
-        /// exactly the segments that file can hold, so it is always right-sized and can never be
-        /// outgrown. That is only true because the file is bounded -- unbounded, the same table was
-        /// a cap that silently stopped recording descriptors once it filled.
+        // Files the store spreads over when full; fixes the roll point and the per-file slot count.
         size_t filesAtCapacity = 16;
 
-        /// Bytes this store accumulates before migrating to the tier below.
-        ///
-        /// Zero means one file's worth -- totalSize / filesAtCapacity -- which is the natural
-        /// unit, since the tier below then receives whole files rather than whatever the tier
-        /// above happened to hand over.
-        ///
-        /// Raise it to make the store span SEVERAL files before draining. That is also what makes
-        /// rolling engage: a threshold at or below one file's capacity migrates just before the
-        /// file could fill, so the store never rolls.
+        // Bytes accumulated before draining to the tier below; zero means one file's worth.
         size_t flushThresholdBytes = 0;
     };
 
-    /// One segment handed to the tier below: its bytes, and the range of the rows inside them.
-    ///
+    // One segment handed to the tier below: its bytes and the range of the rows in them.
     struct DrainedSegment
     {
         std::vector<uint8_t> bytes;
@@ -121,8 +89,7 @@ public:
 
     void writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self);
 
-    /// Append one sealed buffer together with the range of the rows in it (used by
-    /// MemoryToFileTransformation).
+    // Append one sealed buffer with the range of its rows (used by MemoryToFileTransformation).
     void appendBuffer(const uint8_t* data, size_t len, uint64_t rowCount, Timestamp minTs, Timestamp maxTs);
 
     uint64_t read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth);
@@ -133,8 +100,7 @@ public:
 
     [[nodiscard]] static std::string_view typeName() noexcept { return "FileStore"; }
 
-    /// The file currently being written. Once the store has rolled there are older ones behind it;
-    /// getFilePaths returns all of them, oldest first.
+    // The file currently being written; getFilePaths returns all rolled files, oldest first.
     [[nodiscard]] const std::string& getFilePath() const;
     [[nodiscard]] std::vector<std::string> getFilePaths() const;
 
@@ -143,9 +109,7 @@ public:
     /// Calculate packed row width from schema (no padding, matching binary format).
     static uint32_t calculateRowWidth(const Schema& schema);
 
-    /// Read every sealed segment out of the file, then truncate it back to just the header.
-    /// The store is left empty (data has moved to the next tier). A partially filled segment is
-    /// sealed first, so nothing is left behind.
+    // Read every sealed segment out (sealing any partial one first), then truncate the file to its header.
     [[nodiscard]] std::vector<DrainedSegment> drainSegments();
 
     /// test introspection
@@ -154,50 +118,32 @@ public:
     [[nodiscard]] size_t debugFileCount() const;
     /// How many files have been unlinked for being over capacity.
     [[nodiscard]] size_t debugEvictedFileCount() const;
-    /// The range the store claims to hold, which read() tests a query against before touching any
-    /// unit. Exposed because eviction has to shrink it and nothing else can observe that.
+    // The range the store claims to hold; exposed because eviction shrinks it unobservably otherwise.
     [[nodiscard]] std::pair<Timestamp, Timestamp> debugStoreRange() const;
 
 private:
-    /// One file in the rolled sequence. The store writes into the last one; the earlier ones are
-    /// finished and are kept open so a read can still reach their rows.
+    // One rolled file; the last is being written, earlier ones stay open for reads.
     struct Part
     {
         std::unique_ptr<BinaryStoreWriter> writer;
         std::string path;
-        /// Segments sealed into THIS file. Offsets are relative to this file's data region, so a
-        /// descriptor only means anything together with the part it came from.
+        // Segments sealed into THIS file; offsets are relative to this file's data region.
         std::vector<SegmentDescriptor> segments;
         uint64_t dataStart{0};
         /// This file's own range, written into its header so a reader can dismiss the whole file.
         Timestamp minTs{Timestamp(Timestamp::INVALID_VALUE)};
         Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
 
-        /// Global position of this part's FIRST unit. Assigned once, when the part is created, and
-        /// never touched again: sealing appends to `segments`, which moves the END of the range and
-        /// not its start. Global, so eviction needs no fixup -- dropping an older part leaves every
-        /// surviving part's firstUnit exactly as it was, which is what lets a cursor keep its place.
+        // Global position of this part's first unit; assigned at creation and never changed, so eviction needs no fixup.
         uint64_t firstUnit{0};
 
-        /// Which units live here. The end is DERIVED: `segments.size()` already says how many there
-        /// are, and a stored lastUnit would be a second fact to keep in step on every seal.
-        ///
-        /// Note what this does NOT assume: nothing about how many segments a part holds. A roll
-        /// decided on bytes, on elapsed time, or on anything else makes parts of wildly different
-        /// sizes, and this still resolves exactly, because within one part segments are appended in
-        /// order -- sealActiveSegment places each descriptor at index `segments.size()` -- so that
-        /// part's segment i is unavoidably its (i+1)-th unit.
+        // Whether this part holds the given global unit; the count of units here is segments.size().
         [[nodiscard]] bool holds(const uint64_t globalUnit) const
         {
             return globalUnit >= firstUnit && (globalUnit - firstUnit) < segments.size();
         }
 
-        /// PRECONDITION: this part holds `globalUnit`.
-        ///
-        /// The subtraction is an offset into this part's own vector, and it is exact only while a
-        /// part's units are consecutive with no holes. They are: eviction drops whole files and
-        /// nothing removes a segment from the middle of one. Per-segment eviction INSIDE a file
-        /// would break it, and would do so silently one segment at a time -- hence the check.
+        // Offset into this part's segments; exact because a part's units are consecutive (checked).
         [[nodiscard]] const SegmentDescriptor& unitAt(const uint64_t globalUnit) const
         {
             PRECONDITION(holds(globalUnit), "part starting at unit {} does not hold unit {}", firstUnit, globalUnit);
@@ -205,9 +151,7 @@ private:
         }
     };
 
-    /// Where one unit physically lives. A descriptor's offsets are relative to its own file's data
-    /// region, so a descriptor alone locates nothing -- it only means something together with the
-    /// writer and data start that make sense of it.
+    // Where one unit physically lives: a descriptor plus the writer and data start that locate it.
     struct SegmentLocation
     {
         /// Global position, so a cursor can resume on it without anything having to be renumbered.
@@ -222,37 +166,21 @@ private:
     struct ReadableUnits
     {
         std::vector<SegmentLocation> locations;
-        /// Set when the walk ran out of units rather than filling the destination. ONLY then is a
-        /// cursor exhausted -- stopping because the buffer is full is not the end of the store, and
-        /// conflating the two would end a replay early.
+        // Set only when the walk ran out of units; that alone exhausts a cursor (a full buffer does not).
         bool reachedEnd{false};
     };
 
-    /// Resolve a GLOBAL unit position to the file holding it. nullopt when the position has been
-    /// evicted or is past the last sealed unit.
-    ///
-    /// A scan over `parts`, deliberately, and not index arithmetic over a fixed segments-per-file:
-    /// a scan does not care how a part came to be the size it is, so changing WHEN a file rolls
-    /// cannot make this resolve to the wrong segment. `parts` is bounded by `filesAtCapacity`,
-    /// since eviction holds the store under `totalSize`.
-    /// PRECONDITION: the caller holds `mutex`.
+    // Resolve a global unit to the file holding it; nullopt if evicted or past the last sealed unit.
+    // Caller holds the lock.
     [[nodiscard]] std::optional<SegmentLocation> locateUnitLocked(uint64_t globalUnit) const;
 
-    /// The units one read can serve, from `fromUnit` onward and in order.
-    ///
-    /// Units the range cannot match are skipped HERE rather than materialised and skipped later,
-    /// and the walk stops once the gathered units can supply `capacityRows`. That is one unit
-    /// normally and two when a read straddles a segment boundary, because a destination holds a few
-    /// hundred rows and a sealed segment holds thousands. `fromRowOffset` is added to the budget:
-    /// the first unit is resumed part-way through, so its consumed prefix must not count as
-    /// available. The unsealed segment comes back last, with a null writer.
-    /// PRECONDITION: the caller holds `mutex`.
+    // The units one read can serve from fromUnit onward, skipping ones the range cannot match and
+    // stopping once they can supply capacityRows. Caller holds the lock.
     [[nodiscard]] ReadableUnits collectReadableLocked(
         uint64_t fromUnit, uint64_t fromRowOffset, uint64_t capacityRows, const TimeRange& range, uint32_t tupleSize) const;
 
-    /// Write the active segment's descriptor and payload into the current file, then start a new
-    /// segment -- rolling to a new file first if this one has reached `totalSize`.
-    /// PRECONDITION: the caller holds `mutex`.
+    // Write the active segment and start a new one, rolling to a new file first if this one is full.
+    // Caller holds the lock.
     void sealActiveSegment();
 
     /// Finish the current file and begin the next. PRECONDITION: the caller holds `mutex`.
@@ -261,19 +189,16 @@ private:
     /// Open a file for `parts.back()`. PRECONDITION: the caller holds `mutex`.
     void openCurrentPart();
 
-    /// Unlink the oldest files until the store is back under `totalSize`. PRECONDITION: the caller
-    /// holds `mutex`.
+    // Unlink the oldest files until the store is back under totalSize. Caller holds the lock.
     void evictOldestOverCapacity();
 
     /// Segments one file holds before it rolls, which is also its preallocated slot count.
     [[nodiscard]] uint32_t segmentsPerFile() const;
 
-    /// Row bytes only, framing subtracted -- what a FLUSH THRESHOLD is compared against.
-    /// PRECONDITION: the caller holds `mutex`.
+    // Row bytes only, framing excluded -- what a flush threshold compares against. Caller holds the lock.
     [[nodiscard]] uint64_t dataBytesLocked() const;
 
-    /// The whole footprint, framing included -- what CAPACITY is compared against.
-    /// PRECONDITION: the caller holds `mutex`.
+    // Whole footprint, framing included -- what capacity compares against. Caller holds the lock.
     [[nodiscard]] uint64_t storedBytesLocked() const;
 
     [[nodiscard]] Part& current() { return parts.back(); }
@@ -293,13 +218,11 @@ private:
     /// Files unlinked for being over capacity, for tests and for reporting.
     size_t evictedFiles{0};
 
-    /// Bumped whenever the parts are emptied, i.e. whenever an index into them stops meaning what
-    /// it did. Appending never invalidates an index, so sealing does not bump it.
+    // Bumped when parts are emptied, invalidating any index into them.
     uint64_t readGeneration{0};
     /// The segment being filled. Sealed once it reaches `config.segmentSize`, or at flush.
     SegmentDescriptor activeSegment{};
-    /// Its bytes, held until it seals -- the descriptor written in front of them is not final
-    /// until then. Reads serve the unsealed segment from here.
+    // The active segment's bytes, held until it seals; reads serve the unsealed segment from here.
     std::vector<uint8_t> activeBytes;
 
     /// Chaining support (all optional — empty for standalone/tail stores).

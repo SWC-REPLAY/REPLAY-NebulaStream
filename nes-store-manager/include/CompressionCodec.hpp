@@ -22,38 +22,24 @@
 namespace NES
 {
 
-/// A lossless codec = compressor + decompressor.
-///
-/// "Lossless" means the guarantee: decompress(compress(x)) == x, byte for byte.
-/// This class is the ONLY place that knows about the underlying compression
-/// library (currently zstd). Everything else in the store just asks it to
-/// "compress these bytes" / "decompress these bytes" and never sees zstd.
-///
-/// To add another codec later (e.g. Snappy), add a Type enum value and one
-/// case in each switch in the .cpp — nothing else changes.
+// A lossless codec: decompress(compress(x)) == x. The only place that knows the compression library (zstd).
 class CompressionCodec
 {
 public:
-    /// The concrete algorithm. The numeric value is stored on disk (in each
-    /// segment header) so a reader knows how to decompress. Never renumber
-    /// existing values once files exist in the wild.
+    // The concrete algorithm; its value is stored in each segment header. Never renumber.
     enum class Type : uint8_t
     {
         ZSTD = 1,
-        SNAPPY = 2,   // added in a later step
+        SNAPPY = 2,
     };
 
-    /// @param type  which algorithm to use
-    /// @param level compression level (zstd: 1 = fastest .. 22 = smallest; 3 is the zstd default).
-    ///              Ignored by decompression — only compression uses it.
+    // level: zstd 1 (fastest) .. 22 (smallest), 3 is default; used by compression only.
     explicit CompressionCodec(Type type = Type::ZSTD, int level = 3);
 
     /// Compress `len` bytes starting at `src`. Returns the compressed bytes.
     [[nodiscard]] std::vector<uint8_t> compress(const uint8_t* src, size_t len) const;
 
-    /// Decompress a blob back to its original bytes.
-    /// @param uncompressedLen the ORIGINAL size (we store this in the segment header,
-    ///                        so we know exactly how big the output buffer must be).
+    // Decompress a blob; uncompressedLen is the original size (stored in the segment header).
     [[nodiscard]] std::vector<uint8_t> decompress(const uint8_t* src, size_t compressedLen, size_t uncompressedLen) const;
 
     [[nodiscard]] Type getType() const { return type; }

@@ -36,9 +36,7 @@ namespace NES
 
 namespace
 {
-/// Distinct filename prefix from FileStore's ("replay_") — a FileStore and a
-/// CompressedStore chained together share the same storeName/storeDir, so they
-/// must not collide on the same generated path.
+// Distinct filename prefix from FileStore's so a chained pair doesn't collide on a path.
 std::string generateFilePath(const CompressedStore::Config& cfg)
 {
     const auto now = std::chrono::system_clock::now();
@@ -71,8 +69,7 @@ CompressedStore::CompressedStore(Config cfg, const Schema& schemaIn, Store next,
 {
     activeBuffer.reserve(config.segmentSize);
 
-    /// Look up the transformation for "CompressedStore -> <nextLevel>", exactly
-    /// like MemoryStore's chained constructor does.
+    // Look up the CompressedStore -> nextLevel transformation.
     auto found = StoreTransformationRegistry::instance().findTransformation(CompressedStore::typeName(), this->nextLevel->typeName());
     INVARIANT(found.has_value(), "No transformation registered for '{}' -> '{}'", this->typeName(), this->nextLevel->typeName());
     transformation = std::move(*found);
@@ -103,7 +100,7 @@ void CompressedStore::writeRecord(const uint8_t* recordData, uint32_t recordSize
     std::unique_lock lock(mutex);
     PRECONDITION(opened, "CompressedStore must be opened before writing");
 
-    /// Append the record and widen the active segment's timestamp range.
+    // Append the record and widen the active segment's range.
     activeBuffer.insert(activeBuffer.end(), recordData, recordData + recordSize);
     if (ts < activeMinTs)
     {
@@ -115,14 +112,13 @@ void CompressedStore::writeRecord(const uint8_t* recordData, uint32_t recordSize
     }
     ++activeRowCount;
 
-    /// Seal into a compressed segment once the block is big enough.
+    // Seal into a compressed segment once the block is big enough.
     if (activeBuffer.size() >= config.segmentSize)
     {
         sealActiveSegment();
     }
 
-    /// Push downstream if the flush policy trips (mirrors MemoryStore lines 197-201),
-    /// all segments byte size bigger than size threshold in flush policy
+    // Push downstream if the flush policy trips.
     const bool doFlush = flushPolicy && flushPolicy->shouldFlush(currentSizeLocked());
     if (doFlush)
     {
@@ -140,7 +136,7 @@ void CompressedStore::appendSegment(
         return;
     }
 
-    /// Same three steps as writeRecord, with a segment where it has a row.
+    // Same steps as writeRecord, with a segment where it has a row.
     activeBuffer.insert(activeBuffer.end(), data, data + len);
     if (minTs.getRawValue() != Timestamp::INVALID_VALUE && minTs < activeMinTs)
     {
@@ -152,9 +148,7 @@ void CompressedStore::appendSegment(
     }
     activeRowCount += rowCount;
 
-    /// Seal on this store's own threshold, not on the boundaries of what came in. A
-    /// segment from above is never split: it is either wholly in this block or wholly
-    /// in the next, so the block's range stays the exact union of the segments in it.
+    // Seal on this store's own threshold; a segment from above is never split across blocks.
     if (activeBuffer.size() >= config.segmentSize)
     {
         sealActiveSegment();
@@ -163,7 +157,7 @@ void CompressedStore::appendSegment(
 
 void CompressedStore::sealActiveSegment()
 {
-    /// Caller holds the unique lock.
+    // Caller holds the lock.
     if (activeBuffer.empty())
     {
         return;
@@ -179,7 +173,7 @@ void CompressedStore::sealActiveSegment()
     header.compressedBytes = payload.size();
     header.codecId = codec.getTypeId();
 
-    /// Write [header][compressed payload] to disk; keep only the header in memory.
+    // Write [header][payload] to disk; keep only the header in memory.
     const uint64_t offset = writer.size();
     const auto headerBytes = serializeSegmentHeader(header);
     writer.append(headerBytes.data(), headerBytes.size());
@@ -204,14 +198,13 @@ void CompressedStore::sealActiveSegment()
 
 void CompressedStore::flush(Store& self)
 {
-    /// 1. Finalize our own pending data: seal it into a compressed segment.
-    ///    (Direct analog of MemoryStore::flush sealing its active buffer.)
+    // Seal our own pending data first.
     {
         const std::unique_lock lock(mutex);
         sealActiveSegment();
     }
 
-    /// 2. Push downstream and flush the next level (mirrors MemoryStore lines 126-130).
+    // Then push downstream and flush the next level.
     if (nextLevel && transformation)
     {
         transformation->execute(self, *nextLevel);
@@ -231,7 +224,7 @@ void CompressedStore::close(Store& self)
         }
         opened = false;
     }
-    /// If chained, hand the freshly sealed data downstream before closing.
+    // If chained, hand the freshly sealed data downstream before closing.
     if (nextLevel && transformation)
     {
         transformation->execute(self, *nextLevel);
@@ -242,9 +235,7 @@ void CompressedStore::close(Store& self)
     }
 }
 
-/// Compute the byte offset of a field's VALUE within a packed row (same layout MemoryStore
-/// uses). Nullable fields store a 1-byte null indicator immediately before their value;
-/// non-nullable fields have no such byte, so the skip must be conditional on `nullable`.
+// Byte offset of a field's value within a packed row (past the null indicator when present).
 static std::optional<uint32_t> findFieldValueOffset(const Schema& schema, const std::string& fieldName)
 {
     uint32_t offset = 0;
@@ -265,7 +256,7 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
 {
     PRECONDITION(depth + 1 < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
 
-    /// Read the lower tier first (older data), like MemoryStore::read.
+    // Read the lower tier first (older data).
     if (nextLevel && !cursor.frames.at(depth + 1).exhausted)
     {
         if (const uint64_t nextLevelRead = nextLevel->read(buffer, readSchema, range, cursor, depth + 1); nextLevelRead != 0)
@@ -288,8 +279,7 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
 
     auto destSpan = buffer.getAvailableMemoryArea<uint8_t>();
     const uint64_t maxDestTuples = destSpan.size() / rowWidth;
-    /// A destination that cannot hold one row would return zero forever, and a zero is read as
-    /// end of stream -- so the whole replay would come back empty with no error at all.
+    // A zero-capacity destination would return 0 forever, read as end of stream.
     PRECONDITION(maxDestTuples > 0, "destination buffer of {} bytes cannot hold a {}-byte row", destSpan.size(), rowWidth);
 
     uint64_t destTuples = 0;
@@ -307,7 +297,7 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
         const Timestamp segMin(seg.header.minTs);
         const Timestamp segMax(seg.header.maxTs);
 
-        /// Prune whole segments outside the range WITHOUT decompressing them.
+        // Prune whole segments outside the range without decompressing them.
         if (!range.isUnbounded() && !range.overlaps(segMin, segMax))
         {
             continue;
@@ -319,13 +309,8 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
             continue;
         }
 
-        /// Segment survived pruning -- decompress it, unless this cursor is resuming inside the
-        /// segment it already holds.
-        ///
-        /// A segment is compressed as a whole, so a destination smaller than one means several
-        /// calls land in the same segment. Decompressing per call made that cost the whole segment
-        /// every time: 257 decompressions of a 1 MB segment to fill 4 KB buffers. The decoded bytes
-        /// live on the cursor rather than here because `read` holds only a shared lock.
+        // Decompress unless the cursor is resuming inside the segment it already holds; the decoded
+        // bytes live on the cursor because read holds only a shared lock.
         if (!frame.decodedValid || frame.decodedUnit != unit)
         {
             std::vector<uint8_t> compressed(seg.header.compressedBytes);
@@ -340,7 +325,7 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
         }
         const std::vector<uint8_t>& raw = frame.decoded;
 
-        /// Whole segment in range -> copy the rows not yet taken.
+        // Whole segment in range: copy the rows not yet taken.
         if (range.isUnbounded() || (segMin >= range.start && segMax < range.end))
         {
             const uint64_t tuplesToCopy = std::min(numTuples - rowOffset, maxDestTuples - destTuples);
@@ -349,12 +334,12 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
             rowOffset += tuplesToCopy;
             if (rowOffset < numTuples)
             {
-                break; /// destination filled part-way through this segment; resume here
+                break; // destination filled mid-segment; resume here
             }
             continue;
         }
 
-        /// Partial overlap -> per-row timestamp filtering.
+        // Partial overlap: per-row timestamp filtering.
         const auto tsOffset = findFieldValueOffset(readSchema, range.fieldName);
         PRECONDITION(tsOffset.has_value(), "TimeRange field '{}' not found in schema", range.fieldName);
 
@@ -370,7 +355,7 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
                 ++destTuples;
             }
         }
-        /// Rows LOOKED AT, not rows kept.
+        // Rows LOOKED AT, not rows kept.
         rowOffset = row;
         if (row < numTuples)
         {
@@ -459,8 +444,7 @@ CompressedStore::DrainedData CompressedStore::drain()
         out.bytes.insert(out.bytes.end(), raw.begin(), raw.end());
     }
 
-    /// The active buffer is already raw row-major bytes — append as-is, no
-    /// compress-then-immediately-decompress round trip.
+    // The active buffer is already raw row-major bytes, appended as-is.
     if (!activeBuffer.empty())
     {
         out.bytes.insert(out.bytes.end(), activeBuffer.begin(), activeBuffer.end());
@@ -476,8 +460,7 @@ CompressedStore::DrainedData CompressedStore::drain()
         }
     }
 
-    /// Let go of the data: cut the file back to the header, reset all in-memory state. Every index
-    /// into `segments` stops meaning anything, so a cursor holding one has to be told.
+    // Let go of the data; every index into segments stops meaning anything, so bump the generation.
     ++readGeneration;
     segments.clear();
     activeBuffer.clear();
