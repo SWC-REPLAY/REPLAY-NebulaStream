@@ -22,7 +22,7 @@
 
 namespace NES
 {
-/// POSIX-based binary file writer for the Replay store format.
+// POSIX-based binary file writer for the Replay store format.
 class BinaryStoreWriter
 {
 public:
@@ -32,8 +32,8 @@ public:
         std::string filePath;
         std::string schemaText;
 
-        /// Segment table geometry, written into the header by ensureHeader(). Both zero for a
-        /// store that does not divide its file into segments, which leaves an empty table.
+        // Segment table geometry, written into the header by ensureHeader(). Both zero for a
+        // store that does not divide its file into segments, which leaves an empty table.
         uint64_t segmentSize{0};
         uint32_t maxSegments{0};
     };
@@ -46,35 +46,31 @@ public:
     BinaryStoreWriter(BinaryStoreWriter&&) = delete;
     BinaryStoreWriter& operator=(BinaryStoreWriter&&) = delete;
 
-    /// Open the file for writing. Initializes the tail offset from current file size.
+    // Open the file for writing. Initializes the tail offset from current file size.
     void open();
 
-    /// Fsync and close the file descriptor.
+    // Fsync and close the file descriptor.
     void close();
 
-    /// Remove the backing file from disk.
+    // Remove the backing file from disk.
     void removeFile();
 
-    /// Thread-safe: write the file header exactly once (if file is empty and writeHeader is enabled).
+    // Thread-safe: write the file header exactly once (if file is empty and writeHeader is enabled).
     void ensureHeader();
 
-    /// Append a contiguous buffer using atomic offset reservation and pwrite.
+    //Append a contiguous buffer using atomic offset reservation and pwrite.
     void append(const uint8_t* data, size_t len);
 
-    /// Update the min/max timestamps in the file header using pwrite to fixed offsets.
+    // Update the min/max timestamps in the file header using pwrite to fixed offsets.
     void updateTimestamps(uint64_t minTs, uint64_t maxTs) const;
 
-    /// Write `len` bytes at `offset` without moving the append frontier.
-    ///
-    /// The general form of updateTimestamps above: it exists so a segment descriptor can be
-    /// filled into its preallocated slot when the segment seals, while appends continue past
-    /// the end of the file.
+    // Write `len` bytes at `offset` without moving the append frontier.
     void writeAt(const void* src, size_t len, uint64_t offset) const;
 
-    /// Read up to `len` bytes from file offset `offset` into `dest` using pread (thread-safe).
+    //Read up to `len` bytes from file offset `offset` into `dest` using pread (thread-safe).
     ssize_t readAt(void* dest, size_t len, uint64_t offset) const;
 
-    /// Shrink the file to `offset` bytes and move the write frontier back to it.
+    // Shrink the file to `offset` bytes and move the write frontier back to it.
     void truncateTo(uint64_t offset);
 
     [[nodiscard]] const std::string& getStoreName() const { return config.storeName; }

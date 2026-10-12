@@ -43,18 +43,16 @@ struct TimedBuffer
     Timestamp maxTs{Timestamp(Timestamp::INITIAL_VALUE)};
 };
 
-/// In-memory store that holds TimedBuffers. Satisfies StoreConcept.
-/// Optionally chains to a next-level store with a flush policy and transformation.
 class MemoryStore
 {
 public:
     struct Config
     {
-        size_t maxBufferSize = 64UZ * 1024UZ * 1024UZ; /// 64 MB default /// NOLINT(readability-magic-numbers)
-        size_t maxBufferCount = 128UZ; /// Maximum sealed buffers before wraparound evicts oldest. /// NOLINT(readability-magic-numbers)
+        size_t maxBufferSize = 64UZ * 1024UZ * 1024UZ; /// 64 MB default
+        size_t maxBufferCount = 128UZ; /// Maximum sealed buffers before wraparound evicts oldest.
     };
 
-    /// Standalone constructor (no chaining).
+    /// Standalone constructor
     MemoryStore(const Schema& schema, std::shared_ptr<AbstractBufferProvider> bufferManager);
     MemoryStore(const Schema& schema, Config config, std::shared_ptr<AbstractBufferProvider> bufferManager);
 
@@ -103,7 +101,7 @@ private:
     std::optional<TimedBuffer> activeBuffer;
     uint64_t activeWriteOffset{0}; /// byte offset into the active buffer's memory
 
-    /// Chaining support (all optional — empty for standalone stores).
+    /// Chaining support
     std::optional<Store> nextLevel;
     std::optional<StoreTransformation> transformation;
     std::optional<FlushPolicy> flushPolicy;
