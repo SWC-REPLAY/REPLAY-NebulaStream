@@ -41,7 +41,7 @@
 #include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Util/Logger/impl/NesLogger.hpp>
-#include <LossyStore.hpp>
+#include <lossy/LossyStore.hpp>
 #include <Store.hpp>
 #include <StoreReadCursor.hpp>
 #include <StoreRegistry.hpp>

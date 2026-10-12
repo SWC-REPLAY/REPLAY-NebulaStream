@@ -21,13 +21,13 @@
 namespace NES
 {
 
-// Drains a FileStore and writes its rows into a downstream CompressedStore.
+// Drains a FileStore and writes its rows into a downstream LosslessStore.
 class FileToCompressedTransformation
 {
 public:
     static void execute(Store& source, Store& dest);
 
-    [[nodiscard]] static std::string_view name() noexcept { return "FileStore_to_CompressedStore"; }
+    [[nodiscard]] static std::string_view name() noexcept { return "FileStore_to_LosslessStore"; }
 };
 
 }

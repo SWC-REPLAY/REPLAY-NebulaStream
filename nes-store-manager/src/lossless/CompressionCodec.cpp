@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-#include <CompressionCodec.hpp>
+#include <lossless/CompressionCodec.hpp>
 
 #include <memory>
 #include <stdexcept>

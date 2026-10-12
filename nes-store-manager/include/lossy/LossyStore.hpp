@@ -29,7 +29,7 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <BinaryStoreWriter.hpp>
-#include <CompressionCodec.hpp>
+#include <lossless/CompressionCodec.hpp>
 #include <Store.hpp>
 #include <TimeRange.hpp>
 #include <lossy/ColumnCodec.hpp>

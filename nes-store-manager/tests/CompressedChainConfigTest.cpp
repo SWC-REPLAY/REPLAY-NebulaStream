@@ -14,11 +14,11 @@
 
 /// The lossless tail, reached the way a query reaches it: by naming a store order.
 ///
-/// CompressedStore is an alternative tail to LossyStore -- same position in the chain, byte-exact
+/// LosslessStore is an alternative tail to LossyStore -- same position in the chain, byte-exact
 /// instead of error-bounded. It has to keep working now that FileStore divides its file into
 /// segments and hands them down one at a time rather than as a single blob.
 ///
-/// Unlike the lossy tier, CompressedStore does not adopt a segment per group: it seals everything
+/// Unlike the lossy tier, LosslessStore does not adopt a segment per group: it seals everything
 /// it has been handed into one compressed segment per flush and unions the ranges as they arrive.
 /// That is a deliberate difference, not an oversight -- it does not decode per group, so a finer
 /// division would buy it nothing -- and these tests pin the behaviour so a later change to
@@ -38,7 +38,7 @@
 #include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Util/Logger/impl/NesLogger.hpp>
-#include <CompressedStore.hpp>
+#include <lossless/LosslessStore.hpp>
 #include <Store.hpp>
 #include <StoreRegistry.hpp>
 #include <TimeRange.hpp>
@@ -126,7 +126,7 @@ TEST_F(CompressedChainConfigTest, MemoryToFileToCompressedRoundTrips)
     const auto rows = makeRows(schema, 512, 1000);
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    auto store = chainFor("cc_full", "MemoryStore->FileStore->CompressedStore", schema);
+    auto store = chainFor("cc_full", "MemoryStore->FileStore->LosslessStore", schema);
     store.open();
 
     for (uint64_t i = 0; i < 512; ++i)
@@ -152,7 +152,7 @@ TEST_F(CompressedChainConfigTest, FileToCompressedRoundTrips)
     const auto rows = makeRows(schema, 256, 4000);
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    auto store = chainFor("cc_two_tier", "FileStore->CompressedStore", schema);
+    auto store = chainFor("cc_two_tier", "FileStore->LosslessStore", schema);
     store.open();
 
     for (uint64_t i = 0; i < 256; ++i)
@@ -170,7 +170,7 @@ TEST_F(CompressedChainConfigTest, FileToCompressedRoundTrips)
 }
 
 /// A bounded read through the compressed tail returns exactly its window. The ranges reaching
-/// CompressedStore now arrive one segment at a time instead of as a single span, so this is the
+/// LosslessStore now arrive one segment at a time instead of as a single span, so this is the
 /// assertion that would fail if the transformation dropped or mixed them up.
 TEST_F(CompressedChainConfigTest, TimeRangeThroughCompressedTailIsExact)
 {
@@ -178,7 +178,7 @@ TEST_F(CompressedChainConfigTest, TimeRangeThroughCompressedTailIsExact)
     const auto rows = makeRows(schema, 512, 1000);
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    auto store = chainFor("cc_range", "MemoryStore->FileStore->CompressedStore", schema);
+    auto store = chainFor("cc_range", "MemoryStore->FileStore->LosslessStore", schema);
     store.open();
 
     for (uint64_t i = 0; i < 512; ++i)
@@ -211,7 +211,7 @@ TEST_F(CompressedChainConfigTest, BothTailsAreConfigurable)
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
     for (const auto& [name, order] : std::vector<std::pair<std::string, std::string>>{
-             {"tail_compressed", "MemoryStore->FileStore->CompressedStore"},
+             {"tail_compressed", "MemoryStore->FileStore->LosslessStore"},
              {"tail_lossy", "MemoryStore->FileStore->LossyStore"}})
     {
         auto store = chainFor(name, order, schema);

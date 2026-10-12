@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-#include <CompressedStore.hpp>
+#include <lossless/LosslessStore.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -37,7 +37,7 @@ namespace NES
 namespace
 {
 // Distinct filename prefix from FileStore's so a chained pair doesn't collide on a path.
-std::string generateFilePath(const CompressedStore::Config& cfg)
+std::string generateFilePath(const LosslessStore::Config& cfg)
 {
     const auto now = std::chrono::system_clock::now();
     const auto timeT = std::chrono::system_clock::to_time_t(now);
@@ -48,7 +48,7 @@ std::string generateFilePath(const CompressedStore::Config& cfg)
 }
 }
 
-CompressedStore::CompressedStore(Config cfg, const Schema& schemaIn)
+LosslessStore::LosslessStore(Config cfg, const Schema& schemaIn)
     : config(std::move(cfg))
     , schema(schemaIn)
     , codec(config.codec, config.compressionLevel)
@@ -58,7 +58,7 @@ CompressedStore::CompressedStore(Config cfg, const Schema& schemaIn)
     activeBuffer.reserve(config.segmentSize);
 }
 
-CompressedStore::CompressedStore(Config cfg, const Schema& schemaIn, Store next, FlushPolicy policy)
+LosslessStore::LosslessStore(Config cfg, const Schema& schemaIn, Store next, FlushPolicy policy)
     : config(std::move(cfg))
     , schema(schemaIn)
     , codec(config.codec, config.compressionLevel)
@@ -69,15 +69,15 @@ CompressedStore::CompressedStore(Config cfg, const Schema& schemaIn, Store next,
 {
     activeBuffer.reserve(config.segmentSize);
 
-    // Look up the CompressedStore -> nextLevel transformation.
-    auto found = StoreTransformationRegistry::instance().findTransformation(CompressedStore::typeName(), this->nextLevel->typeName());
+    // Look up the LosslessStore -> nextLevel transformation.
+    auto found = StoreTransformationRegistry::instance().findTransformation(LosslessStore::typeName(), this->nextLevel->typeName());
     INVARIANT(found.has_value(), "No transformation registered for '{}' -> '{}'", this->typeName(), this->nextLevel->typeName());
     transformation = std::move(*found);
 }
 
-CompressedStore::~CompressedStore() = default;
+LosslessStore::~LosslessStore() = default;
 
-void CompressedStore::open()
+void LosslessStore::open()
 {
     {
         const std::unique_lock lock(mutex);
@@ -95,10 +95,10 @@ void CompressedStore::open()
     }
 }
 
-void CompressedStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self)
+void LosslessStore::writeRecord(const uint8_t* recordData, uint32_t recordSize, Timestamp ts, Store& self)
 {
     std::unique_lock lock(mutex);
-    PRECONDITION(opened, "CompressedStore must be opened before writing");
+    PRECONDITION(opened, "LosslessStore must be opened before writing");
 
     // Append the record and widen the active segment's range.
     activeBuffer.insert(activeBuffer.end(), recordData, recordData + recordSize);
@@ -127,7 +127,7 @@ void CompressedStore::writeRecord(const uint8_t* recordData, uint32_t recordSize
     }
 }
 
-void CompressedStore::appendSegment(
+void LosslessStore::appendSegment(
     const uint8_t* data, const size_t len, const uint64_t rowCount, const Timestamp minTs, const Timestamp maxTs)
 {
     const std::unique_lock lock(mutex);
@@ -155,7 +155,7 @@ void CompressedStore::appendSegment(
     }
 }
 
-void CompressedStore::sealActiveSegment()
+void LosslessStore::sealActiveSegment()
 {
     // Caller holds the lock.
     if (activeBuffer.empty())
@@ -196,7 +196,7 @@ void CompressedStore::sealActiveSegment()
     activeRowCount = 0;
 }
 
-void CompressedStore::flush(Store& self)
+void LosslessStore::flush(Store& self)
 {
     // Seal our own pending data first.
     {
@@ -212,7 +212,7 @@ void CompressedStore::flush(Store& self)
     }
 }
 
-void CompressedStore::close(Store& self)
+void LosslessStore::close(Store& self)
 {
     {
         const std::unique_lock lock(mutex);
@@ -252,7 +252,7 @@ static std::optional<uint32_t> findFieldValueOffset(const Schema& schema, const 
 }
 
 uint64_t
-CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
+LosslessStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeRange& range, StoreReadCursor& cursor, size_t depth)
 {
     PRECONDITION(depth + 1 < StoreReadCursor::MAX_TIERS, "store chain is deeper than a cursor can describe ({} tiers)", depth + 1);
 
@@ -377,7 +377,7 @@ CompressedStore::read(TupleBuffer& buffer, const Schema& readSchema, const TimeR
     return destTuples;
 }
 
-bool CompressedStore::hasMore() const
+bool LosslessStore::hasMore() const
 {
     {
         const std::shared_lock lock(mutex);
@@ -393,13 +393,13 @@ bool CompressedStore::hasMore() const
     return false;
 }
 
-Schema CompressedStore::getSchema() const
+Schema LosslessStore::getSchema() const
 {
     const std::shared_lock lock(mutex);
     return schema;
 }
 
-uint64_t CompressedStore::currentSizeLocked() const
+uint64_t LosslessStore::currentSizeLocked() const
 {
     uint64_t total = activeBuffer.size();
     for (const auto& seg : segments)
@@ -409,13 +409,13 @@ uint64_t CompressedStore::currentSizeLocked() const
     return total;
 }
 
-uint64_t CompressedStore::size() const
+uint64_t LosslessStore::size() const
 {
     const std::shared_lock lock(mutex);
     return currentSizeLocked();
 }
 
-void CompressedStore::removeFile()
+void LosslessStore::removeFile()
 {
     const std::unique_lock lock(mutex);
     ++readGeneration;
@@ -425,7 +425,7 @@ void CompressedStore::removeFile()
     activeRowCount = 0;
 }
 
-CompressedStore::DrainedData CompressedStore::drain()
+LosslessStore::DrainedData LosslessStore::drain()
 {
     const std::unique_lock lock(mutex);
 
@@ -474,19 +474,19 @@ CompressedStore::DrainedData CompressedStore::drain()
     return out;
 }
 
-uint64_t CompressedStore::debugActiveRowCount() const
+uint64_t LosslessStore::debugActiveRowCount() const
 {
     const std::shared_lock lock(mutex);
     return activeRowCount;
 }
 
-uint64_t CompressedStore::debugSegmentCount() const
+uint64_t LosslessStore::debugSegmentCount() const
 {
     const std::shared_lock lock(mutex);
     return static_cast<uint64_t>(segments.size());
 }
 
-std::vector<std::pair<uint64_t, uint64_t>> CompressedStore::debugSegmentRanges() const
+std::vector<std::pair<uint64_t, uint64_t>> LosslessStore::debugSegmentRanges() const
 {
     const std::shared_lock lock(mutex);
     std::vector<std::pair<uint64_t, uint64_t>> ranges;

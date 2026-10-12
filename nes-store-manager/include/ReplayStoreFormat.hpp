@@ -51,7 +51,7 @@ constexpr size_t OFFSET_MAX_TS = OFFSET_MIN_TS + 8;
 /// the table at the front of the file where one read reaches all of it. Appending it at the end
 /// instead would mean a reader has to seek to the end first, and a crash would lose it entirely.
 ///
-/// Stores that do not segment (LossyStore, CompressedStore) write the extension with
+/// Stores that do not segment (LossyStore, LosslessStore) write the extension with
 /// `maxSegments == 0`, so the layout stays uniform and parsing needs no special case.
 
 /// segmentSize(8) + maxSegments(4) + sealedCount(4)

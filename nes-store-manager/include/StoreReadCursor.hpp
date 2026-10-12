@@ -38,7 +38,7 @@ namespace NES
 struct StoreReadCursor
 {
     /// One frame per tier. A chain is at most three tiers today (MemoryStore -> FileStore ->
-    /// LossyStore | CompressedStore); the fourth is slack so adding one does not silently overflow.
+    /// LossyStore | LosslessStore); the fourth is slack so adding one does not silently overflow.
     static constexpr size_t MAX_TIERS = 4;
 
     struct Frame
@@ -72,7 +72,7 @@ struct StoreReadCursor
         ///
         /// Only the compressing tiers fill it. A destination smaller than a unit means a reader
         /// re-enters the unit it stopped in, and for MemoryStore and FileStore that costs a memcpy
-        /// from an offset -- but CompressedStore decompresses the whole segment again, and
+        /// from an offset -- but LosslessStore decompresses the whole segment again, and
         /// LossyStore decodes every column and transposes them again. Holding the decoded bytes
         /// here makes that once per UNIT rather than once per DESTINATION BUFFER: at a 1 MB
         /// segment and a 4 KB destination it is the difference between 1 and 257 decodes.

@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-/// Standalone tests for CompressedStore (no transformations, no chaining).
+/// Standalone tests for LosslessStore (no transformations, no chaining).
 /// Uses the BaseUnitTest fixture so the logger/runtime is initialized.
 
 #include <cstdint>
@@ -31,7 +31,7 @@
 #include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Util/Logger/impl/NesLogger.hpp>
-#include <CompressedStore.hpp>
+#include <lossless/LosslessStore.hpp>
 #include <Store.hpp>
 #include <StoreReadCursor.hpp>
 #include <TimeRange.hpp>
@@ -40,10 +40,10 @@ namespace NES
 {
 
 /// Test fixture — inheriting BaseUnitTest sets up logging and the test environment.
-class CompressedStoreTest : public Testing::BaseUnitTest
+class LosslessStoreTest : public Testing::BaseUnitTest
 {
 public:
-    static void SetUpTestCase() { Logger::setupLogging("CompressedStoreTest.log", LogLevel::LOG_DEBUG); }
+    static void SetUpTestCase() { Logger::setupLogging("LosslessStoreTest.log", LogLevel::LOG_DEBUG); }
 };
 
 namespace
@@ -109,26 +109,26 @@ std::vector<uint8_t> makeRowWithTs(const Schema& schema, uint64_t ts)
     return row;
 }
 
-const CompressedStore& concrete(const Store& store)
+const LosslessStore& concrete(const Store& store)
 {
-    return store.getAs<CompressedStore>().get();
+    return store.getAs<LosslessStore>().get();
 }
 
-CompressedStore::Config cfgFor(const std::string& name)
+LosslessStore::Config cfgFor(const std::string& name)
 {
-    CompressedStore::Config cfg;
+    LosslessStore::Config cfg;
     cfg.storeName = name;
     cfg.storeDir = "/tmp";
     return cfg;
 }
 }
 
-TEST_F(CompressedStoreTest, FlushSealsOneSegment)
+TEST_F(LosslessStoreTest, FlushSealsOneSegment)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("seal_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("seal_test"), schema);
     store.open();
 
     const auto row = makeRow(rowWidth, 0xAB);
@@ -145,12 +145,12 @@ TEST_F(CompressedStoreTest, FlushSealsOneSegment)
     EXPECT_EQ(concrete(store).debugActiveRowCount(), 0U);
 }
 
-TEST_F(CompressedStoreTest, CompressionReducesSize)
+TEST_F(LosslessStoreTest, CompressionReducesSize)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("ratio_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("ratio_test"), schema);
     store.open();
 
     const auto row = makeRow(rowWidth, 0x00);
@@ -165,14 +165,14 @@ TEST_F(CompressedStoreTest, CompressionReducesSize)
     EXPECT_LT(store.size(), numRows * rowWidth);
 }
 
-TEST_F(CompressedStoreTest, AutoSealsAtSegmentSize)
+TEST_F(LosslessStoreTest, AutoSealsAtSegmentSize)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
     auto cfg = cfgFor("autoseal_test");
     cfg.segmentSize = 2 * rowWidth;
-    Store store = makeStore<CompressedStore>(cfg, schema);
+    Store store = makeStore<LosslessStore>(cfg, schema);
     store.open();
 
     const auto row = makeRow(rowWidth, 0x01);
@@ -184,12 +184,12 @@ TEST_F(CompressedStoreTest, AutoSealsAtSegmentSize)
     EXPECT_GE(concrete(store).debugSegmentCount(), 2U);
 }
 
-TEST_F(CompressedStoreTest, ReadUnboundedRoundTrip)
+TEST_F(LosslessStoreTest, ReadUnboundedRoundTrip)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("roundtrip_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("roundtrip_test"), schema);
     store.open();
 
     const uint64_t numRows = 5;
@@ -222,14 +222,14 @@ TEST_F(CompressedStoreTest, ReadUnboundedRoundTrip)
 ///
 /// Without the reuse this still returns every row: the count is the only thing that catches it,
 /// which is why debugDecodeCount exists.
-TEST_F(CompressedStoreTest, ResumingInsideASegmentDecompressesItOnce)
+TEST_F(LosslessStoreTest, ResumingInsideASegmentDecompressesItOnce)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
     auto cfg = cfgFor("decode_once_test");
     cfg.segmentSize = rowWidth * 64;
-    Store store = makeStore<CompressedStore>(cfg, schema);
+    Store store = makeStore<LosslessStore>(cfg, schema);
     store.open();
 
     constexpr uint64_t numRows = 256;
@@ -240,7 +240,7 @@ TEST_F(CompressedStoreTest, ResumingInsideASegmentDecompressesItOnce)
     }
     store.flush();
 
-    const auto& impl = store.getAs<CompressedStore>().get();
+    const auto& impl = store.getAs<LosslessStore>().get();
     const uint64_t segments = impl.debugSegmentCount();
     ASSERT_GT(segments, 1U) << "the rows have to span several segments for this to mean anything";
 
@@ -266,12 +266,12 @@ TEST_F(CompressedStoreTest, ResumingInsideASegmentDecompressesItOnce)
     EXPECT_EQ(impl.debugDecodeCount(), segments) << "each segment decompressed exactly once";
 }
 
-TEST_F(CompressedStoreTest, ReadPrunesByTimeRange)
+TEST_F(LosslessStoreTest, ReadPrunesByTimeRange)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("prune_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("prune_test"), schema);
     store.open();
 
     for (uint64_t ts : {100U, 110U, 120U})
@@ -302,12 +302,12 @@ TEST_F(CompressedStoreTest, ReadPrunesByTimeRange)
     EXPECT_EQ(got, 3U);
 }
 
-TEST_F(CompressedStoreTest, ReadRowLevelFilter)
+TEST_F(LosslessStoreTest, ReadRowLevelFilter)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("rowfilter_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("rowfilter_test"), schema);
     store.open();
 
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
@@ -329,12 +329,12 @@ TEST_F(CompressedStoreTest, ReadRowLevelFilter)
     EXPECT_EQ(got, 3U);
 }
 
-TEST_F(CompressedStoreTest, ReadRowLevelFilterNullableTsField)
+TEST_F(LosslessStoreTest, ReadRowLevelFilterNullableTsField)
 {
     const Schema schema = makeSchemaNullableTs();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("rowfilter_nullable_ts_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("rowfilter_nullable_ts_test"), schema);
     store.open();
 
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})
@@ -356,12 +356,12 @@ TEST_F(CompressedStoreTest, ReadRowLevelFilterNullableTsField)
     EXPECT_EQ(got, 3U);
 }
 
-TEST_F(CompressedStoreTest, DrainResetsStore)
+TEST_F(LosslessStoreTest, DrainResetsStore)
 {
     const Schema schema = makeSchema();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("drain_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("drain_test"), schema);
     store.open();
 
     /// Seal one segment...
@@ -381,7 +381,7 @@ TEST_F(CompressedStoreTest, DrainResetsStore)
     }
     ASSERT_EQ(concrete(store).debugActiveRowCount(), 2U);
 
-    auto drained = store.getAs<CompressedStore>().getMutable().drain();
+    auto drained = store.getAs<LosslessStore>().getMutable().drain();
 
     ASSERT_EQ(drained.bytes.size(), 5U * rowWidth);
     for (uint64_t i = 0; i < 5; ++i)
@@ -403,12 +403,12 @@ TEST_F(CompressedStoreTest, DrainResetsStore)
     EXPECT_EQ(store.read(out, schema, TimeRange{}), 0U);
 }
 
-TEST_F(CompressedStoreTest, ReadRowLevelFilterMixedNullability)
+TEST_F(LosslessStoreTest, ReadRowLevelFilterMixedNullability)
 {
     const Schema schema = makeSchemaMixedNullability();
     const uint32_t rowWidth = schema.getSizeOfSchemaInBytes();
 
-    Store store = makeStore<CompressedStore>(cfgFor("rowfilter_mixed_nullability_test"), schema);
+    Store store = makeStore<LosslessStore>(cfgFor("rowfilter_mixed_nullability_test"), schema);
     store.open();
 
     for (uint64_t ts : {100U, 101U, 102U, 103U, 104U})

@@ -12,8 +12,8 @@
     limitations under the License.
 */
 
-/// Chain test: CompressedStore -> ColumnStore via CompressedToColumnTransformation.
-/// Writing rows to the CompressedStore (forcing at least one segment seal) and
+/// Chain test: LosslessStore -> ColumnStore via CompressedToColumnTransformation.
+/// Writing rows to the LosslessStore (forcing at least one segment seal) and
 /// flushing should drain the compressed segments (decompressing them) into the
 /// column tier (transposing into a row group) and reset the compressed store.
 
@@ -30,7 +30,7 @@
 #include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <ColumnStore.hpp>
-#include <CompressedStore.hpp>
+#include <lossless/LosslessStore.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
 #include <TimeRange.hpp>
@@ -72,19 +72,19 @@ TEST_F(CompressedToColumnChainTest, CompressedFlushesIntoColumn)
     colCfg.storeDir = "/tmp";
     Store column = makeStore<ColumnStore>(colCfg, schema);
 
-    /// Middle/head: a CompressedStore chained to the column tier. CompressedStore's
-    /// chained constructor looks up the "CompressedStore -> ColumnStore" transformation
+    /// Middle/head: a LosslessStore chained to the column tier. LosslessStore's
+    /// chained constructor looks up the "LosslessStore -> ColumnStore" transformation
     /// internally (unlike FileStore, which needs it passed explicitly).
-    CompressedStore::Config compCfg;
+    LosslessStore::Config compCfg;
     compCfg.storeName = "cc_compressed";
     compCfg.storeDir = "/tmp";
     compCfg.segmentSize = 2 * rowWidth; /// force at least one segment seal well before flush
     const FlushPolicy policy{.type = FlushPolicy::Type::SIZE_THRESHOLD, .sizeThreshold = 64UZ * 1024UZ * 1024UZ};
-    Store compressed = makeStore<CompressedStore>(compCfg, schema, column, policy);
+    Store compressed = makeStore<LosslessStore>(compCfg, schema, column, policy);
 
     compressed.open(); /// opens the compressed writer and (via nextLevel) the column tier
 
-    /// Write six rows straight into the CompressedStore — enough to auto-seal at least
+    /// Write six rows straight into the LosslessStore — enough to auto-seal at least
     /// one segment (segmentSize == 2 rows) before the explicit flush() below.
     const uint64_t numRows = 6;
     for (uint64_t i = 0; i < numRows; ++i)
@@ -92,17 +92,17 @@ TEST_F(CompressedToColumnChainTest, CompressedFlushesIntoColumn)
         const auto row = makeRow(rowWidth, static_cast<uint8_t>(0x60 + i));
         compressed.writeRecord(row.data(), rowWidth, Timestamp(400 + i));
     }
-    EXPECT_GE(compressed.getAs<CompressedStore>().get().debugSegmentCount(), 2U);
+    EXPECT_GE(compressed.getAs<LosslessStore>().get().debugSegmentCount(), 2U);
 
-    /// Flush: CompressedStore::flush seals any remaining active buffer, runs the
+    /// Flush: LosslessStore::flush seals any remaining active buffer, runs the
     /// transformation (drains + decompresses all segments into the column tier,
     /// resetting the compressed store), then flushes the column tier (sealing one
     /// row group).
     compressed.flush();
 
     /// The compressed tier has been drained back to empty.
-    EXPECT_EQ(compressed.getAs<CompressedStore>().get().debugSegmentCount(), 0U);
-    EXPECT_EQ(compressed.getAs<CompressedStore>().get().debugActiveRowCount(), 0U);
+    EXPECT_EQ(compressed.getAs<LosslessStore>().get().debugSegmentCount(), 0U);
+    EXPECT_EQ(compressed.getAs<LosslessStore>().get().debugActiveRowCount(), 0U);
 
     /// The data now lives, transposed, in the column tier as at least one row group.
     EXPECT_GE(column.getAs<ColumnStore>().get().debugRowGroupCount(), 1U);

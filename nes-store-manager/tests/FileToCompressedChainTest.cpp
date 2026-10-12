@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-/// Chain test: FileStore -> CompressedStore via FileToCompressedTransformation.
+/// Chain test: FileStore -> LosslessStore via FileToCompressedTransformation.
 /// Writing rows to the FileStore and flushing should drain the file into the
 /// compressed tier (compressing it into a segment) and truncate the file.
 
@@ -31,9 +31,9 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <Util/Logger/Logger.hpp>
-#include <CompressedStore.hpp>
+#include <lossless/LosslessStore.hpp>
 #include <FileStore.hpp>
-#include <FileToCompressedTransformation.hpp>
+#include <lossless/FileToCompressedTransformation.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
 #include <TimeRange.hpp>
@@ -81,10 +81,10 @@ TEST_F(FileToCompressedChainTest, FileFlushesIntoCompressed)
     auto bufferManager = BufferManager::create();
 
     /// Tail: the compressed store (kept as a handle to inspect after the flush).
-    CompressedStore::Config ccfg;
+    LosslessStore::Config ccfg;
     ccfg.storeName = "fc_compressed";
     ccfg.storeDir = "/tmp";
-    Store compressed = makeStore<CompressedStore>(ccfg, schema);
+    Store compressed = makeStore<LosslessStore>(ccfg, schema);
 
     /// Middle/head: a FileStore chained to the compressed tier. FileStore's chained
     /// constructor takes the transformation explicitly.
@@ -119,7 +119,7 @@ TEST_F(FileToCompressedChainTest, FileFlushesIntoCompressed)
     file.flush();
 
     /// The data now lives compressed in the tail as exactly one segment.
-    EXPECT_EQ(compressed.getAs<CompressedStore>().get().debugSegmentCount(), 1U);
+    EXPECT_EQ(compressed.getAs<LosslessStore>().get().debugSegmentCount(), 1U);
 
     /// Read the compressed tier directly and confirm all rows came through.
     TupleBuffer out = bufferManager->getBufferBlocking();
@@ -129,7 +129,7 @@ TEST_F(FileToCompressedChainTest, FileFlushesIntoCompressed)
 
 namespace
 {
-/// FileStore -> CompressedStore where the two tiers divide their storage at DIFFERENT
+/// FileStore -> LosslessStore where the two tiers divide their storage at DIFFERENT
 /// sizes on purpose: 16 rows per file segment, 64 rows per compressed block. Four
 /// segments from above therefore make one block below.
 struct SizedChain
@@ -142,11 +142,11 @@ SizedChain makeSizedChain(const std::string& name, const uint32_t rowWidth)
 {
     const Schema schema = makeSchema();
 
-    CompressedStore::Config ccfg;
+    LosslessStore::Config ccfg;
     ccfg.storeName = name + "_compressed";
     ccfg.storeDir = "/tmp";
     ccfg.segmentSize = rowWidth * 64; /// this tier's own unit: 64 rows
-    Store compressed = makeStore<CompressedStore>(ccfg, schema);
+    Store compressed = makeStore<LosslessStore>(ccfg, schema);
 
     FileStore::Config fcfg;
     fcfg.storeName = name + "_file";
@@ -168,7 +168,7 @@ SizedChain makeSizedChain(const std::string& name, const uint32_t rowWidth)
 
 /// The tiers do not share a segment size, and must not have to.
 ///
-/// Each compressed block seals on the CompressedStore's OWN threshold, and its range is
+/// Each compressed block seals on the LosslessStore's OWN threshold, and its range is
 /// the union of exactly the file segments that landed in it -- so a block covers a narrow
 /// window rather than the whole drain. Under the old bulk path every segment's range was
 /// unioned into one active block, which sealed as a single segment spanning everything:
@@ -192,7 +192,7 @@ TEST_F(FileToCompressedChainTest, EachBlockCarriesTheRangeOfTheSegmentsInsideIt)
 
     chain.file.flush();
 
-    const auto& tail = chain.compressed.getAs<CompressedStore>().get();
+    const auto& tail = chain.compressed.getAs<LosslessStore>().get();
     ASSERT_EQ(tail.debugSegmentCount(), 4U) << "blocks must seal on this tier's size, not on the incoming boundaries";
 
     /// The ranges are disjoint and narrow. One collapsed span would make every one of
@@ -206,7 +206,7 @@ TEST_F(FileToCompressedChainTest, EachBlockCarriesTheRangeOfTheSegmentsInsideIt)
     }
 
     chain.file.close();
-    chain.compressed.getAs<CompressedStore>().getMutable().removeFile();
+    chain.compressed.getAs<LosslessStore>().getMutable().removeFile();
     chain.file.getAs<FileStore>().getMutable().removeFile();
 }
 
@@ -242,7 +242,7 @@ TEST_F(FileToCompressedChainTest, NarrowWindowReturnsExactlyItsRows)
     }
 
     chain.file.close();
-    chain.compressed.getAs<CompressedStore>().getMutable().removeFile();
+    chain.compressed.getAs<LosslessStore>().getMutable().removeFile();
     chain.file.getAs<FileStore>().getMutable().removeFile();
 }
 

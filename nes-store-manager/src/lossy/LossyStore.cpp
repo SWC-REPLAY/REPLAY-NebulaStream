@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-#include <LossyStore.hpp>
+#include <lossy/LossyStore.hpp>
 
 #include <algorithm>
 #include <chrono>

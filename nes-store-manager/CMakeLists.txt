@@ -20,8 +20,8 @@ add_subdirectory(src)
 get_source(nes-store-manager NES_STORE_MANAGER_SOURCE_FILES)
 
 add_library(nes-store-manager ${NES_STORE_MANAGER_SOURCE_FILES}
-        include/CompressedStore.hpp
-        src/CompressedStore.cpp
+        include/lossless/LosslessStore.hpp
+        src/lossless/LosslessStore.cpp
 )
 
 target_link_libraries(nes-store-manager PUBLIC nes-common nes-data-types nes-memory)
@@ -40,12 +40,10 @@ create_registries_for_component(StoreType StoreTransformation)
 
 add_tests_if_enabled(tests)
 
-# Not a test: a standalone executable that times LossyStore through its own API, with no SQL and no
-# query engine. Built with everything else because it is one small target; run by hand.
+
 add_subdirectory(benchmarks)
 
-# Stage timers inside the store (StoreProfile.hpp), for the benchmark to read. OFF by default so a
-# shipping build has no clock reads in its write or read path; the measurement tree turns it on.
+# Stage timers inside the store (StoreProfile.hpp), for the benchmark to read. OFF by default
 option(NES_STORE_PROFILING "Compile per-stage timers into the store" OFF)
 if (NES_STORE_PROFILING)
     message(STATUS "Store stage profiling enabled")

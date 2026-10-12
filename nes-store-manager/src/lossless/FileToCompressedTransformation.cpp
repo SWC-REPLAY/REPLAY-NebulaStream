@@ -12,41 +12,41 @@
     limitations under the License.
 */
 
-#include <FileToLossyTransformation.hpp>
+#include <lossless/FileToCompressedTransformation.hpp>
 
 #include <Util/Logger/Logger.hpp>
+#include <lossless/LosslessStore.hpp>
 #include <FileStore.hpp>
-#include <LossyStore.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
 
 namespace NES
 {
 
-void FileToLossyTransformation::execute(Store& source, Store& dest)
+void FileToCompressedTransformation::execute(Store& source, Store& dest)
 {
+    // Drain the FileStore (empties the source, moving its data down a tier).
     auto typedSource = source.getAs<FileStore>();
     auto& fileStore = typedSource.getMutable();
     auto segments = fileStore.drainSegments();
 
     if (segments.empty())
     {
-        return;
+        return; // nothing to move
     }
 
-    auto typedDest = dest.getAs<LossyStore>();
-    auto& lossyStore = typedDest.getMutable();
-
-    // One segment becomes one group, carrying the range it arrived with.
+    // Hand each segment down with its range; the LosslessStore accumulates them into its own blocks.
+    auto typedDest = dest.getAs<LosslessStore>();
+    auto& compressedStore = typedDest.getMutable();
     for (const auto& segment : segments)
     {
         if (segment.bytes.empty())
         {
             continue;
         }
-        NES_DEBUG(
-            "FileToLossyTransformation: moving a {}-row segment from FileStore", segment.rowCount);
-        lossyStore.appendSegment(segment.bytes.data(), segment.bytes.size(), segment.rowCount, segment.minTs, segment.maxTs);
+        NES_DEBUG("FileToCompressedTransformation: moving a {}-byte segment from FileStore", segment.bytes.size());
+        compressedStore.appendSegment(
+            segment.bytes.data(), segment.bytes.size(), segment.rowCount, segment.minTs, segment.maxTs);
     }
 }
 
@@ -56,8 +56,8 @@ namespace NES
 {
 /// NOLINTNEXTLINE(performance-unnecessary-value-param)
 StoreTransformationRegistryReturnType
-StoreTransformationGeneratedRegistrar::RegisterFileStore_to_LossyStoreStoreTransformation(StoreTransformationRegistryArguments)
+StoreTransformationGeneratedRegistrar::RegisterFileStore_to_LosslessStoreStoreTransformation(StoreTransformationRegistryArguments)
 {
-    return FileToLossyTransformation{};
+    return FileToCompressedTransformation{};
 }
 }

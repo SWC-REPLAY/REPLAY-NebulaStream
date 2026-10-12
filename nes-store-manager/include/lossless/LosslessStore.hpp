@@ -27,8 +27,8 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
 #include <BinaryStoreWriter.hpp>
-#include <CompressedSegmentFormat.hpp>
-#include <CompressionCodec.hpp>
+#include <lossless/CompressedSegmentFormat.hpp>
+#include <lossless/CompressionCodec.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
@@ -38,10 +38,10 @@ namespace NES
 {
 
 // Lossless, segment-based compressed store backed by a file (one [SegmentHeader][compressed bytes]
-// record per sealed segment; see CompressedSegmentFormat.hpp). A peer of MemoryStore/FileStore:
+// record per sealed segment; see lossless/CompressedSegmentFormat.hpp). A peer of MemoryStore/FileStore:
 // receives data from a prior tier and chains to a next one. Sealing a segment compresses the
 // whole active buffer at once.
-class CompressedStore
+class LosslessStore
 {
 public:
     struct Config
@@ -66,17 +66,17 @@ public:
     };
 
     /// Standalone (tail) store — no next level.
-    CompressedStore(Config config, const Schema& schema);
+    LosslessStore(Config config, const Schema& schema);
 
     // Chained store: flushes to nextLevel when the policy trips.
-    CompressedStore(Config config, const Schema& schema, Store nextLevel, FlushPolicy policy);
+    LosslessStore(Config config, const Schema& schema, Store nextLevel, FlushPolicy policy);
 
-    ~CompressedStore();
+    ~LosslessStore();
 
-    CompressedStore(const CompressedStore&) = delete;
-    CompressedStore& operator=(const CompressedStore&) = delete;
-    CompressedStore(CompressedStore&&) = delete;
-    CompressedStore& operator=(CompressedStore&&) = delete;
+    LosslessStore(const LosslessStore&) = delete;
+    LosslessStore& operator=(const LosslessStore&) = delete;
+    LosslessStore(LosslessStore&&) = delete;
+    LosslessStore& operator=(LosslessStore&&) = delete;
 
     void open();
     void close(Store& self);
@@ -89,7 +89,7 @@ public:
     [[nodiscard]] Schema getSchema() const;
     [[nodiscard]] uint64_t size() const;
 
-    [[nodiscard]] static std::string_view typeName() noexcept { return "CompressedStore"; }
+    [[nodiscard]] static std::string_view typeName() noexcept { return "LosslessStore"; }
 
     void removeFile();
 

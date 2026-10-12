@@ -38,9 +38,9 @@
 #include <Util/Logger/Logger.hpp>
 #include <Util/Logger/impl/NesLogger.hpp>
 #include <FileStore.hpp>
-#include <FileToLossyTransformation.hpp>
+#include <lossy/FileToLossyTransformation.hpp>
 #include <FlushPolicy.hpp>
-#include <LossyStore.hpp>
+#include <lossy/LossyStore.hpp>
 #include <MemoryStore.hpp>
 #include <MemoryToFileTransformation.hpp>
 #include <Store.hpp>

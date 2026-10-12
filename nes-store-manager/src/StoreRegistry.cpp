@@ -31,11 +31,11 @@
 #include <DataTypes/Schema.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Util/Logger/Logger.hpp>
-#include <CompressedStore.hpp>
+#include <lossless/LosslessStore.hpp>
 #include <ErrorHandling.hpp>
 #include <FileStore.hpp>
 #include <FlushPolicy.hpp>
-#include <LossyStore.hpp>
+#include <lossy/LossyStore.hpp>
 #include <MemoryStore.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
@@ -74,10 +74,10 @@ std::vector<std::string> parseStoreOrder(const std::string& storeOrder)
 
     for (const auto& name : storeNames)
     {
-        if (name != "MemoryStore" && name != "FileStore" && name != "CompressedStore" && name != "LossyStore")
+        if (name != "MemoryStore" && name != "FileStore" && name != "LosslessStore" && name != "LossyStore")
         {
             throw InvalidConfigParameter(
-                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore, CompressedStore or LossyStore, chained with '->'",
+                "Unknown store type '{}' in store order '{}'; expected MemoryStore, FileStore, LosslessStore or LossyStore, chained with '->'",
                 name,
                 storeOrder);
         }
@@ -129,20 +129,20 @@ Store StoreRegistry::getOrCreateStore(
     const auto storeDir = generateStoreDir(storeName);
 
     /// Build the store chain bottom-up (last in the order is the tail).
-    /// Supported chains: "MemoryStore->FileStore->CompressedStore", "MemoryStore->FileStore",
-    /// "FileStore->CompressedStore", "MemoryStore->FileStore->LossyStore", "FileStore->LossyStore",
-    /// "MemoryStore", "FileStore", "CompressedStore", "LossyStore"
+    /// Supported chains: "MemoryStore->FileStore->LosslessStore", "MemoryStore->FileStore",
+    /// "FileStore->LosslessStore", "MemoryStore->FileStore->LossyStore", "FileStore->LossyStore",
+    /// "MemoryStore", "FileStore", "LosslessStore", "LossyStore"
     const bool hasMemoryStore = std::ranges::find(storeNames, "MemoryStore") != storeNames.end();
     const bool hasFileStore = std::ranges::find(storeNames, "FileStore") != storeNames.end();
-    const bool hasCompressedStore = std::ranges::find(storeNames, "CompressedStore") != storeNames.end();
+    const bool hasLosslessStore = std::ranges::find(storeNames, "LosslessStore") != storeNames.end();
     const bool hasLossyStore = std::ranges::find(storeNames, "LossyStore") != storeNames.end();
 
     /// The lossy tier columnarises row-major bytes handed to it by a FileStore. There is no
-    /// CompressedStore -> LossyStore transformation, so reject the combination rather than
+    /// LosslessStore -> LossyStore transformation, so reject the combination rather than
     /// silently dropping one of the two tiers.
     PRECONDITION(
-        !(hasCompressedStore && hasLossyStore),
-        "CompressedStore and LossyStore cannot appear in the same store order '{}'",
+        !(hasLosslessStore && hasLossyStore),
+        "LosslessStore and LossyStore cannot appear in the same store order '{}'",
         storeOrder);
 
     /// A group is one segment handed down by the FileStore, carrying the range measured where
@@ -168,15 +168,15 @@ Store StoreRegistry::getOrCreateStore(
         ? fileDefaults.flushThresholdBytes
         : fileDefaults.totalSize / fileDefaults.filesAtCapacity;
 
-    if (hasMemoryStore && hasFileStore && hasCompressedStore)
+    if (hasMemoryStore && hasFileStore && hasLosslessStore)
     {
         auto memoryToFile = StoreTransformationRegistry::instance().findTransformation("MemoryStore", "FileStore");
         PRECONDITION(memoryToFile.has_value(), "No transformation registered for 'MemoryStore' -> 'FileStore'");
-        auto fileToCompressed = StoreTransformationRegistry::instance().findTransformation("FileStore", "CompressedStore");
-        PRECONDITION(fileToCompressed.has_value(), "No transformation registered for 'FileStore' -> 'CompressedStore'");
+        auto fileToCompressed = StoreTransformationRegistry::instance().findTransformation("FileStore", "LosslessStore");
+        PRECONDITION(fileToCompressed.has_value(), "No transformation registered for 'FileStore' -> 'LosslessStore'");
 
-        auto compressedStore = makeStore<CompressedStore>(
-            CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+        auto compressedStore = makeStore<LosslessStore>(
+            LosslessStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
 
         const auto bufferSize = config.memoryBufferSize.value_or(MemoryStore::Config{}.maxBufferSize);
         const auto bufferCount = config.maxBufferCount.value_or(MemoryStore::Config{}.maxBufferCount);
@@ -262,13 +262,13 @@ Store StoreRegistry::getOrCreateStore(
 
         return stores.emplace(storeName, headStore).first->second;
     }
-    if (hasFileStore && hasCompressedStore)
+    if (hasFileStore && hasLosslessStore)
     {
-        auto transformation = StoreTransformationRegistry::instance().findTransformation("FileStore", "CompressedStore");
-        PRECONDITION(transformation.has_value(), "No transformation registered for 'FileStore' -> 'CompressedStore'");
+        auto transformation = StoreTransformationRegistry::instance().findTransformation("FileStore", "LosslessStore");
+        PRECONDITION(transformation.has_value(), "No transformation registered for 'FileStore' -> 'LosslessStore'");
 
-        auto compressedStore = makeStore<CompressedStore>(
-            CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+        auto compressedStore = makeStore<LosslessStore>(
+            LosslessStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
 
         /// No MemoryStore in this chain, so bufferSize had no other use here.
         const FlushPolicy filePolicy{
@@ -317,10 +317,10 @@ Store StoreRegistry::getOrCreateStore(
             schema, MemoryStore::Config{.maxBufferSize = bufferSize, .maxBufferCount = bufferCount}, bufferProvider);
         return stores.emplace(storeName, headStore).first->second;
     }
-    if (hasCompressedStore)
+    if (hasLosslessStore)
     {
-        auto headStore = makeStore<CompressedStore>(
-            CompressedStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
+        auto headStore = makeStore<LosslessStore>(
+            LosslessStore::Config{.storeName = storeName, .storeDir = storeDir, .schemaText = schemaText}, schema);
         return stores.emplace(storeName, headStore).first->second;
     }
     if (hasLossyStore)

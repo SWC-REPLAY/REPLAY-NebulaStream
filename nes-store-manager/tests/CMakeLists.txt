@@ -13,8 +13,8 @@
 add_nes_test(store-concurrency-tests ConcurrencyTests.cpp)
 target_link_libraries(store-concurrency-tests nes-store-manager)
 
-add_nes_test(store-compressed-tests CompressedStoreTest.cpp)
-target_link_libraries(store-compressed-tests nes-store-manager nes-test-util)
+add_nes_test(store-lossless-tests LosslessStoreTest.cpp)
+target_link_libraries(store-lossless-tests nes-store-manager nes-test-util)
 
 add_nes_test(store-file-to-compressed-chain-tests FileToCompressedChainTest.cpp)
 target_link_libraries(store-file-to-compressed-chain-tests nes-store-manager nes-test-util)
