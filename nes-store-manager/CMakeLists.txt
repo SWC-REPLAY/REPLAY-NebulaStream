@@ -40,9 +40,6 @@ create_registries_for_component(StoreType StoreTransformation)
 
 add_tests_if_enabled(tests)
 
-
-add_subdirectory(benchmarks)
-
 # Stage timers inside the store (StoreProfile.hpp), for the benchmark to read. OFF by default
 option(NES_STORE_PROFILING "Compile per-stage timers into the store" OFF)
 if (NES_STORE_PROFILING)

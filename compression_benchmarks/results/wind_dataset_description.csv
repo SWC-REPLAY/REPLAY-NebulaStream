@@ -1,5 +1,0 @@
-dataset,column,sql_type,payload_bytes,null_indicator_bytes,stored_bytes_per_value,distinct_values,distinct_pct,min,max,decimal_places,quantisable_by_accuracy_bound,example
-debs_wind_turbines,producerId,INT32,4,1,5,26,0.01,0,25,,no,6
-debs_wind_turbines,groupId,INT32,4,1,5,4,0.00,0,3,,no,1
-debs_wind_turbines,producedPower,FLOAT64,8,1,9,80200,40.10,0.01,900.0,1:19865/2:180136,yes,725.07
-debs_wind_turbines,timestamp,UINT64,8,1,9,66667,33.33,1000000000000,1003999960000,,no,1000000000000

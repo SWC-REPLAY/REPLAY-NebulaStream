@@ -1,5 +1,0 @@
-dataset,column,sql_type,payload_bytes,null_indicator_bytes,stored_bytes_per_value,distinct_values,distinct_pct,min,max,decimal_places,quantisable_by_accuracy_bound,example
-debs_solar_panels,producerId,INT32,4,1,5,42700000,100.00,0,42699999,,no,20043650
-debs_solar_panels,groupId,INT32,4,1,5,4,0.00,0,3,,no,0
-debs_solar_panels,producedPower,FLOAT64,8,1,9,41802464,97.90,2.5e-05,999.999996,1:395/2:3867/3:38507/4:383836/5:3845749/6:38427646,yes,931.603841
-debs_solar_panels,timestamp,UINT64,8,1,9,42699472,100.00,1680357514,1724294922528,,no,1680357514
