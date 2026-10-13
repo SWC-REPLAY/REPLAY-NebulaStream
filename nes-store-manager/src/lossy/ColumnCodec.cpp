@@ -12,7 +12,6 @@
     limitations under the License.
 */
 
-#include <StoreProfile.hpp>
 #include <lossy/ColumnCodec.hpp>
 
 #include <algorithm>
@@ -214,18 +213,13 @@ class QuantizedCodec final : public ColumnCodec
 public:
     [[nodiscard]] EncodedColumn encode(const ColumnValues& in, const double relativeBoundPercent) const override
     {
-        // Quantize onto the log grid; the lambda scopes the stage timer to just this step.
-        const auto quantized = [&]
-        {
-            NES_PROFILE_SCOPE(quantizeNs);
-            return quantizeColumn(in, relativeBoundPercent);
-        }();
+        // Quantize onto the log grid.
+        const auto quantized = quantizeColumn(in, relativeBoundPercent);
 
         std::vector<uint8_t> out;
         writeQuantizeHeader(out, quantized);
         if (!quantized.isConstant)
         {
-            NES_PROFILE_SCOPE(bitpackNs);
             bitPack(quantized.codes, quantized.bitWidth, out);
         }
         return EncodedColumn{.bytes = std::move(out), .achievedError = quantized.achievedError};
