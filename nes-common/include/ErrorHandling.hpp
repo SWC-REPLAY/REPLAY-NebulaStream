@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -69,11 +70,16 @@ public:
     [[nodiscard]] ErrorCode code() const noexcept;
     [[nodiscard]] std::optional<const cpptrace::stacktrace_frame> where() const noexcept;
 
+    /// Wall-clock time of construction, which is the throw time for `throw Name(...)`.
+    [[nodiscard]] std::chrono::system_clock::time_point when() const noexcept { return timestamp; }
+
     friend std::ostream& operator<<(std::ostream& os, const Exception& ex);
 
 private:
     std::string message;
     ErrorCode errorCode;
+    /// Default member initializer so both constructors stamp it; copies keep the original throw time.
+    std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now();
 };
 
 /// helper function for formatting stacktraces
