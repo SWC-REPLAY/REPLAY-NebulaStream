@@ -21,8 +21,13 @@ CREATE PHYSICAL SOURCE FOR errors TYPE Error SET(2 AS "SOURCE".MAX_RECORDS);
 CREATE LOGICAL SOURCE errorTasks(error_code UINT64 NOT NULL, "CTX/TASK" VARSIZED);
 CREATE PHYSICAL SOURCE FOR errorTasks TYPE Error SET('JSON' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
+# All fields as JSON, so that the message arrives unquoted.
+CREATE LOGICAL SOURCE errorRecords(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, "CTX/TASK" VARSIZED, ts UINT64 NOT NULL);
+CREATE PHYSICAL SOURCE FOR errorRecords TYPE Error SET('JSON' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
+
 CREATE SINK allFieldsSink(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSIZED NOT NULL) TYPE File;
 CREATE SINK errorCodeSink(error_code UINT64 NOT NULL) TYPE File;
+CREATE SINK errorMessageSink(error_code UINT64 NOT NULL, message VARSIZED NOT NULL) TYPE File;
 
 # Workers run without an error log unless error_log.enabled is set, so the Error source cannot open.
 SELECT error_code FROM errors INTO errorCodeSink;
@@ -51,3 +56,10 @@ SELECT error_code FROM errorTasks WHERE "CTX/TASK" IS NOT NULL INTO errorCodeSin
 ----
 3002
 3002
+
+# The whole record: ctx (random query id) and ts (throw time) differ per run, so they are checked by predicate.
+# ts is wall-clock unix milliseconds, i.e. after 2023-11-14.
+SELECT error_code, message FROM errorRecords WHERE "CTX/TASK" IS NOT NULL AND ts > 1700000000000 INTO errorMessageSink;
+----
+3002,cannot format malformed string value; '1.0' is not a valid value of type unsigned long.
+3002,cannot format malformed string value; '{"value": 1}' is not a valid value of type unsigned long.
