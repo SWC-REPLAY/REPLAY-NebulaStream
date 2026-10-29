@@ -27,6 +27,7 @@
 #include <Util/Pointers.hpp>
 #include <CompositeStatisticListener.hpp>
 #include <ErrorHandling.hpp>
+#include <ErrorLog.hpp>
 #include <QueryCompiler.hpp>
 #include <QueryId.hpp>
 #include <QueryStatus.hpp>
@@ -46,6 +47,8 @@ inline constexpr std::string_view SingleNodeWorkerBinaryName{"nes-single-node-wo
 class SingleNodeWorker
 {
     SharedPtr<CompositeStatisticListener> listener;
+    /// Owns the error log; declared before nodeEngine, so that the log stays registered while the engine shuts down.
+    std::optional<ErrorLog::Registration> errorLogRegistration;
     SharedPtr<NodeEngine> nodeEngine;
     UniquePtr<QueryCompilation::QueryCompiler> compiler;
     SingleNodeWorkerConfiguration configuration;

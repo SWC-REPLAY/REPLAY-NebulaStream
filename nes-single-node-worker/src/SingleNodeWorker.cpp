@@ -38,12 +38,14 @@
 #include <fmt/format.h>
 #include <CompositeStatisticListener.hpp>
 #include <ErrorHandling.hpp>
+#include <ErrorLog.hpp>
 #include <GoogleEventTracePrinter.hpp>
 #include <NetworkOptions.hpp>
 #include <QueryCompiler.hpp>
 #include <QueryId.hpp>
 #include <QueryStatus.hpp>
 #include <SingleNodeWorkerConfiguration.hpp>
+#include <Thread.hpp>
 #include <WorkerStatus.hpp>
 
 extern void initNetworkServices(const std::string& connectionAddr, const NES::Host& host, const NES::NetworkOptions& options);
@@ -65,6 +67,18 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
             fmt::format("trace_{}_{:%Y-%m-%d_%H-%M-%S}_{:d}.json", host.getRawValue(), std::chrono::system_clock::now(), ::getpid()));
         googleTracePrinter->start();
         listener->addListener(googleTracePrinter);
+    }
+    /// Before the engine is built, so that its threads find the log from their first exception on.
+    if (configuration.errorLog.enabled.getValue())
+    {
+        /// Engine threads get `host` explicitly; the request and task-delayer threads inherit the constructing thread's id.
+        INVARIANT(
+            Thread::getThisWorkerNodeId() == host,
+            "Error log of worker {} would miss exceptions of threads identified as {}",
+            host,
+            Thread::getThisWorkerNodeId());
+        errorLogRegistration
+            = ErrorLog::registerForWorker(host, std::make_shared<ErrorLog>(configuration.errorLog.retentionBytes.getValue()));
     }
 
     nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener)).build(host);
