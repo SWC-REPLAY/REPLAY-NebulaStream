@@ -14,6 +14,7 @@
 
 #include <SingleNodeWorkerConfiguration.hpp>
 
+#include <cstdint>
 #include <expected>
 #include <string>
 #include <utility>
@@ -31,6 +32,7 @@
 #include <Util/Variant.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <ErrorHandling.hpp>
+#include <ErrorLogConfiguration.hpp>
 
 namespace NES
 {
@@ -83,13 +85,41 @@ const ConfigField<bool> ENABLE_GOOGLE_EVENT_TRACE{
     Identifier::parse("enable_event_trace"),
     "Enable Google Event Trace logging that generates Chrome tracing compatible JSON files for performance analysis.",
     false};
+
+const ConfigField<bool> ERROR_LOG_ENABLED{
+    Identifier::parse("enabled"), "Collect the exceptions of this worker so that queries can read them through an Error source.", false};
+
+const ConfigField<uint64_t> ERROR_LOG_RETENTION_BYTES{
+    Identifier::parse("retention_bytes"),
+    "Size in bytes of the worker's error buffer that error queries read from.",
+    [](const ConfigLiteral& literal)
+    {
+        return tryGetOr<int64_t>(literal, expectedType<uint64_t>())
+            .and_then(narrowConfigValue<int64_t, uint64_t>)
+            .and_then(
+                [](const uint64_t value) -> std::expected<uint64_t, Exception>
+                {
+                    if (value == 0)
+                    {
+                        return std::unexpected{InvalidConfigParameter("The error buffer cannot have size zero")};
+                    }
+                    return value;
+                });
+    },
+    uint64_t{1048576}};
 /// NOLINTEND(bugprone-throwing-static-initialization)
 
 }
 
 Schema<QualifiedErasedConfigField, Ordered> SingleNodeWorkerConfiguration::getConfigSchema()
 {
-    return createConfigSchema(DATA_ADDRESS, GRPC_ADDRESS_URI, LOG_LEVEL, ENABLE_GOOGLE_EVENT_TRACE, WorkerConfiguration::getConfigSchema());
+    return createConfigSchema(
+        DATA_ADDRESS,
+        GRPC_ADDRESS_URI,
+        LOG_LEVEL,
+        ENABLE_GOOGLE_EVENT_TRACE,
+        createConfigSchema(Identifier::parse("error_log"), ERROR_LOG_ENABLED, ERROR_LOG_RETENTION_BYTES),
+        WorkerConfiguration::getConfigSchema());
 }
 
 SingleNodeWorkerConfiguration SingleNodeWorkerConfiguration::fromConfig(const InstantiatedConfig& config)
@@ -99,6 +129,7 @@ SingleNodeWorkerConfiguration SingleNodeWorkerConfiguration::fromConfig(const In
         config.get(GRPC_ADDRESS_URI),
         config.get(ENABLE_GOOGLE_EVENT_TRACE),
         WorkerConfiguration::fromConfig(config),
-        config.get(LOG_LEVEL)};
+        config.get(LOG_LEVEL),
+        ErrorLogConfiguration{.enabled = config.get(ERROR_LOG_ENABLED), .retentionBytes = config.get(ERROR_LOG_RETENTION_BYTES)}};
 }
 }
