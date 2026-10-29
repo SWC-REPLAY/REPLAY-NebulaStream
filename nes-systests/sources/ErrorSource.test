@@ -1,0 +1,53 @@
+# name: sources/ErrorSource.test
+# description: Querying Exceptions through an Error Source (discussion #153)
+# groups: [Sources, ErrorSource]
+
+CREATE LOGICAL SOURCE jsonStreamWrongDataTypes(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSIZED NOT NULL);
+CREATE PHYSICAL SOURCE FOR jsonStreamWrongDataTypes TYPE File SET('JSON' AS INPUT_FORMATTER."TYPE");
+ATTACH INLINE
+{"KEY":1.0, "VALUE":1, "NAME":"john"}
+{"KEY":1, "VALUE":2, "NAME":"max"}
+
+CREATE LOGICAL SOURCE jsonStreamWrongDataTypesWithObject(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSIZED NOT NULL);
+CREATE PHYSICAL SOURCE FOR jsonStreamWrongDataTypesWithObject TYPE File SET('JSON' AS INPUT_FORMATTER."TYPE");
+ATTACH INLINE
+{"KEY":{"value": 1}, "VALUE":1, "NAME":"john"}
+{"KEY":1, "VALUE":2, "NAME":"max"}
+
+# Two logical sources read the same error log of the worker: one as CSV, one as JSON with only some of the fields.
+CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, ctx VARSIZED NOT NULL, ts UINT64 NOT NULL);
+CREATE PHYSICAL SOURCE FOR errors TYPE Error SET(2 AS "SOURCE".MAX_RECORDS);
+
+CREATE LOGICAL SOURCE errorTasks(error_code UINT64 NOT NULL, "CTX/TASK" VARSIZED);
+CREATE PHYSICAL SOURCE FOR errorTasks TYPE Error SET('JSON' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
+
+CREATE SINK allFieldsSink(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSIZED NOT NULL) TYPE File;
+CREATE SINK errorCodeSink(error_code UINT64 NOT NULL) TYPE File;
+
+# Workers run without an error log unless error_log.enabled is set, so the Error source cannot open.
+SELECT error_code FROM errors INTO errorCodeSink;
+----
+ERROR 4002
+
+# All following queries run on workers with an error log, separate from the workers of other test files.
+GLOBALCONFIGURATION error_log.enabled: true
+
+SELECT * FROM jsonStreamWrongDataTypes INTO allFieldsSink;
+----
+ERROR 3002
+
+SELECT * FROM jsonStreamWrongDataTypesWithObject INTO allFieldsSink;
+----
+ERROR 3002
+
+# EARLIEST (default) replays the errors of the queries above, independent of the order in which the queries run.
+SELECT error_code FROM errors WHERE error_code = 3002 INTO errorCodeSink;
+----
+3002
+3002
+
+# Both parse errors are raised inside a pipeline task, so the JSON context carries the task.
+SELECT error_code FROM errorTasks WHERE "CTX/TASK" IS NOT NULL INTO errorCodeSink;
+----
+3002
+3002
