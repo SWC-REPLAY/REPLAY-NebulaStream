@@ -64,10 +64,11 @@ SELECT error_code FROM errorCodes WHERE error_code = 3002 INTO errorCodeSink;
 3002
 
 # The sinks are written into the queries: the systest replaces the options of a declared sink by CSV defaults.
-SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT);
+# Error messages are free text and may contain the field delimiter, so the CSV sink quotes strings.
+SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT, TRUE AS "OUTPUT_FORMATTER".QUOTE_STRINGS);
 ----
-3002,cannot format malformed string value; '1.0' is not a valid value of type unsigned long.,true,SOURCES_D_ERRORSOURCE_C1:7,true,source-node:8080,true
-3002,cannot format malformed string value; '{"value": 1}' is not a valid value of type unsigned long.,true,SOURCES_D_ERRORSOURCE_C1:8,true,source-node:8080,true
+3002,"cannot format malformed string value; '1.0' is not a valid value of type unsigned long.",true,"SOURCES_D_ERRORSOURCE_C1:7",true,"source-node:8080",true
+3002,"cannot format malformed string value; '{""value"": 1}' is not a valid value of type unsigned long.",true,"SOURCES_D_ERRORSOURCE_C1:8",true,"source-node:8080",true
 
 SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
 ----
