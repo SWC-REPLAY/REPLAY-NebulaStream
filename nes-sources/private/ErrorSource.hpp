@@ -14,14 +14,14 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <ostream>
 #include <stop_token>
-#include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 #include <Configurations/Descriptor.hpp>
 #include <Configurations/Enums/EnumWrapper.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
@@ -41,9 +41,18 @@ enum class ErrorStartPosition : uint8_t
     LATEST,
 };
 
+/// A column of an error record; the logical source declares any of them, in any order, by these names.
+enum class ErrorField : uint8_t
+{
+    ERROR_CODE, /// UINT64
+    MESSAGE, /// VARSIZED
+    CTX, /// VARSIZED, the LogContext of the throwing thread as `key:value key:value`
+    TS, /// UINT64, unix milliseconds of the throw
+};
+
 /// Reads the error log of the worker it runs on (discussion #153); the worker needs `error_log.enabled=true`.
-/// Writes one line per error in the input format of the physical source: CSV (error_code, message, ctx, ts by position)
-/// or JSON (keys ERROR_CODE, MESSAGE, CTX, TS; CTX is an object with the LogContext keys, e.g. CTX/TASK).
+/// Writes NATIVE row-layout tuples of the logical source's schema, so the physical source needs the input format NATIVE;
+/// the textual format (CSV, JSON) is chosen by the sink.
 class ErrorSource final : public Source
 {
 public:
@@ -57,7 +66,7 @@ public:
     ErrorSource(ErrorSource&&) = delete;
     ErrorSource& operator=(ErrorSource&&) = delete;
 
-    /// Blocks until at least one error is available, then copies as many whole lines as fit without waiting for more.
+    /// Blocks until at least one error is available, then writes as many tuples as fit without waiting for more.
     FillTupleBufferResult fillTupleBuffer(TupleBuffer& tupleBuffer, const std::stop_token& stopToken) override;
 
     /// Looks up the error log of this worker and positions the reader at START_POSITION.
@@ -70,19 +79,29 @@ protected:
     [[nodiscard]] std::ostream& toString(std::ostream& str) const override;
 
 private:
-    /// toCsvLine or toJsonLine, chosen from the input format of the physical source.
-    std::string (*serializeLine)(const ErrorRecord&) = nullptr;
+    struct Column
+    {
+        ErrorField field;
+        /// Offset in the tuple, including the leading null byte of a nullable field.
+        size_t offset;
+        bool nullable;
+    };
+
+    void writeTuple(TupleBuffer& tupleBuffer, size_t tupleIndex, const ErrorRecord& record) const;
+
+    /// In the order of the logical source's schema, which is the row layout the NATIVE scan reads.
+    std::vector<Column> columns;
+    size_t tupleSize = 0;
     ErrorStartPosition startPosition;
     /// 0 = unlimited
     uint64_t maxRecords;
     std::shared_ptr<ErrorLog> log;
+    /// Provides the child buffers that hold MESSAGE and CTX.
+    std::shared_ptr<AbstractBufferProvider> bufferProvider;
     /// Sequence number of the next record to read from the log.
     uint64_t position = 0;
     uint64_t numberOfEmittedRecords = 0;
     uint64_t numberOfMissedRecords = 0;
-    uint64_t numberOfOversizedRecords = 0;
-    /// A serialized error that did not fit into the previous buffer; lines are never split across buffers.
-    std::optional<std::string> pendingLine;
 };
 
 /// NOLINTBEGIN(cert-err58-cpp,bugprone-throwing-static-initialization)

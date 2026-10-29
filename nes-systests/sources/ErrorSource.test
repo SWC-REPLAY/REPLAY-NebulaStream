@@ -14,23 +14,27 @@ ATTACH INLINE
 {"KEY":{"value": 1}, "VALUE":1, "NAME":"john"}
 {"KEY":1, "VALUE":2, "NAME":"max"}
 
-# Two logical sources read the same error log of the worker: one as CSV, one as JSON with only some of the fields.
+# The Error source writes NATIVE tuples of the declared fields; the sinks of the queries choose CSV or JSON.
 CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, ctx VARSIZED NOT NULL, ts UINT64 NOT NULL);
-CREATE PHYSICAL SOURCE FOR errors TYPE Error SET(2 AS "SOURCE".MAX_RECORDS);
+CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
-CREATE LOGICAL SOURCE errorTasks(error_code UINT64 NOT NULL, "CTX/TASK" VARSIZED);
-CREATE PHYSICAL SOURCE FOR errorTasks TYPE Error SET('JSON' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
+# A second logical source on the same error log: a subset of the fields, in another order.
+CREATE LOGICAL SOURCE errorCodes(ts UINT64 NOT NULL, error_code UINT64 NOT NULL);
+CREATE PHYSICAL SOURCE FOR errorCodes TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
-# All fields as JSON, so that the message arrives unquoted.
-CREATE LOGICAL SOURCE errorRecords(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, "CTX/TASK" VARSIZED, ts UINT64 NOT NULL);
-CREATE PHYSICAL SOURCE FOR errorRecords TYPE Error SET('JSON' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
+CREATE LOGICAL SOURCE errorsUnknownField(severity UINT64 NOT NULL);
+CREATE PHYSICAL SOURCE FOR errorsUnknownField TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
 CREATE SINK allFieldsSink(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSIZED NOT NULL) TYPE File;
 CREATE SINK errorCodeSink(error_code UINT64 NOT NULL) TYPE File;
-CREATE SINK errorMessageSink(error_code UINT64 NOT NULL, message VARSIZED NOT NULL) TYPE File;
 
 # Workers run without an error log unless error_log.enabled is set, so the Error source cannot open.
 SELECT error_code FROM errors INTO errorCodeSink;
+----
+ERROR 4002
+
+# The fields are matched by name and type; the error, raised while the query is lowered, comes before the log check.
+SELECT severity AS error_code FROM errorsUnknownField INTO errorCodeSink;
 ----
 ERROR 4002
 
@@ -46,20 +50,20 @@ SELECT * FROM jsonStreamWrongDataTypesWithObject INTO allFieldsSink;
 ERROR 3002
 
 # EARLIEST (default) replays the errors of the queries above, independent of the order in which the queries run.
-SELECT error_code FROM errors WHERE error_code = 3002 INTO errorCodeSink;
-----
-3002
-3002
-
-# Both parse errors are raised inside a pipeline task, so the JSON context carries the task.
-SELECT error_code FROM errorTasks WHERE "CTX/TASK" IS NOT NULL INTO errorCodeSink;
+SELECT error_code FROM errorCodes WHERE error_code = 3002 INTO errorCodeSink;
 ----
 3002
 3002
 
 # The whole record: ctx (random query id) and ts (throw time) differ per run, so they are checked by predicate.
-# ts is wall-clock unix milliseconds, i.e. after 2023-11-14.
-SELECT error_code, message FROM errorRecords WHERE "CTX/TASK" IS NOT NULL AND ts > 1700000000000 INTO errorMessageSink;
+# Both parse errors are raised inside a pipeline task, so ctx is set; ts is unix milliseconds, i.e. after 2023-11-14.
+# The sinks are written into the queries: the systest replaces the options of a declared sink by CSV defaults.
+SELECT error_code, message, OCTET_LENGTH(ctx) > 0 AS has_ctx, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT);
 ----
-3002,cannot format malformed string value; '1.0' is not a valid value of type unsigned long.
-3002,cannot format malformed string value; '{"value": 1}' is not a valid value of type unsigned long.
+3002,cannot format malformed string value; '1.0' is not a valid value of type unsigned long.,true,true
+3002,cannot format malformed string value; '{"value": 1}' is not a valid value of type unsigned long.,true,true
+
+SELECT error_code, message, OCTET_LENGTH(ctx) > 0 AS has_ctx, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
+----
+{"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '1.0' is not a valid value of type unsigned long.","HAS_CTX":true,"TS_IS_UNIX_MS":true}
+{"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '{\"value\": 1}' is not a valid value of type unsigned long.","HAS_CTX":true,"TS_IS_UNIX_MS":true}

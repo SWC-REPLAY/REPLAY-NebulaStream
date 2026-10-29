@@ -14,19 +14,22 @@
 
 #include <ErrorSource.hpp>
 
-#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <ostream>
 #include <ranges>
+#include <span>
 #include <stop_token>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <Configurations/Descriptor.hpp>
+#include <DataTypes/DataType.hpp>
+#include <Interface/BufferRef/TupleBufferRef.hpp>
+#include <Interface/VariableSizedAccess.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Sources/Source.hpp>
@@ -38,7 +41,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <ErrorHandling.hpp>
 #include <ErrorLog.hpp>
-#include <InputFormatterDescriptor.hpp>
 #include <Thread.hpp>
 
 namespace NES
@@ -46,68 +48,18 @@ namespace NES
 
 namespace
 {
-/// The CSV formatter splits tuples on '\n' regardless of quotes and keeps quotes in values, so this only keeps one record
-/// on one line with balanced quotes; the values arrive escaped.
-std::string escapeCsv(const std::string_view value)
+DataType::Type typeOf(const ErrorField field)
 {
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (const char character : value)
+    switch (field)
     {
-        if (character == '\n')
-        {
-            escaped += "\\n";
-        }
-        else if (character == '"')
-        {
-            escaped += "\"\"";
-        }
-        else
-        {
-            escaped += character;
-        }
+        case ErrorField::ERROR_CODE:
+        case ErrorField::TS:
+            return DataType::Type::UINT64;
+        case ErrorField::MESSAGE:
+        case ErrorField::CTX:
+            return DataType::Type::VARSIZED;
     }
-    return escaped;
-}
-
-/// JSON forbids raw control characters (below 0x20) in strings.
-constexpr unsigned char FIRST_PRINTABLE_CHARACTER = 0x20;
-
-std::string escapeJson(const std::string_view value)
-{
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (const char character : value)
-    {
-        switch (character)
-        {
-            case '"':
-                escaped += "\\\"";
-                break;
-            case '\\':
-                escaped += "\\\\";
-                break;
-            case '\n':
-                escaped += "\\n";
-                break;
-            case '\r':
-                escaped += "\\r";
-                break;
-            case '\t':
-                escaped += "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(character) < FIRST_PRINTABLE_CHARACTER)
-                {
-                    escaped += fmt::format("\\u{:04x}", static_cast<unsigned char>(character));
-                }
-                else
-                {
-                    escaped += character;
-                }
-        }
-    }
-    return escaped;
+    std::unreachable();
 }
 
 uint64_t toUnixMilliseconds(const std::chrono::system_clock::time_point timestamp)
@@ -115,55 +67,18 @@ uint64_t toUnixMilliseconds(const std::chrono::system_clock::time_point timestam
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch()).count());
 }
 
-/// ctx uses the `key:value key:value` form of the `[%&]` log pattern field, so a ctx value can be searched in the log.
-std::string toCsvLine(const ErrorRecord& record)
+/// The `key:value key:value` form of the `[%&]` log pattern field, so a ctx value can be searched in the log.
+std::string formatContext(const ErrorRecord& record)
 {
-    const auto context = fmt::format(
+    return fmt::format(
         "{}",
         fmt::join(record.context | std::views::transform([](const auto& entry) { return fmt::format("{}:{}", entry.first, entry.second); }), " "));
-    return fmt::format(
-        "{},\"{}\",\"{}\",{}\n",
-        static_cast<uint64_t>(record.code),
-        escapeCsv(record.message),
-        escapeCsv(context),
-        toUnixMilliseconds(record.timestamp));
 }
 
-/// Keys are uppercase because the JSON formatter uppercases unquoted field names.
-std::string toJsonLine(const ErrorRecord& record)
+template <typename T>
+void writeValue(const std::span<std::byte> slot, const T& value)
 {
-    const auto context = record.context
-        | std::views::transform([](const auto& entry)
-                                { return fmt::format(R"("{}":"{}")", escapeJson(toUpperCase(entry.first)), escapeJson(entry.second)); });
-    return fmt::format(
-        R"({{"ERROR_CODE":{},"MESSAGE":"{}","CTX":{{{}}},"TS":{}}})"
-        "\n",
-        static_cast<uint64_t>(record.code),
-        escapeJson(record.message),
-        fmt::join(context, ","),
-        toUnixMilliseconds(record.timestamp));
-}
-
-/// The lines assume the formatters' default delimiters. The keys mirror ConfigParametersCSVInputFormatIndexer and
-/// ConfigParametersSIMDJSON, which live in the formatter modules and are not visible here.
-void checkDelimiters(const std::string_view inputFormat, const InputFormatterDescriptor& formatter)
-{
-    if (const auto tupleDelimiter = formatter.tryGetFromConfig<char>("TUPLE_DELIMITER"); tupleDelimiter.value_or('\n') != '\n')
-    {
-        throw CannotOpenSource("Error source writes one error per line and needs the tuple delimiter '\\n'");
-    }
-    if (inputFormat != "CSV")
-    {
-        return;
-    }
-    if (const auto fieldDelimiter = formatter.tryGetFromConfig<char>("FIELD_DELIMITER"); fieldDelimiter.value_or(',') != ',')
-    {
-        throw CannotOpenSource("Error source writes CSV with the field delimiter ','");
-    }
-    if (not formatter.tryGetFromConfig<bool>("ALLOW_COMMAS_IN_STRINGS").value_or(true))
-    {
-        throw CannotOpenSource("Error source writes messages that contain commas and needs ALLOW_COMMAS_IN_STRINGS");
-    }
+    std::memcpy(slot.data(), &value, sizeof(T));
 }
 }
 
@@ -171,23 +86,30 @@ ErrorSource::ErrorSource(const SourceDescriptor& sourceDescriptor)
     : startPosition(sourceDescriptor.getFromConfig(ConfigParametersError::START_POSITION))
     , maxRecords(sourceDescriptor.getFromConfig(ConfigParametersError::MAX_RECORDS))
 {
-    const auto inputFormat = toUpperCase(sourceDescriptor.getInputFormatType());
-    if (inputFormat == "CSV")
+    if (const auto inputFormat = toUpperCase(sourceDescriptor.getInputFormatType()); inputFormat != "NATIVE")
     {
-        serializeLine = toCsvLine;
+        throw CannotOpenSource(
+            "Error source writes NATIVE tuples and needs 'NATIVE' AS INPUT_FORMATTER.\"TYPE\", got {}; choose CSV or JSON at the sink",
+            inputFormat);
     }
-    else if (inputFormat == "JSON")
+    for (const auto& field : *sourceDescriptor.getLogicalSource().getSchema())
     {
-        serializeLine = toJsonLine;
+        const auto name = field.getFullyQualifiedName().begin()->asCanonicalString();
+        const auto& dataType = field.getDataType();
+        const auto errorField = magic_enum::enum_cast<ErrorField>(name);
+        if (not errorField.has_value() or dataType.type != typeOf(*errorField))
+        {
+            throw CannotOpenSource(
+                "Error source has no field {} of type {}; its fields are ERROR_CODE UINT64, MESSAGE VARSIZED, CTX VARSIZED, TS UINT64",
+                name,
+                dataType);
+        }
+        columns.push_back({.field = *errorField, .offset = tupleSize, .nullable = dataType.nullable});
+        tupleSize += dataType.getSizeInBytesWithNull();
     }
-    else
-    {
-        throw CannotOpenSource("Error source supports the input formats CSV and JSON, got {}", inputFormat);
-    }
-    checkDelimiters(inputFormat, sourceDescriptor.getInputFormatterDescriptor());
 }
 
-void ErrorSource::open(std::shared_ptr<AbstractBufferProvider>)
+void ErrorSource::open(std::shared_ptr<AbstractBufferProvider> provider)
 {
     log = ErrorLog::forThisThread();
     if (!log)
@@ -195,65 +117,81 @@ void ErrorSource::open(std::shared_ptr<AbstractBufferProvider>)
         throw CannotOpenSource(
             "Error source: worker {} has no error log; start it with error_log.enabled=true", Thread::getThisWorkerNodeId());
     }
+    bufferProvider = std::move(provider);
     position = (startPosition == ErrorStartPosition::EARLIEST) ? log->oldestPosition() : log->latestPosition();
 }
 
 void ErrorSource::close()
 {
-    if (numberOfMissedRecords > 0 || numberOfOversizedRecords > 0)
+    if (numberOfMissedRecords > 0)
     {
-        NES_WARNING(
-            "Error source missed {} errors that were evicted before it read them and dropped {} errors larger than a buffer",
-            numberOfMissedRecords,
-            numberOfOversizedRecords);
+        NES_WARNING("Error source missed {} errors that were evicted before it read them", numberOfMissedRecords);
     }
     log.reset();
+    bufferProvider.reset();
+}
+
+void ErrorSource::writeTuple(TupleBuffer& tupleBuffer, const size_t tupleIndex, const ErrorRecord& record) const
+{
+    const auto tuple = tupleBuffer.getAvailableMemoryArea().subspan(tupleIndex * tupleSize, tupleSize);
+    for (const auto& [field, offset, nullable] : columns)
+    {
+        auto slot = tuple.subspan(offset);
+        if (nullable)
+        {
+            /// The row layout keeps a null flag before the value; error fields are never null.
+            slot[0] = std::byte{0};
+            slot = slot.subspan(1);
+        }
+        switch (field)
+        {
+            case ErrorField::ERROR_CODE:
+                writeValue(slot, static_cast<uint64_t>(record.code));
+                break;
+            case ErrorField::TS:
+                writeValue(slot, toUnixMilliseconds(record.timestamp));
+                break;
+            case ErrorField::MESSAGE:
+                writeValue(slot, TupleBufferRef::writeVarSized(tupleBuffer, *bufferProvider, std::as_bytes(std::span{record.message})));
+                break;
+            case ErrorField::CTX: {
+                const auto context = formatContext(record);
+                writeValue(slot, TupleBufferRef::writeVarSized(tupleBuffer, *bufferProvider, std::as_bytes(std::span{context})));
+                break;
+            }
+        }
+    }
 }
 
 Source::FillTupleBufferResult ErrorSource::fillTupleBuffer(TupleBuffer& tupleBuffer, const std::stop_token& stopToken)
 {
-    const auto buffer = tupleBuffer.getAvailableMemoryArea<char>();
-    size_t offset = 0;
+    const size_t capacity = tupleBuffer.getBufferSize() / tupleSize;
+    size_t numberOfTuples = 0;
     /// Checked before reading: at the limit, a read would block for an error that is never emitted.
-    while (maxRecords == 0 || numberOfEmittedRecords < maxRecords)
+    while (numberOfTuples < capacity && (maxRecords == 0 || numberOfEmittedRecords < maxRecords))
     {
-        if (!pendingLine)
+        /// Only the first error is waited for; afterwards return what is there instead of holding back errors.
+        auto [record, missed] = numberOfTuples == 0 ? log->read(position, stopToken) : log->tryRead(position);
+        numberOfMissedRecords += missed;
+        if (!record)
         {
-            /// Only the first error is waited for; afterwards return what is there instead of holding back errors.
-            auto [record, missed] = offset == 0 ? log->read(position, stopToken) : log->tryRead(position);
-            numberOfMissedRecords += missed;
-            if (!record)
+            if (numberOfTuples > 0 || stopToken.stop_requested())
             {
-                if (offset > 0 || stopToken.stop_requested())
-                {
-                    break;
-                }
-                continue;
+                break;
             }
-            pendingLine = serializeLine(*record);
-        }
-
-        if (pendingLine->size() > buffer.size())
-        {
-            ++numberOfOversizedRecords;
-            pendingLine.reset();
             continue;
         }
-        if (pendingLine->size() > buffer.size() - offset)
-        {
-            break;
-        }
-        std::ranges::copy(*pendingLine, buffer.begin() + static_cast<std::ptrdiff_t>(offset));
-        offset += pendingLine->size();
+        writeTuple(tupleBuffer, numberOfTuples, *record);
+        ++numberOfTuples;
         ++numberOfEmittedRecords;
-        pendingLine.reset();
     }
 
-    if (offset == 0)
+    if (numberOfTuples == 0)
     {
         return FillTupleBufferResult::eos();
     }
-    return FillTupleBufferResult::withBytes(offset);
+    /// A NATIVE source reports tuples, not bytes; SourceThread stores the value as the buffer's number of tuples (cf. NetworkSource).
+    return FillTupleBufferResult::withBytes(numberOfTuples);
 }
 
 DescriptorConfig::Config ErrorSource::validateAndFormat(std::unordered_map<std::string, std::string> config)

@@ -17,7 +17,9 @@ Off by default. Per worker:
 
 - CLI: `nes-single-node-worker -- --error_log.enabled=true`
 - YAML: `error_log: {enabled: true}`
-- Systest file: `GLOBALCONFIGURATION error_log.enabled: true` (applies to the queries below the line).
+- Systest file: `GLOBALCONFIGURATION error_log.enabled: true` (applies to the queries below the line). Write the sink
+  into the query (`INTO File('JSON' AS "SINK".OUTPUT_FORMAT)`): the systest replaces the options of a declared sink
+  (`CREATE SINK ... SET(...)`) by its CSV defaults.
 
 ## What is recorded
 
@@ -53,23 +55,31 @@ Not recorded:
 | `START_POSITION` | `EARLIEST` | `EARLIEST` replays what is retained, `LATEST` reads only new errors |
 | `MAX_RECORDS` | `0` | End the stream after this many errors (0 = unbounded); counts before `WHERE` |
 
-The source writes the input format of its physical source:
-- CSV (default): `error_code, message, ctx, ts` by position; column names are free. The CSV formatter keeps quotes in
-  values (`FieldOffsetRawBufferIndex.cpp`, `quoted = false`), so `message` and `ctx` arrive quoted and escaped.
-- JSON: keys `ERROR_CODE`, `MESSAGE`, `CTX` (object, keys uppercase, e.g. `CTX/TASK`), `TS`. Matched by name, so a
-  schema may declare any subset; values round-trip exactly. Recommended.
+The source writes NATIVE row-layout tuples (like `NetworkSource`), so the physical source needs
+`'NATIVE' AS INPUT_FORMATTER."TYPE"`; the sink chooses the textual format (`OUTPUT_FORMAT` CSV or JSON) and its
+formatter does the escaping. The logical source declares any subset of these fields, in any order, matched by name:
 
-On a worker without a log, opening the source fails with `CannotOpenSource` (4002). Non-default delimiters and formats
-other than CSV/JSON are rejected.
+| Field | Type |
+|---|---|
+| `error_code` | `UINT64` |
+| `message` | `VARSIZED` (child buffer) |
+| `ctx` | `VARSIZED`, `key:value key:value` as in the `[%&]` log pattern field |
+| `ts` | `UINT64` |
+
+Fields may be nullable; the values are never null. A record never exceeds a buffer: `message` and `ctx` go into child
+buffers (`TupleBufferRef::writeVarSized`, unpooled when larger than a buffer).
+
+Opening fails with `CannotOpenSource` (4002) on a worker without a log; constructing it fails with 4002 for an input
+format other than NATIVE or an unknown field name or type.
 
 ```sql
 CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, ctx VARSIZED NOT NULL, ts UINT64 NOT NULL);
-CREATE PHYSICAL SOURCE FOR errors TYPE Error;
+CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE");
 
-CREATE LOGICAL SOURCE errorTasks(error_code UINT64 NOT NULL, "CTX/TASK" VARSIZED);
-CREATE PHYSICAL SOURCE FOR errorTasks TYPE Error SET('JSON' AS INPUT_FORMATTER."TYPE", 'LATEST' AS "SOURCE".START_POSITION);
+CREATE LOGICAL SOURCE newErrorCodes(error_code UINT64 NOT NULL);
+CREATE PHYSICAL SOURCE FOR newErrorCodes TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 'LATEST' AS "SOURCE".START_POSITION);
 
-SELECT error_code, message FROM errors WHERE error_code >= 3000 INTO errorSink;
+SELECT error_code, message, ctx FROM errors WHERE error_code >= 3000 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
 ```
 
 Running example: `nes-systests/sources/ErrorSource.test`.
