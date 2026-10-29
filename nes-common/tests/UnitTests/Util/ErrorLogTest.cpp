@@ -182,4 +182,37 @@ TEST(ErrorLogTest, MoveAssignmentUnregistersThePreviousLog)
     Thread secondWorker("second-worker", Host("second-worker"), [&] { EXPECT_EQ(ErrorLog::forThisThread(), second); });
 }
 
+TEST(ErrorLogTest, ExceptionIsRecordedOnceWithItsLogContext)
+{
+    const auto log = std::make_shared<ErrorLog>(DEFAULT_RETENTION_BYTES);
+    const auto registration = ErrorLog::registerForWorker(Host("hook-worker"), log);
+    Thread worker(
+        "hook-worker",
+        Host("hook-worker"),
+        []
+        {
+            const LogContext context("Task", "query-1");
+            const auto exception = CannotOpenSource("test");
+            const auto copy = exception; /// NOLINT(performance-unnecessary-copy-initialization) copies must not record again
+        });
+    worker = Thread{};
+
+    uint64_t position = 0;
+    const auto available = readAvailable(*log, position);
+    ASSERT_EQ(available.records.size(), 1);
+    const auto& record = available.records.front();
+    EXPECT_EQ(record.code, ErrorCode::CannotOpenSource);
+    EXPECT_EQ(record.message, "failed to open a source; test");
+    EXPECT_EQ(record.context.at("Task"), "query-1");
+}
+
+TEST(ErrorLogTest, ExceptionOnAnotherWorkerIsNotRecorded)
+{
+    const auto log = std::make_shared<ErrorLog>(DEFAULT_RETENTION_BYTES);
+    const auto registration = ErrorLog::registerForWorker(Host("recording-worker"), log);
+    Thread otherWorker("other-worker", Host("unregistered-worker"), [] { [[maybe_unused]] const auto exception = CannotOpenSource("test"); });
+    otherWorker = Thread{};
+    EXPECT_EQ(log->latestPosition(), 0);
+}
+
 }

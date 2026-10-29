@@ -26,6 +26,7 @@
 #include <cpptrace/from_current.hpp>
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <ErrorLog.hpp>
 
 /// formater for cpptrace::nullable
 namespace fmt
@@ -58,6 +59,11 @@ constexpr bool logWithStacktrace = false;
 
 Exception::Exception(std::string message, const uint64_t code) : message(std::move(message)), errorCode(static_cast<ErrorCode>(code))
 {
+    /// One relaxed atomic load while no worker runs with `error_log.enabled=true`.
+    if (ErrorLog::anyRegistered()) [[unlikely]]
+    {
+        ErrorLog::recordException(*this);
+    }
 }
 
 std::string& Exception::what() noexcept
