@@ -1,0 +1,222 @@
+/*
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*/
+
+#include <ErrorLog.hpp>
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <stop_token>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <Identifiers/Identifiers.hpp>
+#include <Util/Strings.hpp>
+#include <spdlog/mdc.h>
+#include <ErrorHandling.hpp>
+#include <Thread.hpp>
+
+namespace NES
+{
+
+namespace
+{
+struct StringHash
+{
+    using is_transparent = void;
+
+    size_t operator()(const std::string_view value) const noexcept { return std::hash<std::string_view>{}(value); }
+};
+
+struct Registry
+{
+    std::mutex mutex;
+    /// Keyed by the raw worker id, so that a lookup with Host::view() does not copy the string (std::hash<Host> does).
+    std::unordered_map<std::string, std::weak_ptr<ErrorLog>, StringHash, std::equal_to<>> logs;
+};
+
+/// Leaked on purpose: exceptions can be constructed during static destruction (e.g. on Rust network threads), after a
+/// static registry would be gone.
+Registry& registry()
+{
+    static auto* const Instance = new Registry(); /// NOLINT(cppcoreguidelines-owning-memory)
+    return *Instance;
+}
+
+size_t approximateBytes(const ErrorRecord& record)
+{
+    size_t bytes = record.message.size();
+    for (const auto& [key, value] : record.context)
+    {
+        bytes += key.size() + value.size();
+    }
+    return bytes;
+}
+}
+
+ErrorLog::ErrorLog(const size_t retentionBytes) : retentionBytes(retentionBytes)
+{
+}
+
+void ErrorLog::append(ErrorRecord record)
+{
+    const auto bytes = sizeof(Entry) + approximateBytes(record);
+    {
+        const std::scoped_lock lock(mutex);
+        history.push_back(Entry{.bytes = bytes, .record = std::move(record)});
+        ++nextSequenceNumber;
+        retainedBytes += bytes;
+        while (retainedBytes > retentionBytes && !history.empty())
+        {
+            retainedBytes -= history.front().bytes;
+            history.pop_front();
+        }
+    }
+    recordAppended.notify_all();
+}
+
+uint64_t ErrorLog::oldestPosition() const
+{
+    const std::scoped_lock lock(mutex);
+    return oldestPositionLocked();
+}
+
+uint64_t ErrorLog::latestPosition() const
+{
+    const std::scoped_lock lock(mutex);
+    return nextSequenceNumber;
+}
+
+ErrorLog::ReadResult ErrorLog::read(uint64_t& position, const std::stop_token& stopToken)
+{
+    std::unique_lock lock(mutex);
+    if (!recordAppended.wait(lock, stopToken, [&] { return nextSequenceNumber > position; }))
+    {
+        return {};
+    }
+    return readLocked(position);
+}
+
+ErrorLog::ReadResult ErrorLog::tryRead(uint64_t& position)
+{
+    const std::scoped_lock lock(mutex);
+    return readLocked(position);
+}
+
+ErrorLog::ReadResult ErrorLog::readLocked(uint64_t& position)
+{
+    ReadResult result;
+    const auto oldest = oldestPositionLocked();
+    if (position < oldest)
+    {
+        result.numberOfMissedRecords = oldest - position;
+        position = oldest;
+    }
+    if (position < nextSequenceNumber)
+    {
+        result.record = history[position - oldest].record;
+        ++position;
+    }
+    return result;
+}
+
+ErrorLog::Registration::Registration(Host worker, std::shared_ptr<ErrorLog> log) : worker(std::move(worker)), log(std::move(log))
+{
+}
+
+ErrorLog::Registration::Registration(Registration&& other) noexcept : worker(std::move(other.worker)), log(std::move(other.log))
+{
+}
+
+ErrorLog::Registration& ErrorLog::Registration::operator=(Registration&& other) noexcept
+{
+    if (this != &other)
+    {
+        unregister();
+        worker = std::move(other.worker);
+        log = std::move(other.log);
+    }
+    return *this;
+}
+
+ErrorLog::Registration::~Registration()
+{
+    unregister();
+}
+
+void ErrorLog::Registration::unregister() noexcept
+{
+    if (!log)
+    {
+        return;
+    }
+    auto& [mutex, logs] = registry();
+    const std::scoped_lock lock(mutex);
+    if (const auto entry = logs.find(worker.view()); entry != logs.end())
+    {
+        logs.erase(entry);
+    }
+    numberOfRegisteredLogs.store(logs.size(), std::memory_order_relaxed);
+    log.reset();
+}
+
+ErrorLog::Registration ErrorLog::registerForWorker(const Host& worker, std::shared_ptr<ErrorLog> log)
+{
+    auto& [mutex, logs] = registry();
+    const std::scoped_lock lock(mutex);
+    const auto [entry, inserted] = logs.try_emplace(std::string(worker.view()), log);
+    INVARIANT(inserted, "Worker {} already has an error log", worker);
+    numberOfRegisteredLogs.store(logs.size(), std::memory_order_relaxed);
+    return Registration{worker, std::move(log)};
+}
+
+std::shared_ptr<ErrorLog> ErrorLog::forThisThread()
+{
+    auto& [mutex, logs] = registry();
+    const std::scoped_lock lock(mutex);
+    if (const auto entry = logs.find(Thread::getThisWorkerNodeId().view()); entry != logs.end())
+    {
+        return entry->second.lock();
+    }
+    return nullptr;
+}
+
+void ErrorLog::recordException(const Exception& exception) noexcept
+{
+    try
+    {
+        if (const auto log = forThisThread())
+        {
+            /// Relies on LogContext writing the spdlog MDC in every build type (NesLogger.hpp).
+            log->append(
+                ErrorRecord{
+                    .code = exception.code(),
+                    /// Factories with a message end it in '\n' (ErrorHandling.hpp); it is not part of the error.
+                    .message = std::string(trimCharsRight(exception.what(), '\n')),
+                    .context = spdlog::mdc::get_context(),
+                    .timestamp = exception.when()});
+        }
+    }
+    /// Dropping the record is the only safe option: reporting would itself construct an Exception and recurse.
+    /// NOLINTNEXTLINE(bugprone-empty-catch)
+    catch (...) /// NOLINT(no-raw-catch-all)
+    {
+    }
+}
+
+}

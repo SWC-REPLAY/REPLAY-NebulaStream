@@ -18,5 +18,6 @@ add_subdirectory(Plugins)
 add_source_files(nes-common
         Thread.cpp
         ErrorHandling.cpp
+        ErrorLog.cpp
         QueryId.cpp
         Version.cpp)
