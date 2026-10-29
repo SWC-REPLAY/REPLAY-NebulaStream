@@ -34,6 +34,10 @@ add_nes_test(error-log-test
         "ErrorLogTest.cpp"
 )
 
+add_nes_test(task-context-test
+        "TaskContextTest.cpp"
+)
+
 add_nes_test(chunk-collector-test
         "ChunkCollectorTest.cpp"
 )

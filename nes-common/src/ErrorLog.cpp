@@ -30,6 +30,7 @@
 #include <Util/Strings.hpp>
 #include <spdlog/mdc.h>
 #include <ErrorHandling.hpp>
+#include <TaskContext.hpp>
 #include <Thread.hpp>
 
 namespace NES
@@ -181,13 +182,20 @@ void ErrorLog::recordException(const Exception& exception) noexcept
     {
         if (const auto log = forThisThread())
         {
-            /// Relies on LogContext writing the spdlog MDC in every build type (NesLogger.hpp).
+            /// Relies on LogContext writing the spdlog MDC in every build type (NesLogger.hpp). Engine tasks set `Task`,
+            /// query start sets `queryId`.
+            const auto& logContext = spdlog::mdc::get_context();
+            const auto task = logContext.find("Task");
+            const auto query = task != logContext.end() ? task : logContext.find("queryId");
+            auto [queryId, distributedQueryId, pipelineId] = query != logContext.end() ? parseTaskContext(query->second) : ParsedTaskContext{};
             log->append(
                 ErrorRecord{
                     .code = exception.code(),
                     /// Factories with a message end it in '\n' (ErrorHandling.hpp); it is not part of the error.
                     .message = std::string(trimCharsRight(exception.what(), '\n')),
-                    .context = spdlog::mdc::get_context(),
+                    .queryId = std::move(queryId),
+                    .distributedQueryId = std::move(distributedQueryId),
+                    .pipelineId = pipelineId,
                     .timestamp = exception.when()});
         }
     }

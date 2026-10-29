@@ -19,7 +19,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -38,8 +37,11 @@ struct ErrorRecord
     ErrorCode code;
     /// The factory message at construction, without its trailing newline. Context that a catch site appends later is not included.
     std::string message;
-    /// LogContext (spdlog MDC) of the throwing thread, e.g. {"Task": "<queryId>-<pipelineId>"}; empty outside any scope.
-    std::map<std::string, std::string> context;
+    /// Parsed from the `Task` or `queryId` LogContext of the throwing thread (TaskContext.hpp); empty outside a query task,
+    /// e.g. on source threads.
+    std::optional<std::string> queryId;
+    std::optional<std::string> distributedQueryId;
+    std::optional<PipelineId> pipelineId;
     std::chrono::system_clock::time_point timestamp;
 };
 

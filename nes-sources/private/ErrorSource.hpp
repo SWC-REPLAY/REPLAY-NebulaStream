@@ -38,7 +38,10 @@ enum class ErrorField : uint8_t
 {
     ERROR_CODE, /// UINT64
     MESSAGE, /// VARSIZED
-    CTX, /// VARSIZED, the LogContext of the throwing thread as `key:value key:value`
+    QUERY_ID, /// VARSIZED, nullable: local query id (UUID) of the query whose task threw
+    DISTRIBUTED_QUERY_ID, /// VARSIZED, nullable: the query's distributed id
+    PIPELINE_ID, /// UINT64, nullable: pipeline whose task threw
+    NODE, /// VARSIZED: the worker, as SQL names it (the source's HOST)
     TS, /// UINT64, unix milliseconds of the throw
 };
 
@@ -86,6 +89,8 @@ private:
     size_t tupleSize = 0;
     /// 0 = unlimited
     uint64_t maxRecords;
+    /// The worker as SQL names it; every error of this source's log is raised on it.
+    std::string node;
     /// Taken while the query is started (the source is constructed then), so that no error after the start is missed.
     std::shared_ptr<ErrorLog::Subscription> subscription;
     /// Provides the child buffers that hold MESSAGE and CTX.

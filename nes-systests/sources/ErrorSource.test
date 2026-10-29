@@ -15,7 +15,8 @@ ATTACH INLINE
 {"KEY":1, "VALUE":2, "NAME":"max"}
 
 # The Error source writes NATIVE tuples of the declared fields; the sinks of the queries choose CSV or JSON.
-CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, ctx VARSIZED NOT NULL, ts UINT64 NOT NULL);
+# query_id, distributed_query_id and pipeline_id are NULL for errors outside a query task, so they must be nullable.
+CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, query_id VARSIZED, distributed_query_id VARSIZED, pipeline_id UINT64, node VARSIZED NOT NULL, ts UINT64 NOT NULL);
 CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
 # A second logical source on the errors of the same worker: a subset of the fields, in another order.
@@ -24,6 +25,9 @@ CREATE PHYSICAL SOURCE FOR errorCodes TYPE Error SET('NATIVE' AS INPUT_FORMATTER
 
 CREATE LOGICAL SOURCE errorsUnknownField(severity UINT64 NOT NULL);
 CREATE PHYSICAL SOURCE FOR errorsUnknownField TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
+
+CREATE LOGICAL SOURCE errorsNotNullQuery(query_id VARSIZED NOT NULL);
+CREATE PHYSICAL SOURCE FOR errorsNotNullQuery TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
 CREATE SINK allFieldsSink(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSIZED NOT NULL) TYPE File;
 CREATE SINK errorCodeSink(error_code UINT64 NOT NULL) TYPE File;
@@ -38,6 +42,10 @@ SELECT severity AS error_code FROM errorsUnknownField INTO errorCodeSink;
 ----
 ERROR 4002
 
+SELECT OCTET_LENGTH(query_id) AS error_code FROM errorsNotNullQuery INTO errorCodeSink;
+----
+ERROR 4002
+
 # All following queries run on workers that collect errors, separate from the workers of other test files.
 GLOBALCONFIGURATION enable_error_source: true
 
@@ -45,23 +53,26 @@ GLOBALCONFIGURATION enable_error_source: true
 # queries come first: the systest starts the queries of a file in file order and each start returns after the sources are
 # created. They wait for the two failing queries at the end, so this file needs at least five concurrent queries (-n,
 # default 6).
-# ctx (random query id) and ts (throw time) differ per run, so they are checked by predicate: both parse errors are
-# raised inside a pipeline task, so ctx is set; ts is unix milliseconds, i.e. after 2023-11-14.
+# Both parse errors are raised inside a pipeline task of the failing queries, so they carry its query and pipeline. The
+# local query id (a UUID), the pipeline id (counted per process) and ts (throw time) differ per run, so they are checked by
+# predicate; the distributed query id is the name the systest gives each failing query (C1:7 and C1:8, by position
+# in this file), and node is the worker's name in the systest cluster. ts is unix milliseconds, i.e. after
+# 2023-11-14.
 SELECT error_code FROM errorCodes WHERE error_code = 3002 INTO errorCodeSink;
 ----
 3002
 3002
 
 # The sinks are written into the queries: the systest replaces the options of a declared sink by CSV defaults.
-SELECT error_code, message, OCTET_LENGTH(ctx) > 0 AS has_ctx, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT);
+SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT);
 ----
-3002,cannot format malformed string value; '1.0' is not a valid value of type unsigned long.,true,true
-3002,cannot format malformed string value; '{"value": 1}' is not a valid value of type unsigned long.,true,true
+3002,cannot format malformed string value; '1.0' is not a valid value of type unsigned long.,true,SOURCES_D_ERRORSOURCE_C1:7,true,source-node:8080,true
+3002,cannot format malformed string value; '{"value": 1}' is not a valid value of type unsigned long.,true,SOURCES_D_ERRORSOURCE_C1:8,true,source-node:8080,true
 
-SELECT error_code, message, OCTET_LENGTH(ctx) > 0 AS has_ctx, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
+SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
 ----
-{"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '1.0' is not a valid value of type unsigned long.","HAS_CTX":true,"TS_IS_UNIX_MS":true}
-{"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '{\"value\": 1}' is not a valid value of type unsigned long.","HAS_CTX":true,"TS_IS_UNIX_MS":true}
+{"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '1.0' is not a valid value of type unsigned long.","HAS_QUERY_ID":true,"DISTRIBUTED_QUERY_ID":"SOURCES_D_ERRORSOURCE_C1:7","HAS_PIPELINE_ID":true,"NODE":"source-node:8080","TS_IS_UNIX_MS":true}
+{"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '{\"value\": 1}' is not a valid value of type unsigned long.","HAS_QUERY_ID":true,"DISTRIBUTED_QUERY_ID":"SOURCES_D_ERRORSOURCE_C1:8","HAS_PIPELINE_ID":true,"NODE":"source-node:8080","TS_IS_UNIX_MS":true}
 
 SELECT * FROM jsonStreamWrongDataTypes INTO allFieldsSink;
 ----

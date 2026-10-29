@@ -19,15 +19,18 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <ostream>
-#include <ranges>
 #include <span>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <Configurations/Descriptor.hpp>
 #include <DataTypes/DataType.hpp>
+#include <Identifiers/Identifiers.hpp>
 #include <Interface/BufferRef/TupleBufferRef.hpp>
 #include <Interface/VariableSizedAccess.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
@@ -36,7 +39,6 @@
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Strings.hpp>
 #include <fmt/format.h>
-#include <fmt/ranges.h>
 #include <magic_enum/magic_enum.hpp>
 #include <ErrorHandling.hpp>
 #include <ErrorLog.hpp>
@@ -52,13 +54,22 @@ DataType::Type typeOf(const ErrorField field)
     switch (field)
     {
         case ErrorField::ERROR_CODE:
+        case ErrorField::PIPELINE_ID:
         case ErrorField::TS:
             return DataType::Type::UINT64;
         case ErrorField::MESSAGE:
-        case ErrorField::CTX:
+        case ErrorField::QUERY_ID:
+        case ErrorField::DISTRIBUTED_QUERY_ID:
+        case ErrorField::NODE:
             return DataType::Type::VARSIZED;
     }
     std::unreachable();
+}
+
+/// Errors outside a query task have no query or pipeline.
+bool canBeNull(const ErrorField field)
+{
+    return field == ErrorField::QUERY_ID or field == ErrorField::DISTRIBUTED_QUERY_ID or field == ErrorField::PIPELINE_ID;
 }
 
 uint64_t toUnixMilliseconds(const std::chrono::system_clock::time_point timestamp)
@@ -66,12 +77,27 @@ uint64_t toUnixMilliseconds(const std::chrono::system_clock::time_point timestam
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch()).count());
 }
 
-/// The `key:value key:value` form of the `[%&]` log pattern field, so a ctx value can be searched in the log.
-std::string formatContext(const ErrorRecord& record)
+/// Holds the type that typeOf(field) names; nullopt is NULL.
+std::optional<std::variant<uint64_t, std::string_view>> valueOf(const ErrorField field, const ErrorRecord& record, const std::string_view node)
 {
-    return fmt::format(
-        "{}",
-        fmt::join(record.context | std::views::transform([](const auto& entry) { return fmt::format("{}:{}", entry.first, entry.second); }), " "));
+    switch (field)
+    {
+        case ErrorField::ERROR_CODE:
+            return static_cast<uint64_t>(record.code);
+        case ErrorField::MESSAGE:
+            return record.message;
+        case ErrorField::QUERY_ID:
+            return record.queryId.transform([](const std::string& id) { return std::string_view{id}; });
+        case ErrorField::DISTRIBUTED_QUERY_ID:
+            return record.distributedQueryId.transform([](const std::string& id) { return std::string_view{id}; });
+        case ErrorField::PIPELINE_ID:
+            return record.pipelineId.transform([](const PipelineId id) { return id.getRawValue(); });
+        case ErrorField::NODE:
+            return node;
+        case ErrorField::TS:
+            return toUnixMilliseconds(record.timestamp);
+    }
+    std::unreachable();
 }
 
 template <typename T>
@@ -82,7 +108,7 @@ void writeValue(const std::span<std::byte> slot, const T& value)
 }
 
 ErrorSource::ErrorSource(const SourceDescriptor& sourceDescriptor)
-    : maxRecords(sourceDescriptor.getFromConfig(ConfigParametersError::MAX_RECORDS))
+    : maxRecords(sourceDescriptor.getFromConfig(ConfigParametersError::MAX_RECORDS)), node(sourceDescriptor.getHost().getRawValue())
 {
     if (const auto inputFormat = toUpperCase(sourceDescriptor.getInputFormatType()); inputFormat != "NATIVE")
     {
@@ -98,9 +124,14 @@ ErrorSource::ErrorSource(const SourceDescriptor& sourceDescriptor)
         if (not errorField.has_value() or dataType.type != typeOf(*errorField))
         {
             throw CannotOpenSource(
-                "Error source has no field {} of type {}; its fields are ERROR_CODE UINT64, MESSAGE VARSIZED, CTX VARSIZED, TS UINT64",
+                "Error source has no field {} of type {}; its fields are ERROR_CODE UINT64, MESSAGE VARSIZED, QUERY_ID VARSIZED, "
+                "DISTRIBUTED_QUERY_ID VARSIZED, PIPELINE_ID UINT64, NODE VARSIZED, TS UINT64",
                 name,
                 dataType);
+        }
+        if (canBeNull(*errorField) and not dataType.nullable)
+        {
+            throw CannotOpenSource("Error source field {} is NULL for errors outside a query task and must be nullable", name);
         }
         columns.push_back({.field = *errorField, .offset = tupleSize, .nullable = dataType.nullable});
         tupleSize += dataType.getSizeInBytesWithNull();
@@ -133,28 +164,22 @@ void ErrorSource::writeTuple(TupleBuffer& tupleBuffer, const size_t tupleIndex, 
     for (const auto& [field, offset, nullable] : columns)
     {
         auto slot = tuple.subspan(offset);
+        const auto value = valueOf(field, record, node);
         if (nullable)
         {
-            /// The row layout keeps a null flag before the value; error fields are never null.
-            slot[0] = std::byte{0};
+            /// The row layout keeps a null flag before the value of a nullable field.
+            slot[0] = std::byte{static_cast<unsigned char>(not value.has_value())};
             slot = slot.subspan(1);
         }
-        switch (field)
+        /// A NULL still gets a valid value: the scan reads the value of a VARSIZED field before it looks at the flag.
+        if (typeOf(field) == DataType::Type::VARSIZED)
         {
-            case ErrorField::ERROR_CODE:
-                writeValue(slot, static_cast<uint64_t>(record.code));
-                break;
-            case ErrorField::TS:
-                writeValue(slot, toUnixMilliseconds(record.timestamp));
-                break;
-            case ErrorField::MESSAGE:
-                writeValue(slot, TupleBufferRef::writeVarSized(tupleBuffer, *bufferProvider, std::as_bytes(std::span{record.message})));
-                break;
-            case ErrorField::CTX: {
-                const auto context = formatContext(record);
-                writeValue(slot, TupleBufferRef::writeVarSized(tupleBuffer, *bufferProvider, std::as_bytes(std::span{context})));
-                break;
-            }
+            const auto text = value.has_value() ? std::get<std::string_view>(*value) : std::string_view{};
+            writeValue(slot, TupleBufferRef::writeVarSized(tupleBuffer, *bufferProvider, std::as_bytes(std::span{text})));
+        }
+        else
+        {
+            writeValue(slot, value.has_value() ? std::get<uint64_t>(*value) : uint64_t{0});
         }
     }
 }

@@ -28,14 +28,15 @@ Off by default. Per worker:
 
 Not recorded:
 - foreign `std::exception`s that `wrapExternalException` turns into `UnknownException` (other constructor);
-- context a catch site appends to the message later (e.g. `" in Query {}"`, `QueryEngine.cpp`); `ctx` has the query;
+- context a catch site appends to the message later (e.g. `" in Query {}"`, `QueryEngine.cpp`); `query_id` has the query;
 - exceptions on threads that do not belong to the worker.
 
 | Field | Source |
 |---|---|
 | `error_code` | `Exception::code()` |
 | `message` | factory message at construction, trailing newline removed |
-| `ctx` | `LogContext` (spdlog MDC) of the throwing thread: `Task` = `<queryId>-<pipelineId>` in engine tasks, `queryId` during query start; empty elsewhere (also on source threads) |
+| `query_id`, `distributed_query_id`, `pipeline_id` | parsed from the `LogContext` (spdlog MDC) of the throwing thread: `Task` = `<queryId>-<pipelineId>` in pipeline tasks, `<queryId>` in query tasks, `queryId` during query start (`TaskContext.hpp` formats and parses it); NULL elsewhere, also on source threads |
+| `node` | the Error source's `HOST`, i.e. the worker as SQL names it |
 | `ts` | `Exception::when()`, unix ms |
 
 ## ErrorLog (`nes-common/include/ErrorLog.hpp`)
@@ -63,20 +64,24 @@ formatter does the escaping. The logical source declares any subset of these fie
 |---|---|
 | `error_code` | `UINT64` |
 | `message` | `VARSIZED` (child buffer) |
-| `ctx` | `VARSIZED`, `key:value key:value` as in the `[%&]` log pattern field |
+| `query_id` | `VARSIZED`, nullable: local query id (UUID) |
+| `distributed_query_id` | `VARSIZED`, nullable |
+| `pipeline_id` | `UINT64`, nullable; pipeline ids are counted per worker process, not per query |
+| `node` | `VARSIZED` |
 | `ts` | `UINT64` |
 
-Fields may be nullable; the values are never null. A record never exceeds a buffer: `message` and `ctx` go into child
+`query_id`, `distributed_query_id` and `pipeline_id` must be declared nullable (NULL outside a query task); the other
+fields may be. A record never exceeds a buffer: the VARSIZED fields go into child
 buffers (`TupleBufferRef::writeVarSized`, unpooled when larger than a buffer).
 
 Constructing the source, which happens while its query is started, fails with `CannotOpenSource` (4002) on a worker
 without `enable_error_source=true`, for an input format other than NATIVE, or for an unknown field name or type.
 
 ```sql
-CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, ctx VARSIZED NOT NULL, ts UINT64 NOT NULL);
+CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, query_id VARSIZED, distributed_query_id VARSIZED, pipeline_id UINT64, node VARSIZED NOT NULL, ts UINT64 NOT NULL);
 CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE");
 
-SELECT error_code, message, ctx FROM errors WHERE error_code >= 3000 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
+SELECT error_code, message, distributed_query_id, pipeline_id, node FROM errors WHERE error_code >= 3000 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
 ```
 
 Running example: `nes-systests/sources/ErrorSource.test`.
@@ -88,7 +93,7 @@ cmake-build-debug/nes-systests/systest/systest -t nes-systests/sources/ErrorSour
 
 ## Open points
 
-- Source threads set no `LogContext`, so errors raised in sources have an empty `ctx`.
+- Source threads set no `LogContext`, so errors raised in sources have no query or pipeline.
 - `MAX_RECORDS` is the only end condition; noise on the worker (other exceptions) can end a bounded query early.
 - Errors of an error query itself reach its own source.
 - The systest can only check errors of queries that start after the error query, so `ErrorSource.test` needs several

@@ -20,4 +20,5 @@ add_source_files(nes-common
         ErrorHandling.cpp
         ErrorLog.cpp
         QueryId.cpp
+        TaskContext.cpp
         Version.cpp)

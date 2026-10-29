@@ -24,8 +24,11 @@
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <Util/UUID.hpp>
 #include <gtest/gtest.h>
 #include <ErrorHandling.hpp>
+#include <QueryId.hpp>
+#include <TaskContext.hpp>
 #include <Thread.hpp>
 
 namespace NES
@@ -35,7 +38,12 @@ namespace
 ErrorRecord recordWithMessage(std::string message)
 {
     return ErrorRecord{
-        .code = ErrorCode::UnknownException, .message = std::move(message), .context = {}, .timestamp = std::chrono::system_clock::now()};
+        .code = ErrorCode::UnknownException,
+        .message = std::move(message),
+        .queryId = std::nullopt,
+        .distributedQueryId = std::nullopt,
+        .pipelineId = std::nullopt,
+        .timestamp = std::chrono::system_clock::now()};
 }
 
 std::vector<ErrorRecord> readAvailable(ErrorLog::Subscription& subscription)
@@ -146,17 +154,18 @@ TEST(ErrorLogTest, MoveAssignmentUnregistersThePreviousLog)
     Thread secondWorker("second-worker", Host("second-worker"), [&] { EXPECT_EQ(ErrorLog::forThisThread(), second); });
 }
 
-TEST(ErrorLogTest, ExceptionIsRecordedOnceWithItsLogContext)
+TEST(ErrorLogTest, ExceptionIsRecordedOnceWithTheQueryAndPipelineOfItsTask)
 {
     const auto log = std::make_shared<ErrorLog>();
     const auto registration = ErrorLog::registerForWorker(Host("hook-worker"), log);
     const auto subscription = log->subscribe();
+    const auto localQueryId = LocalQueryId(generateUUID());
     Thread worker(
         "hook-worker",
         Host("hook-worker"),
-        []
+        [&]
         {
-            const LogContext context("Task", "query-1");
+            const LogContext context("Task", formatTaskContext(QueryId::create(localQueryId, DistributedQueryId("query-1")), PipelineId(7)));
             const auto exception = CannotOpenSource("test");
             const auto copy = exception; /// NOLINT(performance-unnecessary-copy-initialization) copies must not record again
         });
@@ -167,7 +176,24 @@ TEST(ErrorLogTest, ExceptionIsRecordedOnceWithItsLogContext)
     const auto& record = records.front();
     EXPECT_EQ(record.code, ErrorCode::CannotOpenSource);
     EXPECT_EQ(record.message, "failed to open a source; test");
-    EXPECT_EQ(record.context.at("Task"), "query-1");
+    EXPECT_EQ(record.queryId, localQueryId.getRawValue());
+    EXPECT_EQ(record.distributedQueryId, "query-1");
+    EXPECT_EQ(record.pipelineId, PipelineId(7));
+}
+
+TEST(ErrorLogTest, ExceptionOutsideAQueryHasNoQueryOrPipeline)
+{
+    const auto log = std::make_shared<ErrorLog>();
+    const auto registration = ErrorLog::registerForWorker(Host("idle-worker"), log);
+    const auto subscription = log->subscribe();
+    Thread worker("idle-worker", Host("idle-worker"), [] { [[maybe_unused]] const auto exception = CannotOpenSource("test"); });
+    worker = Thread{};
+
+    const auto records = readAvailable(*subscription);
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_FALSE(records.front().queryId.has_value());
+    EXPECT_FALSE(records.front().distributedQueryId.has_value());
+    EXPECT_FALSE(records.front().pipelineId.has_value());
 }
 
 TEST(ErrorLogTest, ExceptionOnAnotherWorkerIsNotRecorded)
