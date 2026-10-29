@@ -69,7 +69,7 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         listener->addListener(googleTracePrinter);
     }
     /// Before the engine is built, so that its threads find the log from their first exception on.
-    if (configuration.errorLog.enabled.getValue())
+    if (configuration.enableErrorSource.getValue())
     {
         /// Engine threads get `host` explicitly; the request and task-delayer threads inherit the constructing thread's id.
         INVARIANT(
@@ -77,8 +77,7 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
             "Error log of worker {} would miss exceptions of threads identified as {}",
             host,
             Thread::getThisWorkerNodeId());
-        errorLogRegistration
-            = ErrorLog::registerForWorker(host, std::make_shared<ErrorLog>(configuration.errorLog.retentionBytes.getValue()));
+        errorLogRegistration = ErrorLog::registerForWorker(host, std::make_shared<ErrorLog>());
     }
 
     nodeEngine = NodeEngineBuilder(configuration.workerConfiguration, copyPtr(listener)).build(host);

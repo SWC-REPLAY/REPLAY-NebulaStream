@@ -18,7 +18,7 @@ ATTACH INLINE
 CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, ctx VARSIZED NOT NULL, ts UINT64 NOT NULL);
 CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
-# A second logical source on the same error log: a subset of the fields, in another order.
+# A second logical source on the errors of the same worker: a subset of the fields, in another order.
 CREATE LOGICAL SOURCE errorCodes(ts UINT64 NOT NULL, error_code UINT64 NOT NULL);
 CREATE PHYSICAL SOURCE FOR errorCodes TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
@@ -28,35 +28,30 @@ CREATE PHYSICAL SOURCE FOR errorsUnknownField TYPE Error SET('NATIVE' AS INPUT_F
 CREATE SINK allFieldsSink(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSIZED NOT NULL) TYPE File;
 CREATE SINK errorCodeSink(error_code UINT64 NOT NULL) TYPE File;
 
-# Workers run without an error log unless error_log.enabled is set, so the Error source cannot open.
+# Workers do not collect errors unless enable_error_source is set, so the Error source cannot be created.
 SELECT error_code FROM errors INTO errorCodeSink;
 ----
 ERROR 4002
 
-# The fields are matched by name and type; the error, raised while the query is lowered, comes before the log check.
+# The fields are matched by name and type.
 SELECT severity AS error_code FROM errorsUnknownField INTO errorCodeSink;
 ----
 ERROR 4002
 
-# All following queries run on workers with an error log, separate from the workers of other test files.
-GLOBALCONFIGURATION error_log.enabled: true
+# All following queries run on workers that collect errors, separate from the workers of other test files.
+GLOBALCONFIGURATION enable_error_source: true
 
-SELECT * FROM jsonStreamWrongDataTypes INTO allFieldsSink;
-----
-ERROR 3002
-
-SELECT * FROM jsonStreamWrongDataTypesWithObject INTO allFieldsSink;
-----
-ERROR 3002
-
-# EARLIEST (default) replays the errors of the queries above, independent of the order in which the queries run.
+# An Error source sees only the errors recorded after its query started; the worker keeps no history. So the error
+# queries come first: the systest starts the queries of a file in file order and each start returns after the sources are
+# created. They wait for the two failing queries at the end, so this file needs at least five concurrent queries (-n,
+# default 6).
+# ctx (random query id) and ts (throw time) differ per run, so they are checked by predicate: both parse errors are
+# raised inside a pipeline task, so ctx is set; ts is unix milliseconds, i.e. after 2023-11-14.
 SELECT error_code FROM errorCodes WHERE error_code = 3002 INTO errorCodeSink;
 ----
 3002
 3002
 
-# The whole record: ctx (random query id) and ts (throw time) differ per run, so they are checked by predicate.
-# Both parse errors are raised inside a pipeline task, so ctx is set; ts is unix milliseconds, i.e. after 2023-11-14.
 # The sinks are written into the queries: the systest replaces the options of a declared sink by CSV defaults.
 SELECT error_code, message, OCTET_LENGTH(ctx) > 0 AS has_ctx, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT);
 ----
@@ -67,3 +62,11 @@ SELECT error_code, message, OCTET_LENGTH(ctx) > 0 AS has_ctx, ts > 1700000000000
 ----
 {"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '1.0' is not a valid value of type unsigned long.","HAS_CTX":true,"TS_IS_UNIX_MS":true}
 {"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '{\"value\": 1}' is not a valid value of type unsigned long.","HAS_CTX":true,"TS_IS_UNIX_MS":true}
+
+SELECT * FROM jsonStreamWrongDataTypes INTO allFieldsSink;
+----
+ERROR 3002
+
+SELECT * FROM jsonStreamWrongDataTypesWithObject INTO allFieldsSink;
+----
+ERROR 3002

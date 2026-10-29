@@ -18,7 +18,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
-#include <cstdint>
 #include <deque>
 #include <map>
 #include <memory>
@@ -26,6 +25,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <ErrorHandling.hpp>
 
@@ -43,17 +43,28 @@ struct ErrorRecord
     std::chrono::system_clock::time_point timestamp;
 };
 
-/// Records the exceptions constructed on the threads of one worker, so that queries can read them through an Error source
-/// (discussion #153). All readers share one history bounded by `retentionBytes`. A reader keeps its own position (a sequence
-/// number) instead of a private copy, so the log does not know its readers.
+/// Passes the exceptions constructed on the threads of one worker to the Error sources reading them (discussion #153).
+/// The log keeps no history: an error reaches only the subscriptions that exist when it is recorded. Errors that must be
+/// kept are written into a sink by an error query.
 class ErrorLog
 {
 public:
-    struct ReadResult
+    /// The errors recorded since a reader subscribed, in order. The reader drains it; it is unbounded.
+    class Subscription
     {
-        std::optional<ErrorRecord> record;
-        /// Records that were evicted before this reader got to them.
-        uint64_t numberOfMissedRecords = 0;
+    public:
+        /// Blocks until an error arrives; returns nothing if stop is requested.
+        std::optional<ErrorRecord> read(const std::stop_token& stopToken);
+        /// Returns nothing instead of blocking.
+        std::optional<ErrorRecord> tryRead();
+
+    private:
+        friend class ErrorLog;
+        void push(const ErrorRecord& record);
+
+        std::mutex mutex;
+        std::condition_variable_any recordPushed;
+        std::deque<ErrorRecord> pending;
     };
 
     /// Owns a log and keeps it registered for a worker; unregisters on destruction. A moved-from registration does nothing.
@@ -75,19 +86,9 @@ public:
         std::shared_ptr<ErrorLog> log;
     };
 
-    explicit ErrorLog(size_t retentionBytes);
-
-    void append(ErrorRecord record);
-
-    /// Starting positions for a new reader: replay what is retained, or only what comes next.
-    [[nodiscard]] uint64_t oldestPosition() const;
-    [[nodiscard]] uint64_t latestPosition() const;
-
-    /// Blocks until a record at or after `position` exists or stop is requested, and advances `position` past the returned
-    /// record. Returns no record if stop was requested.
-    ReadResult read(uint64_t& position, const std::stop_token& stopToken);
-    /// Like read, but returns no record instead of blocking.
-    ReadResult tryRead(uint64_t& position);
+    /// Delivers every error recorded after this call, until the subscription is destroyed.
+    std::shared_ptr<Subscription> subscribe();
+    void append(const ErrorRecord& record);
 
     /// Exceptions constructed on threads whose worker id is `worker` are recorded in `log` while the registration lives.
     static Registration registerForWorker(const Host& worker, std::shared_ptr<ErrorLog> log);
@@ -101,26 +102,12 @@ public:
     static void recordException(const Exception& exception) noexcept;
 
 private:
-    struct Entry
-    {
-        size_t bytes = 0;
-        ErrorRecord record;
-    };
-
-    /// Requires `mutex`. Sequence numbers are contiguous, so the record at a position is at index `position - oldest`.
-    [[nodiscard]] uint64_t oldestPositionLocked() const { return nextSequenceNumber - history.size(); }
-    ReadResult readLocked(uint64_t& position);
-
     /// Mirrors the registry size. Trivially destructible, so it stays valid during static destruction.
     static inline std::atomic<size_t> numberOfRegisteredLogs{0}; /// NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
-    const size_t retentionBytes;
-    mutable std::mutex mutex;
-    std::condition_variable_any recordAppended;
-    /// Oldest at the front.
-    std::deque<Entry> history;
-    size_t retainedBytes = 0;
-    uint64_t nextSequenceNumber = 0;
+    std::mutex mutex;
+    /// Expired ones are removed on the next append, so a reader unsubscribes by dropping its subscription.
+    std::vector<std::weak_ptr<Subscription>> subscriptions;
 };
 
 }

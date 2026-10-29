@@ -59,7 +59,7 @@ constexpr bool logWithStacktrace = false;
 
 Exception::Exception(std::string message, const uint64_t code) : message(std::move(message)), errorCode(static_cast<ErrorCode>(code))
 {
-    /// One relaxed atomic load while no worker runs with `error_log.enabled=true`.
+    /// One relaxed atomic load while no worker runs with `enable_error_source=true`.
     if (ErrorLog::anyRegistered()) [[unlikely]]
     {
         ErrorLog::recordException(*this);

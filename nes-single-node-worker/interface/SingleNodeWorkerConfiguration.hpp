@@ -21,7 +21,6 @@
 #include <Schema/Schema.hpp>
 #include <Schema/SchemaFwd.hpp>
 #include <Util/Logger/LogLevel.hpp>
-#include <ErrorLogConfiguration.hpp>
 
 namespace NES
 {
@@ -40,13 +39,13 @@ struct SingleNodeWorkerConfiguration
         bool enableGoogleEventTrace,
         WorkerConfiguration workerConfiguration,
         LogLevel logLevel,
-        ErrorLogConfiguration errorLog)
+        bool enableErrorSource)
         : dataAddress(std::move(dataAddress))
         , grpcAddressUri(std::move(grpcAddressUri))
         , enableGoogleEventTrace(enableGoogleEventTrace)
         , workerConfiguration(std::move(workerConfiguration))
         , logLevel(logLevel)
-        , errorLog(errorLog)
+        , enableErrorSource(enableErrorSource)
     {
     }
 
@@ -62,8 +61,8 @@ struct SingleNodeWorkerConfiguration
     WorkerConfiguration workerConfiguration;
     LogLevel logLevel;
 
-    /// Error log of this worker, read by queries on an Error source
-    ErrorLogConfiguration errorLog;
+    /// Enable an Error Source that logs Exceptions that happen during the worker processes runtime
+    bool enableErrorSource;
 
     static SingleNodeWorkerConfiguration fromConfig(const InstantiatedConfig& config);
 };

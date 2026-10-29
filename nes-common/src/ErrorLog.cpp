@@ -15,11 +15,12 @@
 #include <ErrorLog.hpp>
 
 #include <atomic>
+#include <algorithm>
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -57,82 +58,60 @@ Registry& registry()
     static auto* const Instance = new Registry(); /// NOLINT(cppcoreguidelines-owning-memory)
     return *Instance;
 }
-
-size_t approximateBytes(const ErrorRecord& record)
-{
-    size_t bytes = record.message.size();
-    for (const auto& [key, value] : record.context)
-    {
-        bytes += key.size() + value.size();
-    }
-    return bytes;
-}
 }
 
-ErrorLog::ErrorLog(const size_t retentionBytes) : retentionBytes(retentionBytes)
-{
-}
-
-void ErrorLog::append(ErrorRecord record)
-{
-    const auto bytes = sizeof(Entry) + approximateBytes(record);
-    {
-        const std::scoped_lock lock(mutex);
-        history.push_back(Entry{.bytes = bytes, .record = std::move(record)});
-        ++nextSequenceNumber;
-        retainedBytes += bytes;
-        while (retainedBytes > retentionBytes && !history.empty())
-        {
-            retainedBytes -= history.front().bytes;
-            history.pop_front();
-        }
-    }
-    recordAppended.notify_all();
-}
-
-uint64_t ErrorLog::oldestPosition() const
-{
-    const std::scoped_lock lock(mutex);
-    return oldestPositionLocked();
-}
-
-uint64_t ErrorLog::latestPosition() const
-{
-    const std::scoped_lock lock(mutex);
-    return nextSequenceNumber;
-}
-
-ErrorLog::ReadResult ErrorLog::read(uint64_t& position, const std::stop_token& stopToken)
+std::optional<ErrorRecord> ErrorLog::Subscription::read(const std::stop_token& stopToken)
 {
     std::unique_lock lock(mutex);
-    if (!recordAppended.wait(lock, stopToken, [&] { return nextSequenceNumber > position; }))
+    if (!recordPushed.wait(lock, stopToken, [this] { return !pending.empty(); }))
     {
-        return {};
+        return std::nullopt;
     }
-    return readLocked(position);
+    auto record = std::move(pending.front());
+    pending.pop_front();
+    return record;
 }
 
-ErrorLog::ReadResult ErrorLog::tryRead(uint64_t& position)
+std::optional<ErrorRecord> ErrorLog::Subscription::tryRead()
 {
     const std::scoped_lock lock(mutex);
-    return readLocked(position);
+    if (pending.empty())
+    {
+        return std::nullopt;
+    }
+    auto record = std::move(pending.front());
+    pending.pop_front();
+    return record;
 }
 
-ErrorLog::ReadResult ErrorLog::readLocked(uint64_t& position)
+void ErrorLog::Subscription::push(const ErrorRecord& record)
 {
-    ReadResult result;
-    const auto oldest = oldestPositionLocked();
-    if (position < oldest)
     {
-        result.numberOfMissedRecords = oldest - position;
-        position = oldest;
+        const std::scoped_lock lock(mutex);
+        pending.push_back(record);
     }
-    if (position < nextSequenceNumber)
+    recordPushed.notify_all();
+}
+
+std::shared_ptr<ErrorLog::Subscription> ErrorLog::subscribe()
+{
+    auto subscription = std::make_shared<Subscription>();
+    const std::scoped_lock lock(mutex);
+    subscriptions.push_back(subscription);
+    return subscription;
+}
+
+void ErrorLog::append(const ErrorRecord& record)
+{
+    const std::scoped_lock lock(mutex);
+    std::erase_if(subscriptions, [](const auto& subscription) { return subscription.expired(); });
+    for (const auto& subscription : subscriptions)
     {
-        result.record = history[position - oldest].record;
-        ++position;
+        if (const auto live = subscription.lock())
+        {
+            live->push(record);
+        }
     }
-    return result;
 }
 
 ErrorLog::Registration::Registration(Host worker, std::shared_ptr<ErrorLog> log) : worker(std::move(worker)), log(std::move(log))

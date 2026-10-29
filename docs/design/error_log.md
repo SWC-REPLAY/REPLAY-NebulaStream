@@ -12,19 +12,18 @@ Off by default. Per worker:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `error_log.enabled` | `false` | Record the exceptions of this worker. |
-| `error_log.retention_bytes` | `1048576` | Size of the shared error buffer; must be > 0. |
+| `enable_error_source` | `false` | Pass the exceptions of this worker to its Error sources. |
 
-- CLI: `nes-single-node-worker -- --error_log.enabled=true`
-- YAML: `error_log: {enabled: true}`
-- Systest file: `GLOBALCONFIGURATION error_log.enabled: true` (applies to the queries below the line). Write the sink
+- CLI: `nes-single-node-worker -- --enable_error_source=true`
+- YAML: `enable_error_source: true`
+- Systest file: `GLOBALCONFIGURATION enable_error_source: true` (applies to the queries below the line). Write the sink
   into the query (`INTO File('JSON' AS "SINK".OUTPUT_FORMAT)`): the systest replaces the options of a declared sink
   (`CREATE SINK ... SET(...)`) by its CSV defaults.
 
 ## What is recorded
 
 `Exception(std::string, uint64_t)` records every NES exception it constructs, i.e. every factory of
-`ExceptionDefinitions.inc`, on a thread of a worker with an enabled log. This includes exceptions used as error values
+`ExceptionDefinitions.inc`, on a thread of a worker with `enable_error_source=true`. This includes exceptions used as error values
 (e.g. `QueryNotFound` from status polls). Filter in SQL.
 
 Not recorded:
@@ -44,15 +43,16 @@ Not recorded:
 - Created by `SingleNodeWorker` before the engine, registered under the worker's `host`. Threads find it through
   `Thread::getThisWorkerNodeId()`, which every worker thread carries; `Thread` itself is unchanged.
 - Disabled cost per exception: one relaxed atomic load (`ErrorLog::anyRegistered()`).
-- One history shared by all readers, bounded by `retention_bytes` (oldest evicted first). Each record has a sequence
-  number; a reader keeps its own position, so the log does not track readers. Readers that fall behind miss evicted
-  records; the source counts and logs them.
+- No retention: the log keeps no history. Each Error source subscribes when its query starts and gets every error
+  recorded after that, in its own queue; an error recorded while no source is subscribed is gone. To keep errors, run
+  an error query that writes them into a sink.
+- A subscription's queue is unbounded: it holds what the source has not read yet, e.g. while the sink applies
+  backpressure.
 
 ## ErrorSource (`TYPE Error`)
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `START_POSITION` | `EARLIEST` | `EARLIEST` replays what is retained, `LATEST` reads only new errors |
 | `MAX_RECORDS` | `0` | End the stream after this many errors (0 = unbounded); counts before `WHERE` |
 
 The source writes NATIVE row-layout tuples (like `NetworkSource`), so the physical source needs
@@ -69,15 +69,12 @@ formatter does the escaping. The logical source declares any subset of these fie
 Fields may be nullable; the values are never null. A record never exceeds a buffer: `message` and `ctx` go into child
 buffers (`TupleBufferRef::writeVarSized`, unpooled when larger than a buffer).
 
-Opening fails with `CannotOpenSource` (4002) on a worker without a log; constructing it fails with 4002 for an input
-format other than NATIVE or an unknown field name or type.
+Constructing the source, which happens while its query is started, fails with `CannotOpenSource` (4002) on a worker
+without `enable_error_source=true`, for an input format other than NATIVE, or for an unknown field name or type.
 
 ```sql
 CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, ctx VARSIZED NOT NULL, ts UINT64 NOT NULL);
 CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE");
-
-CREATE LOGICAL SOURCE newErrorCodes(error_code UINT64 NOT NULL);
-CREATE PHYSICAL SOURCE FOR newErrorCodes TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 'LATEST' AS "SOURCE".START_POSITION);
 
 SELECT error_code, message, ctx FROM errors WHERE error_code >= 3000 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
 ```
@@ -93,4 +90,6 @@ cmake-build-debug/nes-systests/systest/systest -t nes-systests/sources/ErrorSour
 
 - Source threads set no `LogContext`, so errors raised in sources have an empty `ctx`.
 - `MAX_RECORDS` is the only end condition; noise on the worker (other exceptions) can end a bounded query early.
-- Errors of an error query itself enter the log it reads.
+- Errors of an error query itself reach its own source.
+- The systest can only check errors of queries that start after the error query, so `ErrorSource.test` needs several
+  concurrent queries and cannot pass in a sequential run (`--sequential`, `-b`).

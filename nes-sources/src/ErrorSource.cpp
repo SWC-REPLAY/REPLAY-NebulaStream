@@ -34,7 +34,6 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
-#include <Util/Logger/Logger.hpp>
 #include <Util/Strings.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -83,8 +82,7 @@ void writeValue(const std::span<std::byte> slot, const T& value)
 }
 
 ErrorSource::ErrorSource(const SourceDescriptor& sourceDescriptor)
-    : startPosition(sourceDescriptor.getFromConfig(ConfigParametersError::START_POSITION))
-    , maxRecords(sourceDescriptor.getFromConfig(ConfigParametersError::MAX_RECORDS))
+    : maxRecords(sourceDescriptor.getFromConfig(ConfigParametersError::MAX_RECORDS))
 {
     if (const auto inputFormat = toUpperCase(sourceDescriptor.getInputFormatType()); inputFormat != "NATIVE")
     {
@@ -107,27 +105,25 @@ ErrorSource::ErrorSource(const SourceDescriptor& sourceDescriptor)
         columns.push_back({.field = *errorField, .offset = tupleSize, .nullable = dataType.nullable});
         tupleSize += dataType.getSizeInBytesWithNull();
     }
+
+    /// The source is constructed while its query is started on the request thread, which belongs to the worker.
+    const auto log = ErrorLog::forThisThread();
+    if (!log)
+    {
+        throw CannotOpenSource(
+            "Error source: worker {} does not collect errors; start it with enable_error_source=true", Thread::getThisWorkerNodeId());
+    }
+    subscription = log->subscribe();
 }
 
 void ErrorSource::open(std::shared_ptr<AbstractBufferProvider> provider)
 {
-    log = ErrorLog::forThisThread();
-    if (!log)
-    {
-        throw CannotOpenSource(
-            "Error source: worker {} has no error log; start it with error_log.enabled=true", Thread::getThisWorkerNodeId());
-    }
     bufferProvider = std::move(provider);
-    position = (startPosition == ErrorStartPosition::EARLIEST) ? log->oldestPosition() : log->latestPosition();
 }
 
 void ErrorSource::close()
 {
-    if (numberOfMissedRecords > 0)
-    {
-        NES_WARNING("Error source missed {} errors that were evicted before it read them", numberOfMissedRecords);
-    }
-    log.reset();
+    subscription.reset();
     bufferProvider.reset();
 }
 
@@ -171,8 +167,7 @@ Source::FillTupleBufferResult ErrorSource::fillTupleBuffer(TupleBuffer& tupleBuf
     while (numberOfTuples < capacity && (maxRecords == 0 || numberOfEmittedRecords < maxRecords))
     {
         /// Only the first error is waited for; afterwards return what is there instead of holding back errors.
-        auto [record, missed] = numberOfTuples == 0 ? log->read(position, stopToken) : log->tryRead(position);
-        numberOfMissedRecords += missed;
+        const auto record = numberOfTuples == 0 ? subscription->read(stopToken) : subscription->tryRead();
         if (!record)
         {
             if (numberOfTuples > 0 || stopToken.stop_requested())
@@ -201,11 +196,7 @@ DescriptorConfig::Config ErrorSource::validateAndFormat(std::unordered_map<std::
 
 std::ostream& ErrorSource::toString(std::ostream& str) const
 {
-    return str << fmt::format(
-               "\nErrorSource(startPosition: {}, maxRecords: {}, emitted: {})",
-               magic_enum::enum_name(startPosition),
-               maxRecords,
-               numberOfEmittedRecords);
+    return str << fmt::format("\nErrorSource(maxRecords: {}, emitted: {})", maxRecords, numberOfEmittedRecords);
 }
 
 }
