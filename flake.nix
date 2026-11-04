@@ -541,6 +541,14 @@
           '';
         };
 
+        # Nixpkgs ships an unversioned `clang-format`; format.sh prefers the
+        # `clang-format-<version>` name, which otherwise resolves to a leaked system
+        # binary. A plain symlink breaks the nixpkgs wrapper (it dispatches on
+        # argv0's basename), so wrap it explicitly to force the nix toolchain.
+        clangFormatVersioned = pkgs.writeShellScriptBin "clang-format-${llvmToolchainVersion}" ''
+          exec ${llvm.clang-tools}/bin/clang-format "$@"
+        '';
+
         formatRunner = pkgs.writeShellApplication {
           name = "nes-format";
           runtimeInputs =
@@ -553,8 +561,9 @@
               pkgs.gnused
               pkgs.gawk
               pkgs.python3
-              pkgs.rustfmt
+              rustToolchain
               pkgs.util-linux
+              clangFormatVersioned
             ]
             ++ llvmTools;
           text = ''
@@ -582,7 +591,7 @@
 
         clangTidyDiffRunner = pkgs.writeShellApplication {
           name = clangTidyDiffCommand;
-          runtimeInputs = [ pkgs.python3 ];
+          runtimeInputs = [ (pkgs.python3.withPackages (ps: [ ps.pyyaml ])) ];
           text = ''
             exec python3 ${clangTidyDiffScript} "$@"
           '';

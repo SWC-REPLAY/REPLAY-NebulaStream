@@ -39,6 +39,7 @@ jobs:
       head_sha: ${{ needs.fetch-current-main-commit.outputs.sha }}
 
   quick-start:
+    if: github.repository == 'nebulastream/nebulastream'
     needs: fetch-current-main-commit
     uses: ./.github/workflows/nightly-quick-start.yml
     with:
@@ -159,7 +160,7 @@ jobs:
     # Only publish the `:latest` release image when the nightly job actually runs on `main`
     # (scheduled run, or a manual dispatch from the `main` branch). This prevents anyone
     # triggering the nightly on a different branch from unintentionally overwriting `:latest`.
-    if: ${{ !github.event.act && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'nebulastream/nebulastream' && !github.event.act && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/create_executable_images.yml
     secrets: inherit
     with:

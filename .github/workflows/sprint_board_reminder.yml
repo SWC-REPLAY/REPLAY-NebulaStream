@@ -7,6 +7,7 @@ on:
     - cron: '0 10 * * 2'
 jobs:
   send-zulip:
+    if: github.repository == 'nebulastream/nebulastream'
     runs-on: [ self-hosted ]
     steps:
       - name: Notify Zulip

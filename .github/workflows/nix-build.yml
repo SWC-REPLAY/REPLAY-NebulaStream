@@ -1,4 +1,6 @@
 name: Nix Build
+# A dispatched run is recorded against the branch tip, so the name is the only link to the commit it tested.
+run-name: Nix Build ${{ inputs.head_sha || github.sha }}
 
 on:
   workflow_call:
@@ -21,6 +23,14 @@ on:
         type: string
         required: false
         description: "ref of the branch"
+      number_of_commits:
+        type: number
+        required: false
+        default: -1
+      run_format_check:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -65,7 +75,7 @@ jobs:
 
       - name: Configure via devShell
         run: |
-          ./.nix/nix-cmake.sh -DCMAKE_BUILD_TYPE=Debug -DUSE_BUILD_CACHE=OFF -DNES_SPLIT_TEST_BINARIES=OFF -DCMAKE_C_COMPILER_LAUNCHER="$SCCACHE_BIN" -DCMAKE_CXX_COMPILER_LAUNCHER="$SCCACHE_BIN" -G Ninja -S . -B cmake-build-nix
+          ./.nix/nix-cmake.sh -DCMAKE_BUILD_TYPE=Debug -DNES_SPLIT_TEST_BINARIES=OFF -G Ninja -S . -B cmake-build-nix
 
       - name: Build via devShell
         run: |
