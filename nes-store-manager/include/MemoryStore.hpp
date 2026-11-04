@@ -22,7 +22,6 @@
 #include <string_view>
 #include <vector>
 
-#include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
@@ -42,22 +41,22 @@ public:
     };
 
     /// Standalone constructor (no chaining).
-    explicit MemoryStore(const Schema& schema);
-    MemoryStore(const Schema& schema, Config config);
+    explicit MemoryStore(StoreSchema schema);
+    MemoryStore(StoreSchema schema, Config config);
 
     /// Chained constructor: this store flushes to nextLevel when the policy triggers.
     /// The transformation is validated at construction to ensure the store pair is compatible.
-    MemoryStore(const Schema& schema, Config config, Store nextLevel, FlushPolicy policy);
+    MemoryStore(StoreSchema schema, Config config, Store nextLevel, FlushPolicy policy);
 
     void open();
     void close(Store& self);
     void flush(Store& self);
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& schema);
+    void write(TupleBuffer buffer, const StoreSchema& schema, Store& self);
+    uint64_t read(TupleBuffer& buffer, const StoreSchema& schema);
     [[nodiscard]] bool hasMore() const;
 
-    [[nodiscard]] Schema getSchema() const;
+    [[nodiscard]] StoreSchema getSchema() const;
     [[nodiscard]] uint64_t size() const;
 
     [[nodiscard]] static std::string_view typeName() noexcept { return "MemoryStore"; }
@@ -69,7 +68,7 @@ public:
     std::vector<TupleBuffer> drain();
 
 private:
-    Schema schema;
+    StoreSchema schema;
     Config config;
     std::deque<TupleBuffer> buffers;
     uint64_t currentSize{0};

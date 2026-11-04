@@ -18,14 +18,22 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
-#include <regex>
+#include <span>
+#include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include <DataTypes/DataType.hpp>
 #include <DataTypes/DataTypeProvider.hpp>
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
+#include <Identifiers/QualifiedIdentifier.hpp>
+#include <Schema/Schema.hpp>
 #include <Util/FNV.hpp>
+#include <fmt/format.h>
+#include <magic_enum/magic_enum.hpp>
 #include <ErrorHandling.hpp>
+#include <Store.hpp>
 
 namespace NES::StoreManager
 {
@@ -91,27 +99,31 @@ std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs)
     return {header, dataStartOffset};
 }
 
-Schema parseSchemaFromText(const std::string& schemaText)
+std::string serializeSchemaText(const StoreSchema& schema)
 {
-    Schema schema;
-    const std::regex fieldRegex(R"(Field\(name:\s*([\w.$]+),\s*DataType:\s*DataType\(type:\s*(\w+)\)\))");
-    auto begin = std::sregex_iterator(schemaText.begin(), schemaText.end(), fieldRegex);
-    auto end = std::sregex_iterator();
-    for (auto it = begin; it != end; ++it)
+    std::string text;
+    for (const auto& field : schema)
     {
-        const auto& match = *it;
-        auto fieldName = match[1].str();
-        if (const auto pos = fieldName.rfind('$'); pos != std::string::npos)
-        {
-            fieldName = fieldName.substr(pos + 1);
-        }
-        schema.addField(fieldName, DataTypeProvider::provideDataType(match[2].str()));
+        text += fmt::format("{} {}\n", field.getFullyQualifiedName(), magic_enum::enum_name(field.getDataType().type));
     }
-    if (schema.getNumberOfFields() == 0)
+    return text;
+}
+
+StoreSchema parseSchemaFromText(const std::string& schemaText)
+{
+    std::vector<QualifiedUnboundField> fields;
+    std::istringstream lines(schemaText);
+    std::string name;
+    std::string type;
+    while (lines >> name >> type)
+    {
+        fields.emplace_back(QualifiedIdentifierBase<std::dynamic_extent>::parse(name), DataTypeProvider::provideDataType(type));
+    }
+    if (fields.empty())
     {
         throw InvalidConfigParameter("parseSchemaFromText: no fields parsed from: {}", schemaText);
     }
-    return schema;
+    return StoreSchema{std::move(fields)};
 }
 
 }

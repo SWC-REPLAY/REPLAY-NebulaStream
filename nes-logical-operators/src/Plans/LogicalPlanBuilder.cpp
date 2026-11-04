@@ -93,6 +93,11 @@ LogicalPlan LogicalPlanBuilder::addProjection(
         queryPlan, ProjectionLogicalOperator::create(std::move(projections), ProjectionLogicalOperator::Asterisk(asterisk)));
 }
 
+LogicalPlan LogicalPlanBuilder::addReplayStore(std::string storeName, const LogicalPlan& queryPlan)
+{
+    return promoteOperatorToRoot(queryPlan, ReplayStoreLogicalOperator::create(std::move(storeName)));
+}
+
 LogicalPlan LogicalPlanBuilder::addSelection(LogicalFunction selectionFunction, const LogicalPlan& queryPlan)
 {
     NES_TRACE("LogicalPlanBuilder: add selection operator to query plan");

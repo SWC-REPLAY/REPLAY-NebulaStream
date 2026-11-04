@@ -351,13 +351,13 @@ functionName:  IDENTIFIER | AVG | MAX | MIN | SUM | COUNT | MEDIAN;
 
 sinkClause: INTO sink (',' sink)*;
 
+timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
+
 sink: identifier | anonymousSink;
 
 anonymousSink
     : type=identifier '(' parameters=namedConfigExpressionSeq ')'
     ;
-
-timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
 
 nullNotnull
     : NOT? NULLTOKEN
@@ -530,6 +530,7 @@ WHERE: 'WHERE' | 'where';
 WINDOW: 'WINDOW' | 'window';
 WITH: 'WITH';
 SET: 'SET';
+TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
 TUMBLING: 'TUMBLING' | 'tumbling';
 SLIDING: 'SLIDING' | 'sliding';
 THRESHOLD : 'THRESHOLD'|'threshold';
@@ -553,7 +554,6 @@ AT_MOST_ONCE : 'AT_MOST_ONCE';
 AT_LEAST_ONCE : 'AT_LEAST_ONCE';
 JSON: 'JSON';
 TEXT: 'TEXT';
-TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
 EXPLAIN: 'EXPLAIN' | 'explain';
 MODEL: 'MODEL';
 MODELS: 'MODELS';

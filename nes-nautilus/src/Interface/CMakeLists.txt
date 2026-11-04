@@ -21,5 +21,4 @@ add_source_files(nes-nautilus
         NautilusBuffer.cpp
         RecordLayoutUtil.cpp
         VariableSizedAccess.cpp
-        BinaryRowEncoder.cpp
 )

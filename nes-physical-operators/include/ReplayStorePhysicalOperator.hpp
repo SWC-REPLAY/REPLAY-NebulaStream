@@ -14,12 +14,9 @@
 
 #pragma once
 
-#include <cstdint>
 #include <memory>
 #include <optional>
-#include <string>
 
-#include <DataTypes/Schema.hpp>
 #include <Interface/BufferRef/TupleBufferRef.hpp>
 #include <Interface/Record.hpp>
 #include <Interface/RecordBuffer.hpp>
@@ -31,13 +28,15 @@
 namespace NES
 {
 
+class ReplayStoreState;
+
 /// Physical operator that accumulates parsed records into a staging TupleBuffer
 /// and writes the buffer to a store via an operator handler.
 /// The record is forwarded to its child unchanged.
 class ReplayStorePhysicalOperator final : public PhysicalOperatorConcept
 {
 public:
-    ReplayStorePhysicalOperator(OperatorHandlerId handlerId, const Schema& inputSchema, std::shared_ptr<TupleBufferRef> bufferRef);
+    ReplayStorePhysicalOperator(OperatorHandlerId handlerId, std::shared_ptr<TupleBufferRef> bufferRef);
 
     void setup(ExecutionContext& executionCtx, CompilationContext& compilationContext) const override;
     void open(ExecutionContext& executionCtx, RecordBuffer& recordBuffer) const override;
@@ -49,10 +48,9 @@ public:
     void setChild(PhysicalOperator child) override;
 
 private:
-    [[nodiscard]] uint64_t getMaxRecordsPerBuffer() const;
+    void writeStagingBuffer(ExecutionContext& executionCtx, ReplayStoreState& state) const;
 
     OperatorHandlerId handlerId;
-    Schema inputSchema;
     std::shared_ptr<TupleBufferRef> bufferRef;
     std::optional<PhysicalOperator> child;
 };

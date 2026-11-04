@@ -24,7 +24,7 @@
 #include <string>
 #include <utility>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
@@ -32,7 +32,6 @@
 #include <ReplayStoreReader.hpp>
 #include <Store.hpp>
 #include <StoreTransformation.hpp>
-#include <StoreTypeRegistry.hpp>
 
 namespace NES::StoreManager
 {
@@ -50,17 +49,17 @@ std::string generateFilePath(const FileStore::Config& cfg)
 }
 }
 
-FileStore::FileStore(Config config, const Schema& schema)
+FileStore::FileStore(Config config, StoreSchema schema)
     : config(std::move(config))
-    , schema(schema)
+    , schema(std::move(schema))
     , filePath(generateFilePath(this->config))
     , writer(BinaryStoreWriter::Config{.storeName = this->config.storeName, .filePath = filePath, .schemaText = this->config.schemaText})
 {
 }
 
-FileStore::FileStore(Config config, const Schema& schema, Store nextLevel, StoreTransformation transformation, FlushPolicy policy)
+FileStore::FileStore(Config config, StoreSchema schema, Store nextLevel, StoreTransformation transformation, FlushPolicy policy)
     : config(std::move(config))
-    , schema(schema)
+    , schema(std::move(schema))
     , filePath(generateFilePath(this->config))
     , writer(BinaryStoreWriter::Config{.storeName = this->config.storeName, .filePath = filePath, .schemaText = this->config.schemaText})
     , nextLevel(std::move(nextLevel))
@@ -110,12 +109,12 @@ void FileStore::flush([[maybe_unused]] Store& self)
     }
 }
 
-void FileStore::write(TupleBuffer buffer, const Schema& writeSchema, [[maybe_unused]] Store& self)
+void FileStore::write(TupleBuffer buffer, const StoreSchema& writeSchema, [[maybe_unused]] Store& self)
 {
     PRECONDITION(writerOpened, "FileStore must be opened before writing");
 
     /// Update schema from the write-time schema which has resolved types
-    if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
+    if (writeSchema.size() > 0 && schema.size() == 0)
     {
         schema = writeSchema;
     }
@@ -136,7 +135,7 @@ void FileStore::write(TupleBuffer buffer, const Schema& writeSchema, [[maybe_unu
     writer.append(srcSpan.data(), totalBytes);
 }
 
-uint64_t FileStore::read(TupleBuffer& buffer, const Schema& readSchema)
+uint64_t FileStore::read(TupleBuffer& buffer, const StoreSchema& readSchema)
 {
     if (nextLevel)
     {
@@ -210,7 +209,7 @@ bool FileStore::hasMore() const
     return false;
 }
 
-Schema FileStore::getSchema() const
+StoreSchema FileStore::getSchema() const
 {
     return schema;
 }
@@ -225,15 +224,15 @@ void FileStore::removeFile()
     writer.removeFile();
 }
 
-uint32_t FileStore::calculateRowWidth(const Schema& schema)
+uint32_t FileStore::calculateRowWidth(const StoreSchema& schema)
 {
     uint32_t width = 0;
-    for (size_t i = 0; i < schema.getNumberOfFields(); ++i)
+    for (const auto& field : schema)
     {
-        auto type = schema.getFieldAt(i).dataType;
+        auto type = field.getDataType();
         if (type.isType(DataType::Type::VARSIZED))
         {
-            width += sizeof(uint32_t); /// TODO #11: Add Varsized Support
+            width += sizeof(uint32_t); /// TODO #11: Add Varsized Support NO_TODO_CHECK
         }
         else
         {
@@ -243,22 +242,4 @@ uint32_t FileStore::calculateRowWidth(const Schema& schema)
     return width;
 }
 
-}
-
-namespace NES
-{
-
-/// NOLINTNEXTLINE(performance-unnecessary-value-param)
-StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterFileStoreStoreType(StoreTypeRegistryArguments args)
-{
-    PRECONDITION(args.config.contains("store_dir"), "args must contain store_dir");
-    PRECONDITION(args.config.contains("store_type"), "args must contain store_type");
-    PRECONDITION(args.config.contains("schema_text"), "args must contain schema_text");
-
-    const auto filePath = args.config.at("store_dir");
-    const auto storeName = args.config.at("store_name");
-    const auto schemaText = args.config.at("schema_text");
-    return StoreManager::makeStore<StoreManager::FileStore>(
-        StoreManager::FileStore::Config{.storeName = storeName, .storeDir = filePath, .schemaText = schemaText}, std::move(args.schema));
-}
 }

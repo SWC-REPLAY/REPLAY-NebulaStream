@@ -19,7 +19,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -63,6 +62,7 @@ public:
     bool isSelect = false;
     bool isWhereOrHaving = false;
     bool isFrom = false;
+    std::optional<std::string> replayStoreName;
     bool isWindow = false;
     bool isArithmeticBinary = false;
     bool isJoinRelation = false;
@@ -88,7 +88,6 @@ public:
     std::vector<Identifier> joinSources;
     std::vector<LogicalFunction> joinKeyRelationHelper;
     JoinLogicalOperator::JoinType joinType = JoinLogicalOperator::JoinType::INNER_JOIN;
-    std::optional<std::unordered_map<std::string, std::string>> storeOptions;
 
     /// Utility variables to keep state between enter/exit parser function calls.
     size_t opBoolean{}; ///anonymous token enum in AntlrSQLLexer.h

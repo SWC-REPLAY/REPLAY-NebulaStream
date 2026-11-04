@@ -20,7 +20,6 @@
 #include <string>
 #include <string_view>
 
-#include <DataTypes/Schema.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <BinaryStoreWriter.hpp>
 #include <FlushPolicy.hpp>
@@ -45,10 +44,10 @@ public:
     };
 
     /// Standalone constructor (no chaining).
-    explicit FileStore(Config config, const Schema& schema);
+    explicit FileStore(Config config, StoreSchema schema);
 
     /// Chained constructor: this store flushes to nextLevel when the policy triggers.
-    FileStore(Config config, const Schema& schema, Store nextLevel, StoreTransformation transformation, FlushPolicy policy);
+    FileStore(Config config, StoreSchema schema, Store nextLevel, StoreTransformation transformation, FlushPolicy policy);
 
     ~FileStore();
 
@@ -61,11 +60,11 @@ public:
     void close(Store& self);
     void flush(Store& self);
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self);
-    uint64_t read(TupleBuffer& buffer, const Schema& schema);
+    void write(TupleBuffer buffer, const StoreSchema& schema, Store& self);
+    uint64_t read(TupleBuffer& buffer, const StoreSchema& schema);
     [[nodiscard]] bool hasMore() const;
 
-    [[nodiscard]] Schema getSchema() const;
+    [[nodiscard]] StoreSchema getSchema() const;
     [[nodiscard]] uint64_t size() const;
 
     [[nodiscard]] static std::string_view typeName() noexcept { return "FileStore"; }
@@ -76,10 +75,10 @@ public:
 
 private:
     /// Calculate packed row width from schema (no padding, matching binary format).
-    static uint32_t calculateRowWidth(const Schema& schema);
+    static uint32_t calculateRowWidth(const StoreSchema& schema);
 
     Config config;
-    Schema schema;
+    StoreSchema schema;
     std::string filePath;
     BinaryStoreWriter writer;
     std::unique_ptr<ReplayStoreReader> reader;

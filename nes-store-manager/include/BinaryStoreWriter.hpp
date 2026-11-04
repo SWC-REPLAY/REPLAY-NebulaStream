@@ -64,7 +64,6 @@ private:
     std::atomic<uint64_t> tail{0};
     std::atomic<bool> headerWritten{false};
     Config config;
-    uint64_t writesSinceSync{0};
 };
 
 }

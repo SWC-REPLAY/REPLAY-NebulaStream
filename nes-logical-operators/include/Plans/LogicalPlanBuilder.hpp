@@ -65,6 +65,7 @@ public:
     /// @param selectionFunction a function node containing the predicate
     /// @param LogicalPlan the queryPlan the selection node is added to
     /// @return the updated queryPlan
+    static LogicalPlan addReplayStore(std::string storeName, const LogicalPlan& queryPlan);
     static LogicalPlan addSelection(LogicalFunction selectionFunction, const LogicalPlan& queryPlan);
 
     static LogicalPlan addWindowAggregation(
@@ -105,7 +106,6 @@ public:
         std::unordered_map<Identifier, std::string> formatConfig,
         const LogicalPlan& queryPlan);
 
-    static LogicalPlan addReplayStore(const DescriptorConfig::Config& config, const LogicalPlan& queryplan);
     /// Checks in case a window is contained in the query.
     /// If a watermark operator exists in the queryPlan and if not adds a watermark strategy to the queryPlan.
     static LogicalPlan checkAndAddWatermarkAssigner(LogicalPlan queryPlan, const Windowing::TimeCharacteristic& timeCharacteristic);

@@ -17,7 +17,6 @@
 #include <cstdint>
 #include <string>
 
-#include <DataTypes/Schema.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -33,13 +32,13 @@ public:
     struct Config
     {
         std::string storeName;
-        Schema schema;
+        StoreSchema schema;
     };
 
     ReplayStoreOperatorHandler(Config cfg, StoreManager::Store store);
     ~ReplayStoreOperatorHandler() override = default;
 
-    void start(PipelineExecutionContext& pipelineExecutionContext, uint32_t localStateVariableId) override;
+    void start(PipelineExecutionContext& pipelineExecutionContext) override;
     void stop(QueryTerminationType terminationType, PipelineExecutionContext& pipelineExecutionContext) override;
 
     /// Write a TupleBuffer to the store.

@@ -49,6 +49,7 @@ void BinaryStoreWriter::open()
 {
     constexpr int flags = O_CREAT | O_WRONLY;
     const std::string& filePath = config.filePath;
+    /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) - POSIX API requires varargs
     fd = ::open(filePath.c_str(), flags, 0644);
     if (fd < 0)
     {
@@ -123,7 +124,7 @@ void BinaryStoreWriter::append(const uint8_t* data, size_t len)
     }
     const uint64_t off = tail.fetch_add(len, std::memory_order_relaxed);
     const ssize_t written = ::pwrite(fd, data, len, static_cast<off_t>(off));
-    if (written < 0 || static_cast<size_t>(written) != len)
+    if (written < 0 || std::cmp_not_equal(written, len))
     {
         throw CannotOpenSink("pwrite failed: errno={} {}", errno, std::strerror(errno));
     }

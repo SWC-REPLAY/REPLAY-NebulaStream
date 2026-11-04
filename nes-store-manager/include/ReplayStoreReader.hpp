@@ -20,8 +20,8 @@
 #include <iosfwd>
 #include <string>
 
-#include <DataTypes/Schema.hpp>
 #include <ReplayStoreFormat.hpp>
+#include <Store.hpp>
 
 namespace NES::StoreManager
 {
@@ -45,16 +45,16 @@ public:
     void close();
 
     /// Return the schema embedded in the file header.
-    [[nodiscard]] Schema readSchema() const;
+    [[nodiscard]] StoreSchema readSchema() const;
 
     /// Verify that the given expected schema matches the schema stored in the file header.
     /// Throws on mismatch.
-    void verifySchema(const Schema& expectedSchema) const;
+    void verifySchema(const StoreSchema& expectedSchema) const;
 
     /// Read fixed-size rows from the file into a destination buffer.
     /// Handles both fixed-width and variable-sized fields per the binary format.
     /// Returns the number of complete rows successfully read.
-    uint64_t readRows(char* dest, uint64_t maxRows, uint32_t tupleSize, const Schema& schema);
+    uint64_t readRows(char* dest, uint64_t maxRows, uint32_t tupleSize, const StoreSchema& schema);
 
     /// Check whether the end of file has been reached.
     [[nodiscard]] bool isEof() const;
@@ -78,7 +78,7 @@ public:
     [[nodiscard]] int peek();
 
     /// Static helper: read schema from a file without keeping it open.
-    static Schema readSchemaFromFile(const std::string& filePath);
+    static StoreSchema readSchemaFromFile(const std::string& filePath);
 
 private:
     std::string filePath;
