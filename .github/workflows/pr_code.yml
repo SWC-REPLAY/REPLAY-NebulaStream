@@ -10,7 +10,9 @@ on:
   workflow_call:
 
 jobs:
+  # Forks have no self-hosted runners; every job needing the dev image skips with this one.
   get-dev-images:
+    if: github.repository == 'nebulastream/nebulastream'
     uses: ./.github/workflows/get_dev_images.yml
     secrets: inherit
     with:
@@ -90,9 +92,12 @@ jobs:
     secrets: inherit
 
   nix-build:
+    if: always() && (github.repository != 'nebulastream/nebulastream' || needs.smoke-tests.result == 'success')
     needs: [ smoke-tests ]
     name: "Run Nix Build"
     uses: ./.github/workflows/nix-build.yml
     secrets: inherit
     with:
       head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      number_of_commits: ${{ github.event.pull_request.commits || -1 }}
+      run_format_check: ${{ github.repository != 'nebulastream/nebulastream' }}

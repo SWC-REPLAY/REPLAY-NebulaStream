@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   assign-reviewers:
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ github.repository == 'nebulastream/nebulastream' && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       # The default token cannot read team members, so the NES-Reviewer-Assignment app is used
