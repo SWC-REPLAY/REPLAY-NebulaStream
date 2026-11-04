@@ -553,7 +553,8 @@ TEST_F(StatementBinderTest, BindCreateBindSource)
     const auto [sourceName, schema] = dropped2Result.value();
     ASSERT_EQ(sourceName, Identifier::parse("TESTSOURCE"));
     auto remainingLogicalSources = sourceCatalog->getLogicalToPhysicalSourceMapping();
-    ASSERT_EQ(remainingLogicalSources.size(), 0);
+    /// ERROR_SOURCE is built in.
+    ASSERT_EQ(remainingLogicalSources.size(), 1);
 }
 
 TEST_F(StatementBinderTest, BindCreateBindSourceWithInvalidConfigs)
@@ -666,7 +667,8 @@ TEST_F(StatementBinderTest, ShowLogicalSources)
     ASSERT_TRUE(format == StatementOutputFormat::JSON);
     const auto allSourcesStatementResult = sourceStatementHandler->apply(std::get<ShowLogicalSourcesStatement>(*allSourcesStatementExp));
     ASSERT_TRUE(allSourcesStatementResult.has_value());
-    ASSERT_EQ(allSourcesStatementResult.value().sources.size(), 2);
+    /// The two above and the built-in ERROR_SOURCE.
+    ASSERT_EQ(allSourcesStatementResult.value().sources.size(), 3);
 
     const auto filteredQuotedStatementExp = binder->parseAndBindSingle(filteredQuotedLogicalQueryString);
     ASSERT_TRUE(filteredQuotedStatementExp.has_value());

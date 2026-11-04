@@ -327,6 +327,46 @@ TEST_F(SourceCatalogTest, ConcurrentSourceCatalogModification)
         failedPhysicalAdds,
         failedLogicalAdds);
 }
+
+TEST_F(SourceCatalogTest, ErrorSourceExistsFromTheStartWithoutWorkers)
+{
+    const auto sourceCatalog = SourceCatalog{};
+    const auto errorSource = sourceCatalog.getLogicalSource(Identifier::parse(SourceCatalog::ERROR_SOURCE_NAME));
+    ASSERT_TRUE(errorSource.has_value());
+    ASSERT_EQ(errorSource->getSchema()->size(), 7);
+    const auto physicalSources = sourceCatalog.getPhysicalSources(*errorSource);
+    ASSERT_TRUE(physicalSources.has_value());
+    ASSERT_TRUE(physicalSources->empty());
+}
+
+TEST_F(SourceCatalogTest, ErrorSourceFollowsTheWorkers)
+{
+    auto sourceCatalog = SourceCatalog{};
+    const auto errorSource = sourceCatalog.getLogicalSource(Identifier::parse(SourceCatalog::ERROR_SOURCE_NAME));
+    ASSERT_TRUE(errorSource.has_value());
+
+    sourceCatalog.addErrorSource(Host("worker-1:8080"));
+    sourceCatalog.addErrorSource(Host("worker-2:8080"));
+    ASSERT_EQ(sourceCatalog.getPhysicalSources(*errorSource)->size(), 2);
+
+    sourceCatalog.removeErrorSource(Host("worker-1:8080"));
+    const auto remaining = sourceCatalog.getPhysicalSources(*errorSource);
+    ASSERT_EQ(remaining->size(), 1);
+    ASSERT_EQ(remaining->begin()->getHost(), Host("worker-2:8080"));
+    ASSERT_EQ(remaining->begin()->getInputFormatType(), "NATIVE");
+}
+
+TEST_F(SourceCatalogTest, ErrorSourceDroppedByTheUserStaysDropped)
+{
+    auto sourceCatalog = SourceCatalog{};
+    const auto errorSource = sourceCatalog.getLogicalSource(Identifier::parse(SourceCatalog::ERROR_SOURCE_NAME));
+    ASSERT_TRUE(errorSource.has_value());
+    ASSERT_TRUE(sourceCatalog.removeLogicalSource(*errorSource));
+
+    sourceCatalog.addErrorSource(Host("worker-1:8080"));
+    sourceCatalog.removeErrorSource(Host("worker-1:8080"));
+    ASSERT_FALSE(sourceCatalog.containsLogicalSource(Identifier::parse(SourceCatalog::ERROR_SOURCE_NAME)));
+}
 }
 
 /// NOLINTEND(bugprone-unchecked-optional-access)

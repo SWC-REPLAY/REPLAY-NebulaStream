@@ -35,6 +35,8 @@
 #include <Configurations/ConfigParsing.hpp>
 #include <Configurations/ConfigResolution.hpp>
 #include <Configurations/InstantiatedConfigValue.hpp>
+#include <DataTypes/DataType.hpp>
+#include <DataTypes/DataTypeProvider.hpp>
 #include <DataTypes/UnboundField.hpp>
 #include <Identifiers/Identifier.hpp>
 #include <Identifiers/Identifiers.hpp>
@@ -164,6 +166,20 @@ SourceConfigSchema::resolveConfigs(const Schema<LiteralConfigValue, Ordered>& va
 
 SourceCatalog::SourceCatalog(Private)
 {
+    const auto nullable
+        = [](const DataType::Type type) { return DataTypeProvider::provideDataType(type, DataType::NULLABLE::IS_NULLABLE); };
+    /// The fields of ErrorSource; the query fields are NULL for errors outside a query task.
+    const auto added = addLogicalSource(
+        Identifier::parse(ERROR_SOURCE_NAME),
+        Schema<UnqualifiedUnboundField, Ordered>{
+            UnqualifiedUnboundField{Identifier::parse("error_code"), DataType::Type::UINT64},
+            UnqualifiedUnboundField{Identifier::parse("message"), DataType::Type::VARSIZED},
+            UnqualifiedUnboundField{Identifier::parse("query_id"), nullable(DataType::Type::VARSIZED)},
+            UnqualifiedUnboundField{Identifier::parse("distributed_query_id"), nullable(DataType::Type::VARSIZED)},
+            UnqualifiedUnboundField{Identifier::parse("pipeline_id"), nullable(DataType::Type::UINT64)},
+            UnqualifiedUnboundField{Identifier::parse("node"), DataType::Type::VARSIZED},
+            UnqualifiedUnboundField{Identifier::parse("ts"), DataType::Type::UINT64}});
+    INVARIANT(added.has_value(), "A new catalog is empty, so {} cannot exist yet", ERROR_SOURCE_NAME);
 }
 
 SharedPtr<SourceCatalog> SourceCatalog::create()
@@ -239,6 +255,41 @@ SourceCatalog::registerWithLogicalSource(PhysicalSourceBuilder builder, const Id
                 idsToPhysicalSources.emplace(descriptor.getPhysicalSourceId(), descriptor);
                 return descriptor;
             });
+}
+
+void SourceCatalog::addErrorSource(const Host& worker)
+{
+    const std::unique_lock lock(catalogMutex);
+    const auto errorSource = getLogicalSource(Identifier::parse(ERROR_SOURCE_NAME));
+    if (not errorSource)
+    {
+        return;
+    }
+    auto created = addPhysicalSource(
+        *errorSource, Identifier::parse("Error"), worker, {}, {{Identifier::parse(InputFormatterDescriptor::getTypeString()), "NATIVE"}});
+    if (not created)
+    {
+        throw std::move(created).error();
+    }
+}
+
+void SourceCatalog::removeErrorSource(const Host& worker)
+{
+    const std::unique_lock lock(catalogMutex);
+    const auto errorSource = getLogicalSource(Identifier::parse(ERROR_SOURCE_NAME));
+    if (not errorSource)
+    {
+        return;
+    }
+    /// A copy, because removing a physical source changes the set in the catalog.
+    for (const auto& physicalSource : getPhysicalSources(*errorSource).value_or(std::unordered_set<SourceDescriptor>{}))
+    {
+        if (physicalSource.getHost() == worker)
+        {
+            const auto removed = removePhysicalSource(physicalSource);
+            INVARIANT(removed, "Physical source {} was found in the catalog while holding its lock", physicalSource.getPhysicalSourceId());
+        }
+    }
 }
 
 std::optional<LogicalSource> SourceCatalog::getLogicalSource(const Identifier& logicalSourceName) const

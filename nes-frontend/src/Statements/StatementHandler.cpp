@@ -417,8 +417,9 @@ std::expected<QueryStatementResult, Exception> QueryStatementHandler::operator()
     std::unreachable();
 }
 
-TopologyStatementHandler::TopologyStatementHandler(SharedPtr<QueryManager> queryManager, SharedPtr<WorkerCatalog> workerCatalog)
-    : queryManager(std::move(queryManager)), workerCatalog(std::move(workerCatalog))
+TopologyStatementHandler::TopologyStatementHandler(
+    SharedPtr<QueryManager> queryManager, SharedPtr<WorkerCatalog> workerCatalog, std::shared_ptr<SourceCatalog> sourceCatalog)
+    : queryManager(std::move(queryManager)), workerCatalog(std::move(workerCatalog)), sourceCatalog(std::move(sourceCatalog))
 {
 }
 
@@ -515,6 +516,7 @@ std::expected<CreateWorkerStatementResult, Exception> TopologyStatementHandler::
     {
         return std::unexpected(InvalidTopology("Duplicate worker host '{}'", statement.host));
     }
+    sourceCatalog->addErrorSource(Host(statement.host));
     return CreateWorkerStatementResult{Host(statement.host)};
 }
 
@@ -523,6 +525,7 @@ std::expected<DropWorkerStatementResult, Exception> TopologyStatementHandler::op
     const auto workerConfigOpt = workerCatalog->removeWorker(Host(statement.host));
     if (workerConfigOpt)
     {
+        sourceCatalog->removeErrorSource(workerConfigOpt->host);
         return DropWorkerStatementResult{workerConfigOpt->host};
     }
     return std::unexpected(UnknownWorker(": '{}'", statement.host));

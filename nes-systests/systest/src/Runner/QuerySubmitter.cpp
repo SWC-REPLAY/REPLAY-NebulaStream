@@ -15,6 +15,7 @@
 #include <Runner/QuerySubmitter.hpp>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <ranges>
 #include <string>
@@ -26,6 +27,7 @@
 #include <Plans/LogicalPlan.hpp>
 #include <QueryManager/QueryManager.hpp>
 #include <Serialization/QueryPlanSerializationUtil.hpp>
+#include <Util/Logger/Logger.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -88,6 +90,11 @@ void QuerySubmitter::stopQuery(const DistributedQueryId& query)
     }
 }
 
+void QuerySubmitter::stopWhen(const DistributedQueryId& query, std::function<bool()> condition)
+{
+    stopConditions.insert_or_assign(query, std::move(condition));
+}
+
 DistributedQueryStatusSnapshot QuerySubmitter::waitForQueryTermination(const DistributedQueryId& query)
 {
     while (true)
@@ -105,6 +112,21 @@ DistributedQueryStatusSnapshot QuerySubmitter::waitForQueryTermination(const Dis
         {
             return *queryStatus;
         }
+    }
+}
+
+void QuerySubmitter::stopIfConditionHolds(const DistributedQueryId& query)
+{
+    const auto stopCondition = stopConditions.find(query);
+    if (stopCondition == stopConditions.end() or not stopCondition->second())
+    {
+        return;
+    }
+    stopConditions.erase(stopCondition);
+    /// A failed stop is not reported: the query either ended by itself or runs into the timeout of finishedQueries.
+    if (auto stopped = queryManager->stop(query); not stopped.has_value())
+    {
+        NES_WARNING("Could not stop query {}: {}", query.getRawValue(), stopped.error().at(0).what());
     }
 }
 
@@ -141,7 +163,9 @@ std::vector<FinishedQuery> QuerySubmitter::finishedQueries()
                         fmt::join(stopped.error() | std::views::transform([](const auto& exception) { return exception.what(); }), ", "));
                 }
                 results.push_back(FinishedQuery{.id = id, .outcome = std::unexpected{QueryWaitTimeout("{}", message)}});
+                continue;
             }
+            stopIfConditionHolds(id);
         }
         if (results.empty())
         {
@@ -152,6 +176,7 @@ std::vector<FinishedQuery> QuerySubmitter::finishedQueries()
         for (const auto& finished : results)
         {
             running.erase(finished.id);
+            stopConditions.erase(finished.id);
         }
         return results;
     }

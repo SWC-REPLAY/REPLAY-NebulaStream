@@ -251,7 +251,7 @@ OptimizerAndPlan loadAndBind(std::string_view yamlContent)
     auto queryConfig = YAML::Load(std::string(yamlContent)).as<NES::Test::QueryConfig>();
     auto statements = loadStatements(queryConfig);
 
-    NES::TopologyStatementHandler topologyHandler{nullptr, workers};
+    NES::TopologyStatementHandler topologyHandler{nullptr, workers, sources};
     NES::SinkStatementHandler sinkStatementHandler{sinks, NES::RequireHostConfig{}};
     NES::SourceStatementHandler sourceStatementHandler{sources, NES::RequireHostConfig{}};
 
@@ -1239,6 +1239,32 @@ workers:
     const auto sourcePlans = plan[Host("source-node:8080")];
     ASSERT_EQ(sourcePlans.size(), 4);
     EXPECT_EQ(flatten(source2Plans.front()).size(), 2);
+}
+
+TEST_F(DistributedPlanningTest, ErrorSourceFollowsCreateAndDropWorker)
+{
+    auto sources = std::make_shared<NES::SourceCatalog>();
+    auto workers = std::make_shared<NES::WorkerCatalog>();
+    NES::TopologyStatementHandler topologyHandler{nullptr, workers, sources};
+    const auto errorSource = sources->getLogicalSource(NES::Identifier::parse(NES::SourceCatalog::ERROR_SOURCE_NAME));
+    ASSERT_TRUE(errorSource.has_value());
+
+    const auto created = topologyHandler(
+        NES::CreateWorkerStatement{
+            .host = "worker:8080", .dataAddress = "worker:9090", .maxOperators = std::nullopt, .downstream = {}, .config = {}});
+    ASSERT_TRUE(created.has_value());
+    ASSERT_EQ(sources->getPhysicalSources(*errorSource)->size(), 1);
+
+    /// A rejected duplicate must not add a second physical source.
+    const auto duplicate = topologyHandler(
+        NES::CreateWorkerStatement{
+            .host = "worker:8080", .dataAddress = "worker:9090", .maxOperators = std::nullopt, .downstream = {}, .config = {}});
+    ASSERT_FALSE(duplicate.has_value());
+    ASSERT_EQ(sources->getPhysicalSources(*errorSource)->size(), 1);
+
+    const auto dropped = topologyHandler(NES::DropWorkerStatement{.host = "worker:8080"});
+    ASSERT_TRUE(dropped.has_value());
+    ASSERT_TRUE(sources->getPhysicalSources(*errorSource)->empty());
 }
 
 ///NOLINTEND(bugprone-unchecked-optional-access, readability-identifier-length)

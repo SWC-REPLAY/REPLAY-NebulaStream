@@ -747,7 +747,7 @@ void doQueryManagement(const argparse::ArgumentParser& program, const argparse::
     auto modelCatalog = std::make_shared<NES::ModelCatalog>();
     const auto queryManager = std::make_shared<NES::QueryManager>(workerCatalog, NES::createGRPCBackend(), NES::QueryManagerState{state});
 
-    NES::TopologyStatementHandler topologyHandler{queryManager, workerCatalog};
+    NES::TopologyStatementHandler topologyHandler{queryManager, workerCatalog, sourceCatalog};
     NES::SourceStatementHandler sourceHandler{sourceCatalog, NES::RequireHostConfig{}};
     NES::SinkStatementHandler sinkHandler{sinkCatalog, NES::RequireHostConfig{}};
     NES::ModelStatementHandler modelHandler{modelCatalog};
@@ -788,7 +788,7 @@ void doQuerySubmission(const argparse::ArgumentParser& program, const argparse::
     auto modelCatalog = std::make_shared<NES::ModelCatalog>();
     auto queryManager = std::make_shared<NES::QueryManager>(workerCatalog, NES::createGRPCBackend());
 
-    NES::TopologyStatementHandler topologyHandler{queryManager, workerCatalog};
+    NES::TopologyStatementHandler topologyHandler{queryManager, workerCatalog, sourceCatalog};
     NES::SourceStatementHandler sourceHandler{sourceCatalog, NES::RequireHostConfig{}};
     NES::SinkStatementHandler sinkHandler{sinkCatalog, NES::RequireHostConfig{}};
     NES::ModelStatementHandler modelHandler{modelCatalog};

@@ -29,12 +29,14 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <Config/Config.hpp>
 #include <Configurations/ConfigParsing.hpp>
 #include <Configurations/Util.hpp>
 #include <Model/ConfigurationOverride.hpp>
+#include <Model/Expectation.hpp>
 #include <Model/RunnablePartition.hpp>
 #include <Model/RunnableTestFile.hpp>
 #include <Model/TestCaseId.hpp>
@@ -43,6 +45,7 @@
 #include <QueryManager/GRPCQuerySubmissionBackend.hpp>
 #include <QueryManager/QueryManager.hpp>
 #include <ResultChecker/OutcomeChecker.hpp>
+#include <ResultChecker/QueryResult.hpp>
 #include <Runner/DataStaging.hpp>
 #include <Runner/QuerySubmitter.hpp>
 #include <DistributedQuery.hpp>
@@ -175,6 +178,20 @@ std::optional<DistributedQueryId> TestRunner::submitNext(QuerySubmitter& submitt
         run.timings.emplace_back();
         run.remaining = run.remaining.subspan(1);
         return std::nullopt;
+    }
+    if (const auto* query = std::get_if<RewrittenQuery>(&run.job.testCase.action); query != nullptr and query->readsErrorSource)
+    {
+        const auto* expected = std::get_if<ExpectedRows>(&query->expected);
+        if (expected != nullptr and query->resultFile.has_value())
+        {
+            submitter.stopWhen(
+                *started,
+                [resultFile = *query->resultFile, expectedRows = expected->rows.size()]
+                {
+                    const auto result = loadQueryResult(resultFile);
+                    return result.has_value() and result->tuples.size() >= expectedRows;
+                });
+        }
     }
     return *started;
 }

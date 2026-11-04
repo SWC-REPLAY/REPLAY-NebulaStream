@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -46,15 +47,21 @@ public:
     void stopQuery(const DistributedQueryId& query);
     DistributedQueryStatusSnapshot waitForQueryTermination(const DistributedQueryId& query);
 
+    /// For a query that never ends by itself: finishedQueries stops it the first time `condition` holds.
+    void stopWhen(const DistributedQueryId& query, std::function<bool()> condition);
+
     /// Blocks until at least one query is finished, and returns every finished query.
     /// The submitter stops a query past the timeout and reports it as a timeout error.
     /// A query that never ends then fails its test instead of blocking the whole run.
     std::vector<FinishedQuery> finishedQueries();
 
 private:
+    void stopIfConditionHolds(const DistributedQueryId& query);
+
     UniquePtr<QueryManager> queryManager;
     std::chrono::milliseconds timeout;
     /// The running queries and when each was submitted, which the timeout counts from.
     std::unordered_map<DistributedQueryId, std::chrono::steady_clock::time_point> running;
+    std::unordered_map<DistributedQueryId, std::function<bool()>> stopConditions;
 };
 }

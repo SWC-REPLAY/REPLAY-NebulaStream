@@ -51,6 +51,7 @@ private:
         std::string sql;
         std::optional<std::filesystem::path> resultFile;
         std::vector<std::filesystem::path> inputFiles;
+        bool readsErrorSource = false;
     };
 
     void emitSetup(std::vector<ClassifiedCreate> setup, bool submitsDeclaredSinks);

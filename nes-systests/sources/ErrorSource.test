@@ -14,12 +14,11 @@ ATTACH INLINE
 {"KEY":{"value": 1}, "VALUE":1, "NAME":"john"}
 {"KEY":1, "VALUE":2, "NAME":"max"}
 
-# The Error source writes NATIVE tuples of the declared fields; the sinks of the queries choose CSV or JSON.
-# query_id, distributed_query_id and pipeline_id are NULL for errors outside a query task, so they must be nullable.
-CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, query_id VARSIZED, distributed_query_id VARSIZED, pipeline_id UINT64, node VARSIZED NOT NULL, ts UINT64 NOT NULL);
-CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
+# ERROR_SOURCE is built in: every worker has a physical source of it, and it never ends, so the systest stops a query on it
+# when the expected rows have arrived.
 
-# A second logical source on the errors of the same worker: a subset of the fields, in another order.
+# A source declared by hand on the errors of the same worker: a subset of the fields, in another order, ended by MAX_RECORDS.
+# query_id, distributed_query_id and pipeline_id are NULL for errors outside a query task, so they must be nullable.
 CREATE LOGICAL SOURCE errorCodes(ts UINT64 NOT NULL, error_code UINT64 NOT NULL);
 CREATE PHYSICAL SOURCE FOR errorCodes TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 2 AS "SOURCE".MAX_RECORDS);
 
@@ -33,7 +32,7 @@ CREATE SINK allFieldsSink(key UINT64 NOT NULL, value UINT64 NOT NULL, name VARSI
 CREATE SINK errorCodeSink(error_code UINT64 NOT NULL) TYPE File;
 
 # Workers do not collect errors unless enable_error_source is set, so the Error source cannot be created.
-SELECT error_code FROM errors INTO errorCodeSink;
+SELECT error_code FROM ERROR_SOURCE INTO errorCodeSink;
 ----
 ERROR 4002
 
@@ -65,12 +64,12 @@ SELECT error_code FROM errorCodes WHERE error_code = 3002 INTO errorCodeSink;
 
 # The sinks are written into the queries: the systest replaces the options of a declared sink by CSV defaults.
 # Error messages are free text and may contain the field delimiter, so the CSV sink quotes strings.
-SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT, TRUE AS "OUTPUT_FORMATTER".QUOTE_STRINGS);
+SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM ERROR_SOURCE WHERE error_code = 3002 INTO File('CSV' AS "SINK".OUTPUT_FORMAT, TRUE AS "OUTPUT_FORMATTER".QUOTE_STRINGS);
 ----
 3002,"cannot format malformed string value; '1.0' is not a valid value of type unsigned long.",true,"SOURCES_D_ERRORSOURCE_C1:7",true,"source-node:8080",true
 3002,"cannot format malformed string value; '{""value"": 1}' is not a valid value of type unsigned long.",true,"SOURCES_D_ERRORSOURCE_C1:8",true,"source-node:8080",true
 
-SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM errors WHERE error_code = 3002 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
+SELECT error_code, message, query_id IS NOT NULL AS has_query_id, distributed_query_id, pipeline_id IS NOT NULL AS has_pipeline_id, node, ts > 1700000000000 AS ts_is_unix_ms FROM ERROR_SOURCE WHERE error_code = 3002 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
 ----
 {"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '1.0' is not a valid value of type unsigned long.","HAS_QUERY_ID":true,"DISTRIBUTED_QUERY_ID":"SOURCES_D_ERRORSOURCE_C1:7","HAS_PIPELINE_ID":true,"NODE":"source-node:8080","TS_IS_UNIX_MS":true}
 {"ERROR_CODE":3002,"MESSAGE":"cannot format malformed string value; '{\"value\": 1}' is not a valid value of type unsigned long.","HAS_QUERY_ID":true,"DISTRIBUTED_QUERY_ID":"SOURCES_D_ERRORSOURCE_C1:8","HAS_PIPELINE_ID":true,"NODE":"source-node:8080","TS_IS_UNIX_MS":true}

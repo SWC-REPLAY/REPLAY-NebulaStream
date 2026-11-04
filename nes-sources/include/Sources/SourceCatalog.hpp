@@ -117,6 +117,9 @@ class SourceCatalog
     };
 
 public:
+    /// Logical source over the errors of the workers (discussion #153), present in every catalog.
+    static constexpr const char* ERROR_SOURCE_NAME = "ERROR_SOURCE";
+
     explicit SourceCatalog(Private);
 
     /// Transitional: callers still construct the catalog directly (also by value in tests);
@@ -150,6 +153,14 @@ public:
     /// @brief removes a physical source
     /// @return true if there is a source descriptor with that id registered and it was removed
     [[nodiscard]] bool removePhysicalSource(const SourceDescriptor& physicalSource);
+
+    /// Makes `worker` part of ERROR_SOURCE. Independent of whether the worker has `enable_error_source`: the catalog cannot
+    /// know, and a query on a worker without it fails with a message that names the option.
+    /// Does nothing if the user dropped ERROR_SOURCE.
+    void addErrorSource(const Host& worker);
+
+    /// Removes `worker` from ERROR_SOURCE, because a query must not be placed on a worker that is gone.
+    void removeErrorSource(const Host& worker);
 
     [[nodiscard]] std::optional<LogicalSource> getLogicalSource(const Identifier& logicalSourceName) const;
 

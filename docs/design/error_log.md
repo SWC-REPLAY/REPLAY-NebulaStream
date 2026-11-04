@@ -16,7 +16,8 @@ Off by default. Per worker:
 
 - CLI: `nes-single-node-worker -- --enable_error_source=true`
 - YAML: `enable_error_source: true`
-- Systest file: `GLOBALCONFIGURATION enable_error_source: true` (applies to the queries below the line). Write the sink
+- Systest file: `GLOBALCONFIGURATION enable_error_source: true` (applies to the queries below the line). The systest stops
+  a query on `ERROR_SOURCE` when its expected rows have arrived, because the source never ends. Write the sink
   into the query (`INTO File('JSON' AS "SINK".OUTPUT_FORMAT)`): the systest replaces the options of a declared sink
   (`CREATE SINK ... SET(...)`) by its CSV defaults.
 
@@ -50,6 +51,21 @@ Not recorded:
 - A subscription's queue is unbounded: it holds what the source has not read yet, e.g. while the sink applies
   backpressure.
 
+## `ERROR_SOURCE`
+
+Every `SourceCatalog` has the logical source `ERROR_SOURCE` with all fields below, from its construction on. A worker
+gets a physical source of it when it enters the catalogs: `CREATE WORKER` (removed by `DROP WORKER`), the embedded worker
+of the REPL, and the workers of the systest cluster. So a query names the source and brings a sink:
+
+```sql
+SELECT error_code, message, node FROM ERROR_SOURCE INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
+```
+
+The frontend does not know a worker's `enable_error_source` in every case (the systest sets it per file, on the worker
+only), so every worker gets a physical source. A query fails with `CannotOpenSource` if any worker lacks the option,
+which means that a partly enabled cluster cannot query `ERROR_SOURCE`. Such a cluster declares its own source of
+`TYPE Error` on the enabled workers. `ERROR_SOURCE` has no `MAX_RECORDS`: it ends only when its query is stopped.
+
 ## ErrorSource (`TYPE Error`)
 
 | Parameter | Default | Meaning |
@@ -78,10 +94,11 @@ Constructing the source, which happens while its query is started, fails with `C
 without `enable_error_source=true`, for an input format other than NATIVE, or for an unknown field name or type.
 
 ```sql
-CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, query_id VARSIZED, distributed_query_id VARSIZED, pipeline_id UINT64, node VARSIZED NOT NULL, ts UINT64 NOT NULL);
-CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE");
+-- Only needed for a subset of the fields, MAX_RECORDS or a subset of the workers; otherwise read ERROR_SOURCE.
+CREATE LOGICAL SOURCE errors(error_code UINT64 NOT NULL, message VARSIZED NOT NULL, node VARSIZED NOT NULL);
+CREATE PHYSICAL SOURCE FOR errors TYPE Error SET('NATIVE' AS INPUT_FORMATTER."TYPE", 'worker-1:8080' AS "SOURCE"."HOST", 1000 AS "SOURCE".MAX_RECORDS);
 
-SELECT error_code, message, distributed_query_id, pipeline_id, node FROM errors WHERE error_code >= 3000 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
+SELECT error_code, message, node FROM errors WHERE error_code >= 3000 INTO File('JSON' AS "SINK".OUTPUT_FORMAT);
 ```
 
 Running example: `nes-systests/sources/ErrorSource.test`.
@@ -94,7 +111,7 @@ cmake-build-debug/nes-systests/systest/systest -t nes-systests/sources/ErrorSour
 ## Open points
 
 - Source threads set no `LogContext`, so errors raised in sources have no query or pipeline.
-- `MAX_RECORDS` is the only end condition; noise on the worker (other exceptions) can end a bounded query early.
+- `MAX_RECORDS` counts before `WHERE`, so noise on the worker (other exceptions) can end a declared source early.
 - Errors of an error query itself reach its own source.
 - The systest can only check errors of queries that start after the error query, so `ErrorSource.test` needs several
   concurrent queries and cannot pass in a sequential run (`--sequential`, `-b`).

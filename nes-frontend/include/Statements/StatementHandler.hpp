@@ -268,9 +268,12 @@ class TopologyStatementHandler final : public StatementHandler<TopologyStatement
 {
     SharedPtr<QueryManager> queryManager;
     SharedPtr<WorkerCatalog> workerCatalog;
+    /// Follows the workers, because ERROR_SOURCE has a physical source on each of them.
+    std::shared_ptr<SourceCatalog> sourceCatalog;
 
 public:
-    TopologyStatementHandler(SharedPtr<QueryManager> queryManager, SharedPtr<WorkerCatalog> workerCatalog);
+    TopologyStatementHandler(
+        SharedPtr<QueryManager> queryManager, SharedPtr<WorkerCatalog> workerCatalog, std::shared_ptr<SourceCatalog> sourceCatalog);
 
     std::expected<WorkerStatusStatementResult, Exception> operator()(const WorkerStatusStatement& statement);
     std::expected<ShowVersionStatementResult, Exception> operator()(const ShowVersionStatement& statement);

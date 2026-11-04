@@ -41,6 +41,7 @@
 #include <Rewriter/SinkRewriting.hpp>
 #include <Rewriter/SourceRewriting.hpp>
 #include <Rewriter/SqlParse.hpp>
+#include <Sources/SourceCatalog.hpp>
 #include <Util/Overloaded.hpp>
 #include <ErrorHandling.hpp>
 
@@ -183,6 +184,7 @@ Emitter::RewrittenSql Emitter::emitSelect(const std::string& sql, const SystestQ
     rewriter.replace(sink->getStart(), sink->getStop(), inlinedSink);
 
     std::vector<std::filesystem::path> inputFiles;
+    bool readsErrorSource = false;
     for (auto* namedSource : findAll<AntlrSQLParser::NamedSourceContext>(parse->tree()))
     {
         /// A name that no identifier can hold matches no key, because every key comes from a name that this file declared.
@@ -192,18 +194,23 @@ Emitter::RewrittenSql Emitter::emitSelect(const std::string& sql, const SystestQ
         {
             continue;
         }
+        readsErrorSource = readsErrorSource or *name == Identifier::parse(SourceCatalog::ERROR_SOURCE_NAME);
         if (const auto files = inputFilesBySource.find(*name); files != inputFilesBySource.end())
         {
             std::ranges::copy(files->second, std::back_inserter(inputFiles));
         }
     }
 
-    return RewrittenSql{.sql = rewriter.getText(), .resultFile = std::move(resultFile), .inputFiles = std::move(inputFiles)};
+    return RewrittenSql{
+        .sql = rewriter.getText(),
+        .resultFile = std::move(resultFile),
+        .inputFiles = std::move(inputFiles),
+        .readsErrorSource = readsErrorSource};
 }
 
 void Emitter::emitQuery(SelectStatement query)
 {
-    auto [sql, resultFile, inputFiles] = emitSelect(query.sql, query.id, {});
+    auto [sql, resultFile, inputFiles, readsErrorSource] = emitSelect(query.sql, query.id, {});
     runnable.testCases.push_back(
         RewrittenTestCase{
             .action = RewrittenQuery{
@@ -211,6 +218,7 @@ void Emitter::emitQuery(SelectStatement query)
                 .id = query.id,
                 .resultFile = std::move(resultFile),
                 .inputFiles = std::move(inputFiles),
+                .readsErrorSource = readsErrorSource,
                 .expected = std::move(query.expected)}});
 }
 
@@ -249,8 +257,9 @@ void Emitter::emitDifferential(const DifferentialStatement& block)
     /// The second half needs its own result file name, because the halves share a query number.
     static constexpr auto SecondHalf = "DIFFERENTIAL";
 
-    auto [firstSql, firstResultFile, unmeasuredFirstInput] = emitSelect(block.firstSql, block.firstId, {});
-    auto [secondSql, secondResultFile, unmeasuredSecondInput] = emitSelect(block.secondSql, block.secondId, SecondHalf);
+    auto [firstSql, firstResultFile, unmeasuredFirstInput, firstReadsErrorSource] = emitSelect(block.firstSql, block.firstId, {});
+    auto [secondSql, secondResultFile, unmeasuredSecondInput, secondReadsErrorSource]
+        = emitSelect(block.secondSql, block.secondId, SecondHalf);
     if (not firstResultFile.has_value() or not secondResultFile.has_value())
     {
         throw TestException("a differential query has to write a result to compare: {}", block.firstSql);

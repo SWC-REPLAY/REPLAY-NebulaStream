@@ -112,6 +112,7 @@ struct SystestBinder::Impl
         for (const auto& [host, data, maxOperators, downstream, workerConfig] : config.clusterConfig.workers)
         {
             workerCatalog->addWorker(host, data, maxOperators, downstream, workerConfig);
+            sourceCatalog->addErrorSource(host);
         }
     }
 

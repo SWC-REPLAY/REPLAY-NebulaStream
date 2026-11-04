@@ -298,6 +298,7 @@ int main(int argc, char** argv)
             .config = {}, /// the CLI worker/optimizer literals reach every embedded worker via the resolver below
         };
         workerCatalog->addWorker(workerConfig.host, workerConfig.dataAddress, workerConfig.maxOperators, workerConfig.downstream);
+        sourceCatalog->addErrorSource(workerConfig.host);
         /// Preserve the REPL policy: explicitly supplied run options override worker registration
         /// settings. Systests inject their own resolver with their conflict and precedence policy.
         auto resolveWorkerConfiguration = [workerOptimizerLiterals](const NES::WorkerConfig& worker)
@@ -325,7 +326,7 @@ int main(int argc, char** argv)
         NES::SourceStatementHandler sourceStatementHandler{sourceCatalog, NES::RequireHostConfig{}};
         NES::SinkStatementHandler sinkStatementHandler{sinkCatalog, NES::RequireHostConfig{}};
 #endif
-        NES::TopologyStatementHandler topologyStatementHandler{queryManager, workerCatalog};
+        NES::TopologyStatementHandler topologyStatementHandler{queryManager, workerCatalog, sourceCatalog};
         NES::ModelStatementHandler modelStatementHandler{modelCatalog};
         auto queryOptimizer
             = std::make_shared<NES::QueryOptimizer>(queryOptimizerConfig, sourceCatalog, sinkCatalog, workerCatalog, modelCatalog);

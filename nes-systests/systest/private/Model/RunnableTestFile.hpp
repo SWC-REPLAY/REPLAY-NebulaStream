@@ -72,6 +72,8 @@ struct RewrittenQuery
     /// parse and never runs.
     std::optional<std::filesystem::path> resultFile;
     std::vector<std::filesystem::path> inputFiles;
+    /// The query reads ERROR_SOURCE, which never ends, so the runner stops it when the expected rows have arrived.
+    bool readsErrorSource = false;
 
     Expectation expected;
 };
