@@ -85,7 +85,9 @@ const ConfigField<bool> ENABLE_GOOGLE_EVENT_TRACE{
     false};
 
 const ConfigField<bool> ENABLE_ERROR_SOURCE{
-    Identifier::parse("enable_error_source"), "Enable an Error Source that logs Exceptions that happen during the worker processes runtime", false};
+    Identifier::parse("enable_error_source"),
+    "Enable an Error Source that logs Exceptions that happen during the worker processes runtime",
+    false};
 /// NOLINTEND(bugprone-throwing-static-initialization)
 
 }
@@ -93,12 +95,7 @@ const ConfigField<bool> ENABLE_ERROR_SOURCE{
 Schema<QualifiedErasedConfigField, Ordered> SingleNodeWorkerConfiguration::getConfigSchema()
 {
     return createConfigSchema(
-        DATA_ADDRESS,
-        GRPC_ADDRESS_URI,
-        LOG_LEVEL,
-        ENABLE_GOOGLE_EVENT_TRACE,
-        ENABLE_ERROR_SOURCE,
-        WorkerConfiguration::getConfigSchema());
+        DATA_ADDRESS, GRPC_ADDRESS_URI, LOG_LEVEL, ENABLE_GOOGLE_EVENT_TRACE, ENABLE_ERROR_SOURCE, WorkerConfiguration::getConfigSchema());
 }
 
 SingleNodeWorkerConfiguration SingleNodeWorkerConfiguration::fromConfig(const InstantiatedConfig& config)

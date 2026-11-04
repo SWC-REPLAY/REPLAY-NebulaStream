@@ -266,7 +266,7 @@ void SourceCatalog::addErrorSource(const Host& worker)
         return;
     }
     auto created = addPhysicalSource(
-        *errorSource, Identifier::parse("Error"), worker, {}, {{Identifier::parse(InputFormatterDescriptor::getTypeString()), "NATIVE"}});
+        *errorSource, Identifier::parse("Error"), worker, {}, {{InputFormatterDescriptor::TYPE_FIELD.getName(), "NATIVE"}});
     if (not created)
     {
         throw std::move(created).error();

@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -25,18 +26,23 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <variant>
-#include <Configurations/Descriptor.hpp>
+#include <Configurations/ConfigField.hpp>
+#include <Configurations/ConfigLiteral.hpp>
+#include <Configurations/InstantiatedConfigValue.hpp>
 #include <DataTypes/DataType.hpp>
+#include <Identifiers/Identifier.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Interface/BufferRef/TupleBufferRef.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Strings.hpp>
+#include <Util/Variant.hpp>
 #include <fmt/format.h>
 #include <magic_enum/magic_enum.hpp>
 #include <ErrorHandling.hpp>
@@ -105,18 +111,37 @@ void writeValue(const std::span<std::byte> slot, const T& value)
 {
     std::memcpy(slot.data(), &value, sizeof(T));
 }
+
+/// NOLINTBEGIN(bugprone-throwing-static-initialization)
+const ConfigField<uint64_t> MAX_RECORDS{
+    Identifier::parse("MAX_RECORDS"),
+    "Ends the stream after this many errors; lets a bounded query (e.g. a systest) finish. 0 = unlimited",
+    [](const ConfigLiteral& literal)
+    { return tryGetOr<int64_t>(literal, expectedType<uint64_t>()).and_then(narrowConfigValue<int64_t, uint64_t>); },
+    uint64_t{0}};
+/// NOLINTEND(bugprone-throwing-static-initialization)
 }
 
-ErrorSource::ErrorSource(const SourceDescriptor& sourceDescriptor)
-    : maxRecords(sourceDescriptor.getFromConfig(ConfigParametersError::MAX_RECORDS)), node(sourceDescriptor.getHost().getRawValue())
+Schema<QualifiedErasedConfigField, Ordered> ErrorSource::getConfigSchema()
 {
-    if (const auto inputFormat = toUpperCase(sourceDescriptor.getInputFormatType()); inputFormat != "NATIVE")
+    return createConfigSchema(Identifier::parse("ERROR_SOURCE"), MAX_RECORDS);
+}
+
+std::expected<ErrorSourceConfig, Exception> ErrorSourceConfig::fromConfig(const InstantiatedConfig& config)
+{
+    return ErrorSourceConfig{.maxRecords = config.get(MAX_RECORDS)};
+}
+
+ErrorSource::ErrorSource(const ErrorSourceConfig& config, const SourceDescriptor& sourceDescriptor)
+    : maxRecords(config.maxRecords), node(sourceDescriptor.getHost().getRawValue())
+{
+    if (const auto& inputFormat = sourceDescriptor.getInputFormatType(); inputFormat != Identifier::parse("NATIVE"))
     {
         throw CannotOpenSource(
             "Error source writes NATIVE tuples and needs 'NATIVE' AS INPUT_FORMATTER.\"TYPE\", got {}; choose CSV or JSON at the sink",
             inputFormat);
     }
-    for (const auto& field : *sourceDescriptor.getLogicalSource().getSchema())
+    for (const auto& field : sourceDescriptor.getSchema())
     {
         const auto name = field.getFullyQualifiedName().begin()->asCanonicalString();
         const auto& dataType = field.getDataType();
@@ -212,11 +237,6 @@ Source::FillTupleBufferResult ErrorSource::fillTupleBuffer(TupleBuffer& tupleBuf
     }
     /// A NATIVE source reports tuples, not bytes; SourceThread stores the value as the buffer's number of tuples (cf. NetworkSource).
     return FillTupleBufferResult::withBytes(numberOfTuples);
-}
-
-DescriptorConfig::Config ErrorSource::validateAndFormat(std::unordered_map<std::string, std::string> config)
-{
-    return DescriptorConfig::validateAndFormat<ConfigParametersError>(std::move(config), NAME);
 }
 
 std::ostream& ErrorSource::toString(std::ostream& str) const

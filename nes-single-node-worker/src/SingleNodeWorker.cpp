@@ -69,7 +69,7 @@ SingleNodeWorker::SingleNodeWorker(const SingleNodeWorkerConfiguration& configur
         listener->addListener(googleTracePrinter);
     }
     /// Before the engine is built, so that its threads find the log from their first exception on.
-    if (configuration.enableErrorSource.getValue())
+    if (configuration.enableErrorSource)
     {
         /// Engine threads get `host` explicitly; the request and task-delayer threads inherit the constructing thread's id.
         INVARIANT(

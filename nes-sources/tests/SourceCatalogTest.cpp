@@ -353,7 +353,7 @@ TEST_F(SourceCatalogTest, ErrorSourceFollowsTheWorkers)
     const auto remaining = sourceCatalog.getPhysicalSources(*errorSource);
     ASSERT_EQ(remaining->size(), 1);
     ASSERT_EQ(remaining->begin()->getHost(), Host("worker-2:8080"));
-    ASSERT_EQ(remaining->begin()->getInputFormatType(), "NATIVE");
+    ASSERT_EQ(remaining->begin()->getInputFormatType(), Identifier::parse("NATIVE"));
 }
 
 TEST_F(SourceCatalogTest, ErrorSourceDroppedByTheUserStaysDropped)

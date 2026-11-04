@@ -16,22 +16,35 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <ostream>
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
-#include <Configurations/Descriptor.hpp>
+#include <Configurations/ConfigField.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include <ErrorHandling.hpp>
 #include <ErrorLog.hpp>
 
 namespace NES
 {
+
+class InstantiatedConfig;
+
+struct ErrorSourceConfig
+{
+    /// Ends the stream after this many errors; lets a bounded query (e.g. a systest) finish. 0 = unlimited
+    uint64_t maxRecords;
+
+    static std::expected<ErrorSourceConfig, Exception> fromConfig(const InstantiatedConfig& config);
+};
 
 /// A column of an error record; the logical source declares any of them, in any order, by these names.
 enum class ErrorField : uint8_t
@@ -54,7 +67,7 @@ class ErrorSource final : public Source
 public:
     static constexpr std::string_view NAME = "Error";
 
-    explicit ErrorSource(const SourceDescriptor& sourceDescriptor);
+    ErrorSource(const ErrorSourceConfig& config, const SourceDescriptor& sourceDescriptor);
     ~ErrorSource() override = default;
 
     ErrorSource(const ErrorSource&) = delete;
@@ -68,7 +81,7 @@ public:
     void open(std::shared_ptr<AbstractBufferProvider> bufferProvider) override;
     void close() override;
 
-    static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
+    static Schema<QualifiedErasedConfigField, Ordered> getConfigSchema();
 
 protected:
     [[nodiscard]] std::ostream& toString(std::ostream& str) const override;
@@ -97,20 +110,5 @@ private:
     std::shared_ptr<AbstractBufferProvider> bufferProvider;
     uint64_t numberOfEmittedRecords = 0;
 };
-
-/// NOLINTBEGIN(cert-err58-cpp,bugprone-throwing-static-initialization)
-struct ConfigParametersError
-{
-    /// Ends the stream after this many errors; lets a bounded query (e.g. a systest) finish.
-    static inline const DescriptorConfig::ConfigParameter<uint64_t> MAX_RECORDS{
-        "MAX_RECORDS",
-        uint64_t{0},
-        [](const std::unordered_map<std::string, std::string>& config) { return DescriptorConfig::tryGet(MAX_RECORDS, config); }};
-
-    static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-        = DescriptorConfig::createConfigParameterContainerMap(SourceDescriptor::parameterMap, MAX_RECORDS);
-};
-
-/// NOLINTEND(cert-err58-cpp,bugprone-throwing-static-initialization)
 
 }
