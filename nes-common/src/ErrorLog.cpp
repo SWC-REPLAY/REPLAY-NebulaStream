@@ -15,7 +15,6 @@
 #include <ErrorLog.hpp>
 
 #include <atomic>
-#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -187,7 +186,8 @@ void ErrorLog::recordException(const Exception& exception) noexcept
             const auto& logContext = spdlog::mdc::get_context();
             const auto task = logContext.find("Task");
             const auto query = task != logContext.end() ? task : logContext.find("queryId");
-            auto [queryId, distributedQueryId, pipelineId] = query != logContext.end() ? parseTaskContext(query->second) : ParsedTaskContext{};
+            auto [queryId, distributedQueryId, pipelineId]
+                = query != logContext.end() ? parseTaskContext(query->second) : ParsedTaskContext{};
             log->append(
                 ErrorRecord{
                     .code = exception.code(),

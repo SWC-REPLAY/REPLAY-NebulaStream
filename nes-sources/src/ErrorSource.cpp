@@ -32,7 +32,6 @@
 #include <DataTypes/DataType.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Interface/BufferRef/TupleBufferRef.hpp>
-#include <Interface/VariableSizedAccess.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Sources/Source.hpp>
@@ -78,7 +77,8 @@ uint64_t toUnixMilliseconds(const std::chrono::system_clock::time_point timestam
 }
 
 /// Holds the type that typeOf(field) names; nullopt is NULL.
-std::optional<std::variant<uint64_t, std::string_view>> valueOf(const ErrorField field, const ErrorRecord& record, const std::string_view node)
+std::optional<std::variant<uint64_t, std::string_view>>
+valueOf(const ErrorField field, const ErrorRecord& record, const std::string_view node)
 {
     switch (field)
     {

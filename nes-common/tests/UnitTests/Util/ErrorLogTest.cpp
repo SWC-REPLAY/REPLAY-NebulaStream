@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
-#include <Util/Logger/Logger.hpp>
+#include <Util/Logger/impl/NesLogger.hpp>
 #include <Util/UUID.hpp>
 #include <gtest/gtest.h>
 #include <ErrorHandling.hpp>
@@ -102,7 +102,7 @@ TEST(ErrorLogTest, ReadReturnsNothingWhenStopIsRequested)
 {
     ErrorLog log;
     const auto subscription = log.subscribe();
-    std::stop_source stopSource;
+    const std::stop_source stopSource;
     stopSource.request_stop();
     EXPECT_FALSE(subscription->read(stopSource.get_token()).has_value());
 }
@@ -126,8 +126,8 @@ TEST(ErrorLogTest, RegistryFindsTheLogOfTheThreadsWorker)
     {
         const auto registration = ErrorLog::registerForWorker(Host("registry-worker"), log);
         EXPECT_TRUE(ErrorLog::anyRegistered());
-        Thread sameWorker("same-worker", Host("registry-worker"), [&] { EXPECT_EQ(ErrorLog::forThisThread(), log); });
-        Thread otherWorker("other-worker", Host("other-worker"), [] { EXPECT_EQ(ErrorLog::forThisThread(), nullptr); });
+        const Thread sameWorker("same-worker", Host("registry-worker"), [&] { EXPECT_EQ(ErrorLog::forThisThread(), log); });
+        const Thread otherWorker("other-worker", Host("other-worker"), [] { EXPECT_EQ(ErrorLog::forThisThread(), nullptr); });
     }
     EXPECT_FALSE(ErrorLog::anyRegistered());
 }
@@ -150,8 +150,8 @@ TEST(ErrorLogTest, MoveAssignmentUnregistersThePreviousLog)
     const auto second = std::make_shared<ErrorLog>();
     auto registration = ErrorLog::registerForWorker(Host("first-worker"), std::make_shared<ErrorLog>());
     registration = ErrorLog::registerForWorker(Host("second-worker"), second);
-    Thread firstWorker("first-worker", Host("first-worker"), [] { EXPECT_EQ(ErrorLog::forThisThread(), nullptr); });
-    Thread secondWorker("second-worker", Host("second-worker"), [&] { EXPECT_EQ(ErrorLog::forThisThread(), second); });
+    const Thread firstWorker("first-worker", Host("first-worker"), [] { EXPECT_EQ(ErrorLog::forThisThread(), nullptr); });
+    const Thread secondWorker("second-worker", Host("second-worker"), [&] { EXPECT_EQ(ErrorLog::forThisThread(), second); });
 }
 
 TEST(ErrorLogTest, ExceptionIsRecordedOnceWithTheQueryAndPipelineOfItsTask)
@@ -165,7 +165,8 @@ TEST(ErrorLogTest, ExceptionIsRecordedOnceWithTheQueryAndPipelineOfItsTask)
         Host("hook-worker"),
         [&]
         {
-            const LogContext context("Task", formatTaskContext(QueryId::create(localQueryId, DistributedQueryId("query-1")), PipelineId(7)));
+            const LogContext context(
+                "Task", formatTaskContext(QueryId::create(localQueryId, DistributedQueryId("query-1")), PipelineId(7)));
             const auto exception = CannotOpenSource("test");
             const auto copy = exception; /// NOLINT(performance-unnecessary-copy-initialization) copies must not record again
         });
@@ -201,7 +202,8 @@ TEST(ErrorLogTest, ExceptionOnAnotherWorkerIsNotRecorded)
     const auto log = std::make_shared<ErrorLog>();
     const auto registration = ErrorLog::registerForWorker(Host("recording-worker"), log);
     const auto subscription = log->subscribe();
-    Thread otherWorker("other-worker", Host("unregistered-worker"), [] { [[maybe_unused]] const auto exception = CannotOpenSource("test"); });
+    Thread otherWorker(
+        "other-worker", Host("unregistered-worker"), [] { [[maybe_unused]] const auto exception = CannotOpenSource("test"); });
     otherWorker = Thread{};
     EXPECT_FALSE(subscription->tryRead().has_value());
 }

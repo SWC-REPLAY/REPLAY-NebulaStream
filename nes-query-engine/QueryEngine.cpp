@@ -38,6 +38,7 @@
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Util/AtomicState.hpp>
+#include <Util/Logger/impl/NesLogger.hpp>
 #include <fmt/format.h>
 #include <folly/MPMCQueue.h>
 #include <DelayedTaskSubmitter.hpp>
@@ -479,7 +480,7 @@ thread_local WorkerThreadId ThreadPool::WorkerThread::id = INVALID<WorkerThreadI
 
 bool ThreadPool::WorkerThread::operator()(WorkTask& task) const
 {
-    LogContext logContext("Task", formatTaskContext(task.queryId, task.pipelineId));
+    const LogContext logContext("Task", formatTaskContext(task.queryId, task.pipelineId));
     if (terminating)
     {
         ENGINE_LOG_WARNING("Skipped Task for {}-{} during termination", task.queryId, task.pipelineId);
@@ -547,7 +548,7 @@ bool ThreadPool::WorkerThread::operator()(WorkTask& task) const
 
 bool ThreadPool::WorkerThread::operator()(StartPipelineTask& startPipeline) const
 {
-    LogContext logContext("Task", formatTaskContext(startPipeline.queryId, startPipeline.pipelineId));
+    const LogContext logContext("Task", formatTaskContext(startPipeline.queryId, startPipeline.pipelineId));
     if (terminating)
     {
         ENGINE_LOG_WARNING("Pipeline Start {}-{} was skipped during Termination", startPipeline.queryId, startPipeline.pipelineId);
@@ -589,7 +590,7 @@ bool ThreadPool::WorkerThread::operator()(StartPipelineTask& startPipeline) cons
 
 bool ThreadPool::WorkerThread::operator()(PendingPipelineStopTask& pendingPipelineStop) const
 {
-    LogContext logContext("Task", formatTaskContext(pendingPipelineStop.queryId, pendingPipelineStop.pipeline->id));
+    const LogContext logContext("Task", formatTaskContext(pendingPipelineStop.queryId, pendingPipelineStop.pipeline->id));
     INVARIANT(
         pendingPipelineStop.pipeline->pendingTasks >= 0,
         "Pending Pipeline Stop must have pending tasks, but had {} pending tasks.",
@@ -633,7 +634,7 @@ bool ThreadPool::WorkerThread::operator()(PendingPipelineStopTask& pendingPipeli
 
 bool ThreadPool::WorkerThread::operator()(StopPipelineTask& stopPipelineTask) const
 {
-    LogContext logContext("Task", formatTaskContext(stopPipelineTask.queryId, stopPipelineTask.pipeline->id));
+    const LogContext logContext("Task", formatTaskContext(stopPipelineTask.queryId, stopPipelineTask.pipeline->id));
     ENGINE_LOG_DEBUG("Stop Pipeline Task for {}-{}", stopPipelineTask.queryId, stopPipelineTask.pipeline->id);
     std::optional<std::chrono::milliseconds> requiresTaskRepetition;
     DefaultPEC pec(
@@ -688,7 +689,7 @@ bool ThreadPool::WorkerThread::operator()(StopPipelineTask& stopPipelineTask) co
 
 bool ThreadPool::WorkerThread::operator()(StopQueryTask& stopQuery) const
 {
-    LogContext logContext("Task", formatTaskContext(stopQuery.queryId));
+    const LogContext logContext("Task", formatTaskContext(stopQuery.queryId));
     ENGINE_LOG_INFO("Terminate Query Task for Query {}", stopQuery.queryId);
     if (auto queryCatalog = stopQuery.catalog.lock())
     {
@@ -701,7 +702,7 @@ bool ThreadPool::WorkerThread::operator()(StopQueryTask& stopQuery) const
 
 bool ThreadPool::WorkerThread::operator()(StartQueryTask& startQuery) const
 {
-    LogContext logContext("Task", formatTaskContext(startQuery.queryId));
+    const LogContext logContext("Task", formatTaskContext(startQuery.queryId));
     ENGINE_LOG_INFO("Start Query Task for Query {}", startQuery.queryId);
     if (auto queryCatalog = startQuery.catalog.lock())
     {
@@ -714,7 +715,7 @@ bool ThreadPool::WorkerThread::operator()(StartQueryTask& startQuery) const
 
 bool ThreadPool::WorkerThread::operator()(StopSourceTask& stopSource) const
 {
-    LogContext logContext("Task", formatTaskContext(stopSource.queryId));
+    const LogContext logContext("Task", formatTaskContext(stopSource.queryId));
     if (auto source = stopSource.target.lock())
     {
         ENGINE_LOG_DEBUG("Stop Source Task for Query {} Source {}", stopSource.queryId, source->getOriginId());
@@ -748,7 +749,7 @@ bool ThreadPool::WorkerThread::operator()(StopSourceTask& stopSource) const
 
 bool ThreadPool::WorkerThread::operator()(FailSourceTask& failSource) const
 {
-    LogContext logContext("Task", formatTaskContext(failSource.queryId));
+    const LogContext logContext("Task", formatTaskContext(failSource.queryId));
     if (auto source = failSource.target.lock())
     {
         ENGINE_LOG_DEBUG("Fail Source Task for Query {} Source {}", failSource.queryId, source->getOriginId());
