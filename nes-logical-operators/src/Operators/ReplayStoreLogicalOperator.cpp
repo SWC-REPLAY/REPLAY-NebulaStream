@@ -14,50 +14,85 @@
 
 #include <Operators/ReplayStoreLogicalOperator.hpp>
 
-#include <ranges>
-#include <sstream>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <Configurations/Descriptor.hpp>
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
-#include <Traits/Trait.hpp>
+#include <Operators/LogicalOperatorFwd.hpp>
+#include <Schema/Binder.hpp>
+#include <Schema/Field.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
+#include <Serialization/ReflectedOperator.hpp>
 #include <Traits/TraitSet.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Reflection.hpp>
 #include <fmt/format.h>
 #include <ErrorHandling.hpp>
-#include <LogicalOperatorRegistry.hpp>
 
 namespace NES
 {
 
-std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, OperatorId id) const
+ReplayStoreLogicalOperator::ReplayStoreLogicalOperator(WeakLogicalOperator self, std::string storeName)
+    : ManagedByOperator(std::move(self)), storeName(std::move(storeName))
 {
-    if (verbosity == ExplainVerbosity::Debug)
-    {
-        std::stringstream cfg;
-        Descriptor tmp{DescriptorConfig::Config(config)};
-        cfg << &tmp;
-        return fmt::format("REPLAY_STORE(opId: {}, config: {}, schema: {})", id, cfg.str(), getOutputSchema());
-    }
-    return {"REPLAY_STORE"};
 }
 
-std::string_view ReplayStoreLogicalOperator::getName() noexcept
+ReplayStoreLogicalOperator::ReplayStoreLogicalOperator(WeakLogicalOperator self, LogicalOperator child, std::string storeName)
+    : ManagedByOperator(std::move(self)), child(std::move(child)), storeName(std::move(storeName))
+{
+    inferLocalSchema();
+}
+
+TypedLogicalOperator<ReplayStoreLogicalOperator> ReplayStoreLogicalOperator::create(std::string storeName)
+{
+    return TypedLogicalOperator<ReplayStoreLogicalOperator>{std::move(storeName)};
+}
+
+TypedLogicalOperator<ReplayStoreLogicalOperator> ReplayStoreLogicalOperator::create(LogicalOperator child, std::string storeName)
+{
+    return TypedLogicalOperator<ReplayStoreLogicalOperator>{std::move(child), std::move(storeName)};
+}
+
+std::string_view ReplayStoreLogicalOperator::getName() const noexcept
 {
     return NAME;
 }
 
-ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withTraitSet(TraitSet ts) const
+bool ReplayStoreLogicalOperator::operator==(const ReplayStoreLogicalOperator& rhs) const
 {
+    return storeName == rhs.storeName && outputSchema == rhs.outputSchema && traitSet == rhs.traitSet;
+}
+
+std::string ReplayStoreLogicalOperator::explain(ExplainVerbosity verbosity, OperatorId opId) const
+{
+    if (verbosity == ExplainVerbosity::Debug)
+    {
+        return fmt::format("REPLAY_STORE(opId: {}, storeName: {}, traitSet: {})", opId, storeName, traitSet.explain(verbosity));
+    }
+    return "REPLAY_STORE";
+}
+
+void ReplayStoreLogicalOperator::inferLocalSchema()
+{
+    PRECONDITION(child.has_value(), "Child not set when calling schema inference");
+    outputSchema = unbind(child->getOutputSchema());
+}
+
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withInferredSchema() const
+{
+    PRECONDITION(child.has_value(), "Child not set when calling schema inference");
     auto copy = *this;
-    copy.traitSet = std::move(ts);
+    copy.child = copy.child->withInferredSchema();
+    copy.inferLocalSchema();
     return copy;
 }
 
@@ -66,92 +101,73 @@ TraitSet ReplayStoreLogicalOperator::getTraitSet() const
     return traitSet;
 }
 
-ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withChildren(std::vector<LogicalOperator> newChildren) const
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withTraitSet(TraitSet traitSet) const
 {
     auto copy = *this;
-    copy.children = std::move(newChildren);
+    copy.traitSet = std::move(traitSet);
     return copy;
+}
+
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withChildrenUnsafe(std::vector<LogicalOperator> children) const
+{
+    PRECONDITION(children.size() == 1, "Can only set exactly one child for ReplayStore, got {}", children.size());
+    auto copy = *this;
+    copy.child = std::move(children.at(0));
+    return copy;
+}
+
+ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withChildren(std::vector<LogicalOperator> children) const
+{
+    auto copy = withChildrenUnsafe(std::move(children));
+    copy.inferLocalSchema();
+    return copy;
+}
+
+Schema<Field, Unordered> ReplayStoreLogicalOperator::getOutputSchema() const
+{
+    INVARIANT(outputSchema.has_value(), "Accessed output schema before calling schema inference");
+    return NES::bindToOperator(self.lock(), outputSchema.value());
 }
 
 std::vector<LogicalOperator> ReplayStoreLogicalOperator::getChildren() const
 {
-    return children;
-}
-
-std::vector<Schema> ReplayStoreLogicalOperator::getInputSchemas() const
-{
-    INVARIANT(!children.empty(), "ReplayStore operator requires exactly one child");
-    return children | std::ranges::views::transform([](const LogicalOperator& child) { return child.getOutputSchema(); })
-        | std::ranges::to<std::vector>();
-}
-
-Schema ReplayStoreLogicalOperator::getOutputSchema() const
-{
-    INVARIANT(!children.empty(), "ReplayStore operator requires exactly one child");
-    return children.front().getOutputSchema();
-}
-
-ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withInferredSchema(std::vector<Schema> inputSchemas) const
-{
-    auto copy = *this;
-    INVARIANT(!inputSchemas.empty(), "ReplayStore should have at least one input");
-    const auto& first = inputSchemas.front();
-    for (const auto& s : inputSchemas)
+    if (child.has_value())
     {
-        if (s != first)
-        {
-            throw CannotInferSchema("All input schemas must be equal for ReplayStore operator");
-        }
+        return {*child};
     }
-    return copy;
+    return {};
 }
 
-bool ReplayStoreLogicalOperator::operator==(const ReplayStoreLogicalOperator& rhs) const
+LogicalOperator ReplayStoreLogicalOperator::getChild() const
 {
-    return getOutputSchema() == rhs.getOutputSchema() && getInputSchemas() == rhs.getInputSchemas() && getTraitSet() == rhs.getTraitSet()
-        && config == rhs.config;
+    PRECONDITION(child.has_value(), "Child not set when trying to retrieve child");
+    return child.value();
 }
 
-ReplayStoreLogicalOperator ReplayStoreLogicalOperator::withConfig(DescriptorConfig::Config validatedConfig) const
+Reflected Reflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(
+    const TypedLogicalOperator<ReplayStoreLogicalOperator>& op, const ReflectionContext& context) const
 {
-    auto copy = *this;
-    copy.config = std::move(validatedConfig);
-    return copy;
+    return context.reflect(detail::ReflectedReplayStoreLogicalOperator{.operatorId = op.getId(), .storeName = op->getStoreName()});
 }
 
-DescriptorConfig::Config ReplayStoreLogicalOperator::validateAndFormatConfig(std::unordered_map<std::string, std::string> configPairs)
+Unreflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::Unreflector(ContextType operatorMapping) : plan(std::move(operatorMapping))
 {
-    return DescriptorConfig::validateAndFormat<ConfigParameters>(std::move(configPairs), std::string(NAME));
-}
-
-}
-
-namespace NES
-{
-
-Reflected
-Reflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(const TypedLogicalOperator<ReplayStoreLogicalOperator>& op) const
-{
-    return reflect(detail::ReflectedStoreLogicalOperator{.config = op->getConfig()});
 }
 
 TypedLogicalOperator<ReplayStoreLogicalOperator>
-Unreflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(const Reflected& reflected, const ReflectionContext& context) const
+Unreflector<TypedLogicalOperator<ReplayStoreLogicalOperator>>::operator()(const Reflected& rfl, const ReflectionContext& context) const
 {
-    auto [config] = context.unreflect<detail::ReflectedStoreLogicalOperator>(reflected);
-    return TypedLogicalOperator<ReplayStoreLogicalOperator>{ReplayStoreLogicalOperator(std::move(config))};
-}
-
-/// NOLINTNEXTLINE(performance-unnecessary-value-param)
-LogicalOperatorRegistryReturnType
-LogicalOperatorGeneratedRegistrar::RegisterReplayStoreLogicalOperator(LogicalOperatorRegistryArguments arguments)
-{
-    if (!arguments.reflected.isEmpty())
+    auto [id, storeName] = context.unreflect<detail::ReflectedReplayStoreLogicalOperator>(rfl);
+    auto children = plan->getChildrenFor(id, context);
+    if (children.size() != 1)
     {
-        return ReflectionContext{}.unreflect<TypedLogicalOperator<ReplayStoreLogicalOperator>>(arguments.reflected);
+        throw CannotDeserialize("ReplayStoreLogicalOperator requires exactly one child, but got {}", children.size());
     }
-    PRECONDITION(false, "Operator is only built directly via parser or via reflection, not using the registry");
-    std::unreachable();
+    return ReplayStoreLogicalOperator::create(children.at(0), std::move(storeName));
+}
 }
 
+uint64_t std::hash<NES::ReplayStoreLogicalOperator>::operator()(const NES::ReplayStoreLogicalOperator& op) const noexcept
+{
+    return std::hash<std::string>{}(op.getStoreName());
 }

@@ -32,6 +32,7 @@
 #include <Identifiers/Identifier.hpp>
 #include <Model/Expectation.hpp>
 #include <Model/RunnableTestFile.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Sinks/SinkLogicalOperator.hpp>
 #include <Rewriter/Constants.hpp>
 #include <SQLQueryParser/AntlrSQLQueryParser.hpp>
@@ -94,7 +95,8 @@ void throwOnError(std::expected<T, Exception> result)
 struct SystestBinder::Impl
 {
     explicit Impl(const SystestConfiguration& config)
-        : sourceCatalog{std::make_shared<SourceCatalog>()}
+        : sourceHost{config.clusterConfig.allowSourcePlacement.front()}
+        , sourceCatalog{std::make_shared<SourceCatalog>()}
         , sinkCatalog{std::make_shared<SinkCatalog>()}
         , modelCatalog{std::make_shared<ModelCatalog>()}
         , workerCatalog{std::make_shared<WorkerCatalog>()}
@@ -206,7 +208,33 @@ private:
         plan.setQueryId(QueryId::createDistributed(DistributedQueryId{queryId}));
         auto optimized = queryOptimizer.optimize(plan);
         auto schema = getSinkOutputSchema(optimized);
+        registerReplaySources(plan, schema);
         return BoundPlan{.plan = std::move(optimized), .sinkOutputSchema = std::move(schema)};
+    }
+
+    /// A later query in the file reads a store by name, like any other source.
+    /// Statements bind in file order, so the source exists before the reading query is optimized.
+    void registerReplaySources(const LogicalPlan& plan, const Schema<UnqualifiedUnboundField, Ordered>& storedSchema) const
+    {
+        for (const auto& store : getOperatorByType<ReplayStoreLogicalOperator>(plan))
+        {
+            const auto storeName = Identifier::parse(store->getStoreName());
+            if (sourceCatalog->containsLogicalSource(storeName))
+            {
+                continue;
+            }
+            auto logicalSource = sourceCatalog->addLogicalSource(storeName, storedSchema);
+            if (not logicalSource.has_value())
+            {
+                throw UnknownException("could not register store {} as a logical source", storeName);
+            }
+            throwOnError(sourceCatalog->addPhysicalSource(
+                *logicalSource,
+                Identifier::parse("Replay"),
+                sourceHost,
+                {{Identifier::parse("STORE_NAME"), store->getStoreName()}},
+                {{Identifier::parse("TYPE"), "NATIVE"}}));
+        }
     }
 
     [[nodiscard]] std::string runExplain(const std::string& sql) const
@@ -219,6 +247,8 @@ private:
         }
         return computeExplainOutput(*explainStatement, queryOptimizer);
     }
+
+    Host sourceHost;
 
     /// One catalog set for the whole run, which the rewriter's prefixing keeps collision-free.
     std::shared_ptr<SourceCatalog> sourceCatalog;

@@ -23,7 +23,9 @@
 #include <utility>
 #include <vector>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 #include <ReplayStoreFormat.hpp>
@@ -64,7 +66,7 @@ void ReplayStoreReader::close()
     opened = false;
 }
 
-Schema ReplayStoreReader::readSchema() const
+StoreSchema ReplayStoreReader::readSchema() const
 {
     if (!opened)
     {
@@ -73,61 +75,51 @@ Schema ReplayStoreReader::readSchema() const
     return parseSchemaFromText(header.schemaText);
 }
 
-void ReplayStoreReader::verifySchema(const Schema& expectedSchema) const
+void ReplayStoreReader::verifySchema(const StoreSchema& expectedSchema) const
 {
     auto fileSchema = readSchema();
 
-    if (fileSchema.getNumberOfFields() != expectedSchema.getNumberOfFields())
+    if (fileSchema.size() != expectedSchema.size())
     {
         throw InvalidConfigParameter(
-            "ReplayStoreReader: schema field count mismatch: file has {} fields, expected {}",
-            fileSchema.getNumberOfFields(),
-            expectedSchema.getNumberOfFields());
+            "ReplayStoreReader: schema field count mismatch: file has {} fields, expected {}", fileSchema.size(), expectedSchema.size());
     }
 
-    for (size_t i = 0; i < fileSchema.getNumberOfFields(); ++i)
+    for (size_t i = 0; i < fileSchema.size(); ++i)
     {
-        const auto& fileField = fileSchema.getFieldAt(i);
-        const auto& expectedField = expectedSchema.getFieldAt(i);
+        const auto fileField = *fileSchema[i];
+        const auto expectedField = *expectedSchema[i];
 
-        auto fileName = fileField.name;
-        if (const auto pos = fileName.rfind('$'); pos != std::string::npos)
-        {
-            fileName = fileName.substr(pos + 1);
-        }
-        auto expectedName = expectedField.name;
-        if (const auto pos = expectedName.rfind('$'); pos != std::string::npos)
-        {
-            expectedName = expectedName.substr(pos + 1);
-        }
-
+        /// Compare only the field's own name: a replayed stream may be bound under another qualifier.
+        const auto fileName = *std::ranges::rbegin(fileField.getFullyQualifiedName());
+        const auto expectedName = *std::ranges::rbegin(expectedField.getFullyQualifiedName());
         if (fileName != expectedName)
         {
             throw InvalidConfigParameter(
                 "ReplayStoreReader: field name mismatch at index {}: file has '{}', expected '{}'", i, fileName, expectedName);
         }
-        if (fileField.dataType != expectedField.dataType)
+        if (fileField.getDataType() != expectedField.getDataType())
         {
             throw InvalidConfigParameter(
                 "ReplayStoreReader: field type mismatch at index {} ({}): file has {}, expected {}",
                 i,
                 fileName,
-                fileField.dataType,
-                expectedField.dataType);
+                fileField.getDataType(),
+                expectedField.getDataType());
         }
     }
 }
 
-uint64_t ReplayStoreReader::readRows(char* dest, uint64_t maxRows, uint32_t tupleSize, const Schema& schema)
+uint64_t ReplayStoreReader::readRows(char* dest, uint64_t maxRows, uint32_t tupleSize, const StoreSchema& schema)
 {
     std::vector<uint64_t> fieldOffsets;
     std::vector<uint64_t> fieldSizes;
     uint64_t currentOffset = 0;
 
-    for (size_t i = 0; i < schema.getNumberOfFields(); ++i)
+    for (size_t i = 0; i < schema.size(); ++i)
     {
         fieldOffsets.push_back(currentOffset);
-        auto type = schema.getFieldAt(i).dataType;
+        auto type = schema[i]->getDataType();
         uint64_t size = 0;
         if (type.isType(DataType::Type::VARSIZED))
         {
@@ -145,9 +137,9 @@ uint64_t ReplayStoreReader::readRows(char* dest, uint64_t maxRows, uint32_t tupl
     for (; tuplesRead < maxRows; ++tuplesRead)
     {
         bool rowOk = true;
-        for (size_t fieldIdx = 0; fieldIdx < schema.getNumberOfFields(); ++fieldIdx)
+        for (size_t fieldIdx = 0; fieldIdx < schema.size(); ++fieldIdx)
         {
-            auto type = schema.getFieldAt(fieldIdx).dataType;
+            auto type = schema[fieldIdx]->getDataType();
             const auto fieldSize = fieldSizes[fieldIdx];
             const auto offset = (tuplesRead * tupleSize) + fieldOffsets[fieldIdx];
             char* fieldDest = dest + offset;
@@ -214,7 +206,7 @@ int ReplayStoreReader::peek()
     return inputFile.peek();
 }
 
-Schema ReplayStoreReader::readSchemaFromFile(const std::string& filePath)
+StoreSchema ReplayStoreReader::readSchemaFromFile(const std::string& filePath)
 {
     std::ifstream ifs(filePath, std::ios::binary);
     if (!ifs)

@@ -18,7 +18,6 @@
 #include <Util/Logger/Logger.hpp>
 #include <MemoryStore.hpp>
 #include <Store.hpp>
-#include <StoreTransformationRegistry.hpp>
 
 namespace NES::StoreManager
 {
@@ -38,13 +37,4 @@ void MemoryToFileTransformation::execute(Store& source, Store& dest)
     }
 }
 
-}
-
-namespace NES
-{
-StoreTransformationRegistryReturnType
-StoreTransformationGeneratedRegistrar::RegisterMemoryStore_to_FileStoreStoreTransformation(StoreTransformationRegistryArguments)
-{
-    return StoreManager::MemoryToFileTransformation{};
-}
 }

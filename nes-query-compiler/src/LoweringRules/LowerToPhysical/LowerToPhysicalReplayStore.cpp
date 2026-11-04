@@ -16,15 +16,15 @@
 
 #include <memory>
 #include <utility>
-#include <Configurations/Descriptor.hpp>
+#include <vector>
+
 #include <Interface/BufferRef/LowerSchemaProvider.hpp>
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/ReplayStoreLogicalOperator.hpp>
-#include <Runtime/Execution/OperatorHandler.hpp>
 #include <Traits/MemoryLayoutTypeTrait.hpp>
+#include <Util/SchemaFactory.hpp>
 #include <ErrorHandling.hpp>
-#include <LoweringRuleRegistry.hpp>
 #include <PhysicalOperator.hpp>
 #include <ReplayStoreOperatorHandler.hpp>
 #include <ReplayStorePhysicalOperator.hpp>
@@ -35,34 +35,26 @@ namespace NES
 
 LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator logicalOperator)
 {
-    PRECONDITION(logicalOperator.tryGetAs<ReplayStoreLogicalOperator>(), "Expected a StoreLogicalOperator");
-    auto storeOp = logicalOperator.getAs<ReplayStoreLogicalOperator>();
+    const auto storeOp = logicalOperator.getAs<ReplayStoreLogicalOperator>();
+    const auto& storeName = storeOp->getStoreName();
 
-    auto cfgCopy = DescriptorConfig::Config(storeOp->getConfig());
-    Descriptor logicalCfg(std::move(cfgCopy));
-    const auto storeName = logicalCfg.getFromConfig(ReplayStoreLogicalOperator::ConfigParameters::STORE_NAME);
+    const auto traitSet = logicalOperator.getTraitSet();
+    const auto memoryLayoutType = traitSet.get<MemoryLayoutTypeTrait>()->memoryLayout;
+    const auto outputSchema = createPhysicalOutputSchema(traitSet);
+    const auto inputSchema = createPhysicalOutputSchema(storeOp->getChild()->getTraitSet());
 
-    const auto outputSchema = logicalOperator.getOutputSchema();
+    auto& registry = StoreManager::StoreRegistry::instance();
+    registry.registerDefaultStore(storeName, inputSchema);
+    auto registeredStore = registry.getStore(storeName);
+    INVARIANT(registeredStore.has_value(), "Store '{}' was registered above", storeName);
 
-    auto registeredStore = StoreManager::StoreRegistry::instance().getStore(storeName);
-    PRECONDITION(registeredStore.has_value(), "Store '{}' must be pre-registered before lowering", storeName);
+    const auto handlerId = getNextOperatorHandlerId();
+    auto handler = std::make_shared<ReplayStoreOperatorHandler>(
+        ReplayStoreOperatorHandler::Config{.storeName = storeName, .schema = inputSchema}, std::move(*registeredStore));
 
-    ReplayStoreOperatorHandler::Config handlerCfg{
-        .storeName = storeName,
-        .schema = outputSchema,
-    };
-
-    auto handlerId = getNextOperatorHandlerId();
-    auto handler = std::make_shared<ReplayStoreOperatorHandler>(std::move(handlerCfg), std::move(*registeredStore));
-
-    const auto inputSchema = logicalOperator.getInputSchemas()[0];
-    const auto memoryLayoutTypeTrait = logicalOperator.getTraitSet().tryGet<MemoryLayoutTypeTrait>();
-    PRECONDITION(memoryLayoutTypeTrait.has_value(), "Expected a memory layout type trait");
-    const auto memoryLayoutType = memoryLayoutTypeTrait.value()->memoryLayout;
-    auto bufferRef = LowerSchemaProvider::lowerSchema(conf.pageSize.getValue(), inputSchema, memoryLayoutType);
-    auto physicalOperator = ReplayStorePhysicalOperator(handlerId, inputSchema, std::move(bufferRef));
-    auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
-        physicalOperator,
+    auto bufferRef = LowerSchemaProvider::lowerSchema(conf.operatorBufferSize, inputSchema, memoryLayoutType);
+    const auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
+        ReplayStorePhysicalOperator(handlerId, std::move(bufferRef)),
         inputSchema,
         outputSchema,
         memoryLayoutType,
@@ -71,14 +63,9 @@ LoweringRuleResultSubgraph LowerToPhysicalReplayStore::apply(LogicalOperator log
         handler,
         PhysicalOperatorWrapper::PipelineLocation::INTERMEDIATE);
 
-    const std::vector leafs{wrapper};
-    return {.root = wrapper, .leafs = leafs};
-}
-
-std::unique_ptr<AbstractLoweringRule>
-LoweringRuleGeneratedRegistrar::RegisterReplayStoreLoweringRule(LoweringRuleRegistryArguments argument) /// NOLINT
-{
-    return std::make_unique<LowerToPhysicalReplayStore>(argument.conf);
+    /// Creates a physical leaf for each logical leaf. Required, as this operator can have any number of sources.
+    std::vector leaves(logicalOperator.getChildren().size(), wrapper);
+    return {.root = wrapper, .leaves = {leaves}};
 }
 
 }

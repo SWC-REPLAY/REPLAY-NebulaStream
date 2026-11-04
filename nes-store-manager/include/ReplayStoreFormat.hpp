@@ -21,7 +21,10 @@
 #include <string>
 #include <utility>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
+#include <Store.hpp>
 
 namespace NES::StoreManager
 {
@@ -43,10 +46,14 @@ struct FileHeader
     std::string schemaText;
 };
 
+/// One `<name> <type>` line per field. Defined here, not by Schema's stream output, so that the
+/// on-disk format does not change when a debug representation does.
+std::string serializeSchemaText(const StoreSchema& schema);
+
 std::string serializeHeader(const std::string& schemaText);
 
 std::pair<FileHeader, uint64_t> parseHeader(std::ifstream& ifs);
 
-Schema parseSchemaFromText(const std::string& schemaText);
+StoreSchema parseSchemaFromText(const std::string& schemaText);
 
 }

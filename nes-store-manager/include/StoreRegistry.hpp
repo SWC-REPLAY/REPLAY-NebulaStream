@@ -19,7 +19,9 @@
 #include <string>
 #include <unordered_map>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <Store.hpp>
 
 namespace NES::StoreManager
@@ -34,8 +36,8 @@ public:
     /// Register a store under a name.
     void registerStore(const std::string& storeName, Store store);
 
-    /// Register a default hierarchical store (MemoryStore -> FileStore).
-    void registerDefaultStore(const std::string& storeName, const Schema& schema, const std::string& schemaText);
+    /// Register a default hierarchical store (MemoryStore -> FileStore). A name that is already registered keeps its store.
+    void registerDefaultStore(const std::string& storeName, const StoreSchema& schema);
 
     /// Look up the store for a given name.
     [[nodiscard]] std::optional<Store> getStore(const std::string& storeName) const;

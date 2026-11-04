@@ -16,7 +16,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +23,6 @@
 #include <optional>
 #include <ranges>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -60,8 +58,6 @@
 #include <Identifiers/Identifier.hpp>
 #include <Iterators/BFSIterator.hpp>
 #include <Operators/ProjectionLogicalOperator.hpp>
-#include <Operators/StoreLogicalOperator.hpp>
-#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/AvgAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/CountAggregationLogicalFunction.hpp>
 #include <Operators/Windows/Aggregations/MaxAggregationLogicalFunction.hpp>
@@ -732,8 +728,7 @@ void AntlrSQLQueryPlanCreator::enterIdentifier(AntlrSQLParser::IdentifierContext
     }
     else if (
         helpers.top().isFrom and not helpers.top().isJoinRelation and not helpers.top().isModelInference
-        and AntlrSQLParser::RuleErrorCapturingIdentifier == parentRuleIndex
-        and helpers.top().getSource().empty())
+        and AntlrSQLParser::RuleErrorCapturingIdentifier == parentRuleIndex)
     {
         /// get main source name
         helpers.top().setSource(bindIdentifier(context));
@@ -900,12 +895,9 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
             queryPlan = LogicalPlanBuilder::addSelection(*havingExpr, queryPlan);
         }
     }
-    /// inject store operator into the plan before sink if TIME_TRAVEL_STORE was provided
-    if (helpers.top().storeOptions.has_value())
+    if (const auto& storeName = helpers.top().replayStoreName)
     {
-        auto opts = *helpers.top().storeOptions;
-        const auto cfg = ReplayStoreLogicalOperator::validateAndFormatConfig(std::move(opts));
-        queryPlan = LogicalPlanBuilder::addReplayStore(cfg, queryPlan);
+        queryPlan = LogicalPlanBuilder::addReplayStore(*storeName, queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -1559,21 +1551,17 @@ LogicalPlan buildModelInferencePlan(AntlrSQLParser::ModelInferenceSourceContext*
 }
 }
 
+void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
+{
+    helpers.top().replayStoreName = bindIdentifier(context->storeName).asCanonicalString();
+    AntlrSQLBaseListener::enterTimeTravelClause(context);
+}
+
 void AntlrSQLQueryPlanCreator::exitModelInferenceRelation(AntlrSQLParser::ModelInferenceRelationContext* context)
 {
     auto plan = buildModelInferencePlan(context->modelInferenceSource(), helpers.top().queryPlans);
     helpers.top().queryPlans.push_back(std::move(plan));
     helpers.top().isModelInference = false;
     AntlrSQLBaseListener::exitModelInferenceRelation(context);
-}
-
-void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
-{
-    const auto storeName = bindIdentifier(context->storeName);
-
-    std::unordered_map<std::string, std::string> options;
-    options.emplace("store_name", storeName);
-
-    helpers.top().storeOptions = std::move(options);
 }
 }

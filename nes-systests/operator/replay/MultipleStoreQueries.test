@@ -18,10 +18,10 @@ ATTACH INLINE
 3,1,1002
 4,2,2000
 
-CREATE SINK sinkStore(stream.id UINT64, stream.value UINT64, stream.timestamp UINT64) TYPE File;
+CREATE SINK sinkStore(id UINT64, value UINT64, timestamp UINT64) TYPE File;
 CREATE SINK sinkRead(id UINT64, value UINT64, timestamp UINT64) TYPE File;
 
-CREATE SINK sinkStore2(stream.id UINT64, stream.value UINT64, stream.timestamp UINT64) TYPE File;
+CREATE SINK sinkStore2(id UINT64, value UINT64, timestamp UINT64) TYPE File;
 CREATE SINK sinkRead2(id UINT64, value UINT64, timestamp UINT64) TYPE File;
 
 # 1: store rows to binary file and also write to a sink for comparison

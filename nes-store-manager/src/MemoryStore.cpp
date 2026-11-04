@@ -21,27 +21,28 @@
 #include <shared_mutex>
 #include <utility>
 #include <vector>
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 #include <FlushPolicy.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
-#include <StoreTypeRegistry.hpp>
 
 namespace NES::StoreManager
 {
 
-MemoryStore::MemoryStore(const Schema& schema) : schema(schema)
+MemoryStore::MemoryStore(const StoreSchema& schema) : schema(schema)
 {
 }
 
-MemoryStore::MemoryStore(const Schema& schema, Config config) : schema(schema), config(config)
+MemoryStore::MemoryStore(const StoreSchema& schema, Config config) : schema(schema), config(config)
 {
 }
 
-MemoryStore::MemoryStore(const Schema& schema, const Config config, Store nextLevel, FlushPolicy policy)
+MemoryStore::MemoryStore(const StoreSchema& schema, const Config config, Store nextLevel, FlushPolicy policy)
     : schema(schema), config(config), nextLevel(std::move(nextLevel)), flushPolicy(policy)
 {
     auto foundTransformation = StoreTransformationRegistry::instance().findTransformation(
@@ -91,14 +92,14 @@ void MemoryStore::flush(Store& self)
     }
 }
 
-void MemoryStore::write(TupleBuffer buffer, const Schema& writeSchema, Store& self)
+void MemoryStore::write(TupleBuffer buffer, const StoreSchema& writeSchema, Store& self)
 {
     NES_DEBUG("Writing buffer with {} tuples and total size {} to memory store", buffer.getNumberOfTuples(), buffer.getBufferSize());
     std::unique_lock lock(mutex);
     PRECONDITION(opened, "MemoryStore must be opened before writing");
     /// Update schema from the write-time schema which has resolved types
     /// (the construction-time schema may have UNDEFINED types if created before type inference)
-    if (writeSchema.getSizeOfSchemaInBytes() > 0 && schema.getSizeOfSchemaInBytes() == 0)
+    if (writeSchema.size() > 0 && schema.size() == 0)
     {
         schema = writeSchema;
     }
@@ -113,7 +114,7 @@ void MemoryStore::write(TupleBuffer buffer, const Schema& writeSchema, Store& se
     }
 }
 
-uint64_t MemoryStore::read(TupleBuffer& buffer, const Schema& readSchema)
+uint64_t MemoryStore::read(TupleBuffer& buffer, const StoreSchema& readSchema)
 {
     if (nextLevel)
     {
@@ -160,7 +161,7 @@ bool MemoryStore::hasMore() const
     return false;
 }
 
-Schema MemoryStore::getSchema() const
+StoreSchema MemoryStore::getSchema() const
 {
     return schema;
 }
@@ -191,13 +192,4 @@ std::vector<TupleBuffer> MemoryStore::drain()
     return result;
 }
 
-}
-
-namespace NES
-{
-/// NOLINTNEXTLINE(performance-unnecessary-value-param)
-StoreTypeRegistryReturnType StoreTypeGeneratedRegistrar::RegisterMemoryStoreStoreType(StoreTypeRegistryArguments args)
-{
-    return StoreManager::makeStore<StoreManager::MemoryStore>(std::move(args.schema));
-}
 }

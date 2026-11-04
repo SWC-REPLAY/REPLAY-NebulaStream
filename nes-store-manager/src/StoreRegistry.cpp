@@ -23,12 +23,15 @@
 #include <system_error>
 #include <utility>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
 #include <FileStore.hpp>
 #include <FlushPolicy.hpp>
 #include <MemoryStore.hpp>
+#include <ReplayStoreFormat.hpp>
 #include <Store.hpp>
 #include <StoreTransformationRegistry.hpp>
 
@@ -47,9 +50,14 @@ void StoreRegistry::registerStore(const std::string& storeName, Store store)
     stores.emplace(storeName, std::move(store));
 }
 
-void StoreRegistry::registerDefaultStore(const std::string& storeName, const Schema& schema, const std::string& schemaText)
+void StoreRegistry::registerDefaultStore(const std::string& storeName, const StoreSchema& schema)
 {
     const std::unique_lock lock(mutex);
+    if (stores.contains(storeName))
+    {
+        return;
+    }
+    const auto schemaText = serializeSchemaText(schema);
     NES_DEBUG("Registering default store with name {} and schema {}", storeName, schemaText);
 
     const auto storeDir = generateStoreDir(storeName);

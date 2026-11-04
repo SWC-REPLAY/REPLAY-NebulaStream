@@ -31,7 +31,7 @@ ReplayStoreOperatorHandler::ReplayStoreOperatorHandler(Config cfg, StoreManager:
 {
 }
 
-void ReplayStoreOperatorHandler::start(PipelineExecutionContext&, uint32_t)
+void ReplayStoreOperatorHandler::start(PipelineExecutionContext&)
 {
     store.open();
 }

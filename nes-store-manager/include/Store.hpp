@@ -21,10 +21,18 @@
 #include <string_view>
 #include <utility>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <ErrorHandling.hpp>
 #include <nameof.hpp>
+
+namespace NES
+{
+/// Physical row schema of stored data: ordered, so the on-disk field order is the schema order.
+using StoreSchema = Schema<QualifiedUnboundField, Ordered>;
+}
 
 namespace NES::StoreManager
 {
@@ -41,7 +49,7 @@ using Store = TypedStore<>;
 /// Concept defining the interface for all store types.
 template <typename T>
 concept StoreConcept
-    = requires(T& store, const T& constStore, TupleBuffer buffer, TupleBuffer& bufferRef, const Schema& schema, Store& self) {
+    = requires(T& store, const T& constStore, TupleBuffer buffer, TupleBuffer& bufferRef, const StoreSchema& schema, Store& self) {
           { store.open() };
           { store.close(self) };
           { store.flush(self) };
@@ -56,7 +64,7 @@ concept StoreConcept
           { constStore.hasMore() } -> std::convertible_to<bool>;
 
           /// Get the schema associated with this store
-          { constStore.getSchema() } -> std::convertible_to<Schema>;
+          { constStore.getSchema() } -> std::convertible_to<StoreSchema>;
 
           /// Get the current size in bytes of stored data
           { constStore.size() } -> std::convertible_to<uint64_t>;
@@ -76,10 +84,10 @@ struct ErasedStore
     virtual void open() = 0;
     virtual void close(Store& self) = 0;
     virtual void flush(Store& self) = 0;
-    virtual void write(TupleBuffer buffer, const Schema& schema, Store& self) = 0;
-    [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const Schema& schema) = 0;
+    virtual void write(TupleBuffer buffer, const StoreSchema& schema, Store& self) = 0;
+    [[nodiscard]] virtual uint64_t read(TupleBuffer& buffer, const StoreSchema& schema) = 0;
     [[nodiscard]] virtual bool hasMore() const = 0;
-    [[nodiscard]] virtual Schema getSchema() const = 0;
+    [[nodiscard]] virtual StoreSchema getSchema() const = 0;
     [[nodiscard]] virtual uint64_t size() const = 0;
     [[nodiscard]] virtual std::string_view typeName() const noexcept = 0;
 };
@@ -102,13 +110,13 @@ struct StoreModel final : ErasedStore
 
     void flush(Store& self) override { impl.flush(self); }
 
-    void write(TupleBuffer buffer, const Schema& schema, Store& self) override { impl.write(std::move(buffer), schema, self); }
+    void write(TupleBuffer buffer, const StoreSchema& schema, Store& self) override { impl.write(std::move(buffer), schema, self); }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) override { return impl.read(buffer, schema); }
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const StoreSchema& schema) override { return impl.read(buffer, schema); }
 
     [[nodiscard]] bool hasMore() const override { return impl.hasMore(); }
 
-    [[nodiscard]] Schema getSchema() const override { return impl.getSchema(); }
+    [[nodiscard]] StoreSchema getSchema() const override { return impl.getSchema(); }
 
     [[nodiscard]] uint64_t size() const override { return impl.size(); }
 
@@ -197,17 +205,17 @@ struct TypedStore
         self->flush(selfStore);
     }
 
-    void write(TupleBuffer buffer, const Schema& schema)
+    void write(TupleBuffer buffer, const StoreSchema& schema)
     {
         Store selfStore(self);
         self->write(std::move(buffer), schema, selfStore);
     }
 
-    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const Schema& schema) { return self->read(buffer, schema); }
+    [[nodiscard]] uint64_t read(TupleBuffer& buffer, const StoreSchema& schema) { return self->read(buffer, schema); }
 
     [[nodiscard]] bool hasMore() const { return self->hasMore(); }
 
-    [[nodiscard]] Schema getSchema() const { return self->getSchema(); }
+    [[nodiscard]] StoreSchema getSchema() const { return self->getSchema(); }
 
     [[nodiscard]] uint64_t size() const { return self->size(); }
 

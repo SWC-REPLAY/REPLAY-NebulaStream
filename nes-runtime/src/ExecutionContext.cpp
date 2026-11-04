@@ -130,17 +130,8 @@ void ExecutionContext::setLocalOperatorState(const OperatorId operatorId, std::u
 
 static OperatorHandler* getGlobalOperatorHandlerProxy(PipelineExecutionContext* pipelineCtx, const OperatorHandlerId index)
 {
-    if (pipelineCtx == nullptr)
-    {
-        return nullptr;
-    }
-    auto& handlers = pipelineCtx->getOperatorHandlers();
-    const auto it = handlers.find(index);
-    if (it == handlers.end())
-    {
-        return nullptr;
-    }
-    return it->second.get();
+    auto handlers = pipelineCtx->getOperatorHandlers();
+    return handlers[index].get();
 }
 
 nautilus::val<OperatorHandler*> ExecutionContext::getGlobalOperatorHandler(const OperatorHandlerId handlerIndex) const

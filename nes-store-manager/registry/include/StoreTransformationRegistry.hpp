@@ -18,37 +18,23 @@
 #include <string>
 #include <string_view>
 
-#include <Util/Registry.hpp>
+#include <Util/RuntimeRegistry.hpp>
 #include <StoreTransformation.hpp>
 
 namespace NES
 {
 
-using StoreTransformationRegistryReturnType = StoreManager::StoreTransformation;
-
-struct StoreTransformationRegistryArguments
-{
-};
-
-class StoreTransformationRegistry : public BaseRegistry<
-                                        StoreTransformationRegistry,
-                                        std::string,
-                                        StoreTransformationRegistryReturnType,
-                                        StoreTransformationRegistryArguments>
+/// Maps "<sourceType>_to_<destType>" to the transformation moving data between those store types.
+class StoreTransformationRegistry : public RuntimeRegistry<StoreTransformationRegistry, std::string, StoreManager::StoreTransformation>
 {
 public:
-    /// Look up a transformation by source and destination store type names.
-    /// Constructs the key as "sourceTypeName_to_destTypeName".
-    [[nodiscard]] std::optional<StoreTransformationRegistryReturnType>
+    static StoreTransformationRegistry& instance();
+
+    [[nodiscard]] std::optional<StoreManager::StoreTransformation>
     findTransformation(const std::string_view sourceTypeName, const std::string_view destTypeName) const
     {
-        const auto key = std::string(sourceTypeName) + "_to_" + std::string(destTypeName);
-        return create(key, StoreTransformationRegistryArguments{});
+        return find(std::string(sourceTypeName) + "_to_" + std::string(destTypeName));
     }
 };
 
 }
-
-#define INCLUDED_FROM_STORE_TRANSFORMATION_REGISTRY
-#include <StoreTransformationGeneratedRegistrar.inc>
-#undef INCLUDED_FROM_STORE_TRANSFORMATION_REGISTRY

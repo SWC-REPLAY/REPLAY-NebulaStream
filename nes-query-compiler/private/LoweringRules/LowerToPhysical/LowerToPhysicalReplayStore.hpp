@@ -15,6 +15,7 @@
 #pragma once
 
 #include <utility>
+
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <QueryExecutionConfiguration.hpp>

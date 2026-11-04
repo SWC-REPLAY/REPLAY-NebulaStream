@@ -15,11 +15,10 @@ add_source_files(nes-store-manager
         BinaryStoreWriter.cpp
         ReplayStoreReader.cpp
         StoreRegistry.cpp
+        StoreTransformationRegistry.cpp
         MemoryStore.cpp
         FileStore.cpp
         MemoryToFileTransformation.cpp
 )
 
-add_plugin(MemoryStore StoreType MemoryStore.cpp)
-add_plugin(FileStore StoreType FileStore.cpp)
-add_plugin(MemoryStore_to_FileStore StoreTransformation MemoryToFileTransformation.cpp)
+add_registry_entry(StoreTransformation MemoryToFileTransformation KEY MemoryStore_to_FileStore)

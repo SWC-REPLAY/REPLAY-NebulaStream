@@ -14,60 +14,65 @@
 
 #pragma once
 
-#include <cstdint>
+#include <expected>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 
-#include <Configurations/Descriptor.hpp>
-#include <DataTypes/Schema.hpp>
+#include <Configurations/ConfigField.hpp>
+#include <Configurations/InstantiatedConfigValue.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
+#include <ErrorHandling.hpp>
 #include <Store.hpp>
-
-namespace NES::StoreManager
-{
-class ReplayStoreReader;
-}
 
 namespace NES
 {
 
-/// Reads rows from a Store or a binary file, delegating I/O as appropriate.
+struct ReplaySourceConfig
+{
+    std::string storeName;
+
+    static std::expected<ReplaySourceConfig, Exception> fromConfig(const InstantiatedConfig& config);
+};
+
+/// Reads back the rows that a query wrote into a named store.
 class ReplaySource final : public Source
 {
 public:
     static constexpr std::string_view NAME = "Replay";
-    explicit ReplaySource(const SourceDescriptor& sourceDescriptor);
-    ~ReplaySource() override;
+
+    ReplaySource(const ReplaySourceConfig& config, const SourceDescriptor& sourceDescriptor);
+    ~ReplaySource() override = default;
+
+    ReplaySource(const ReplaySource&) = delete;
+    ReplaySource& operator=(const ReplaySource&) = delete;
+    ReplaySource(ReplaySource&&) = delete;
+    ReplaySource& operator=(ReplaySource&&) = delete;
 
     void open(std::shared_ptr<AbstractBufferProvider> bufferProvider) override;
     void close() override;
 
     FillTupleBufferResult fillTupleBuffer(TupleBuffer& tupleBuffer, const std::stop_token& stopToken) override;
 
-    [[nodiscard]] uint32_t getRowWidthBytes() const;
+    /// The store writes finished tuples, so the buffers need no input formatting.
+    [[nodiscard]] bool addsMetadata() const override { return false; }
 
-    /// Read the binary store file header and reconstruct the Schema from the embedded schema text.
-    static Schema readSchemaFromFile(const std::string& filePath);
+    static Schema<QualifiedErasedConfigField, Ordered> getConfigSchema();
 
-    static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
-
-protected:
-    std::ostream& toString(std::ostream& str) const override;
+    [[nodiscard]] std::ostream& toString(std::ostream& str) const override;
 
 private:
-    std::string filePath;
     std::string storeName;
     std::optional<StoreManager::Store> store;
-    std::unique_ptr<StoreManager::ReplayStoreReader> reader;
-    Schema schema;
+    StoreSchema schema;
 };
 
 }

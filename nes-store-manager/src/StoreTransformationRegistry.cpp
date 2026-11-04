@@ -12,32 +12,15 @@
     limitations under the License.
 */
 
-#pragma once
-
-#include <string>
-#include <unordered_map>
-
-#include <DataTypes/Schema.hpp>
-#include <Util/Registry.hpp>
-#include <Store.hpp>
+#include <StoreTransformationRegistry.hpp>
 
 namespace NES
 {
 
-using StoreTypeRegistryReturnType = StoreManager::Store;
-
-struct StoreTypeRegistryArguments
+StoreTransformationRegistry& StoreTransformationRegistry::instance()
 {
-    Schema schema;
-    std::unordered_map<std::string, std::string> config;
-};
-
-class StoreTypeRegistry : public BaseRegistry<StoreTypeRegistry, std::string, StoreTypeRegistryReturnType, StoreTypeRegistryArguments>
-{
-};
-
+    static StoreTransformationRegistry inst;
+    return inst;
 }
 
-#define INCLUDED_FROM_STORE_TYPE_REGISTRY
-#include <StoreTypeGeneratedRegistrar.inc>
-#undef INCLUDED_FROM_STORE_TYPE_REGISTRY
+}
