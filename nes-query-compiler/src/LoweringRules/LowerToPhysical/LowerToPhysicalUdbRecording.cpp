@@ -17,7 +17,6 @@
 #include <memory>
 #include <vector>
 
-#include <Configurations/Descriptor.hpp>
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/UdbRecordingLogicalOperator.hpp>
@@ -41,7 +40,7 @@ LoweringRuleResultSubgraph LowerToPhysicalUdbRecording::apply(LogicalOperator lo
     const auto inputSchema = createPhysicalOutputSchema(udbOp->getChild()->getTraitSet());
 
     const auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
-        UdbRecordingPhysicalOperator(udbOp->getTraceName()),
+        UdbRecordingPhysicalOperator(RecordingConfig{.traceName = udbOp->getTraceName(), .traceSize = udbOp->getTraceSize()}),
         inputSchema,
         outputSchema,
         memoryLayoutType,

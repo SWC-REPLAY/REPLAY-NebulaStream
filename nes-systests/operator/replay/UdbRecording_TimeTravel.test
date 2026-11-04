@@ -2,8 +2,7 @@
 # description: Run a query with TIME_TRAVEL_UDB and verify the query produces the expected output
 # groups: [UdbRecording]
 
-# Only one tracer per process, so recordings must not overlap.
-SEQUENTIAL_EXECUTION
+# Only one tracer per process, so recordings must not overlap: run with --sequential.
 
 # INTERPRETER skips query compilation, whose latency would otherwise mask a regression in the
 # attach barrier: without it a fast pipeline finishes before udb attaches and the trace is empty.

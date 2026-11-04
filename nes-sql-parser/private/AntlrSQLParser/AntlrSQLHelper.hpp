@@ -63,8 +63,15 @@ public:
     bool isWhereOrHaving = false;
     bool isFrom = false;
     std::optional<std::string> replayStoreName;
-    bool hasUdbClause = false;
-    std::optional<std::string> udbTraceName;
+
+    struct UdbTrace
+    {
+        std::string name;
+        /// SIZE[KB|MB|GB]
+        std::string size;
+    };
+
+    std::optional<UdbTrace> udbTrace;
     bool isWindow = false;
     bool isArithmeticBinary = false;
     bool isJoinRelation = false;

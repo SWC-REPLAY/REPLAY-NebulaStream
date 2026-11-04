@@ -20,7 +20,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -42,27 +41,27 @@
 namespace NES
 {
 
-UdbRecordingLogicalOperator::UdbRecordingLogicalOperator(WeakLogicalOperator self, std::optional<std::string> traceName)
-    : ManagedByOperator(std::move(self)), traceName(std::move(traceName))
+UdbRecordingLogicalOperator::UdbRecordingLogicalOperator(WeakLogicalOperator self, std::string traceName, std::string traceSize)
+    : ManagedByOperator(std::move(self)), traceName(std::move(traceName)), traceSize(std::move(traceSize))
 {
 }
 
 UdbRecordingLogicalOperator::UdbRecordingLogicalOperator(
-    WeakLogicalOperator self, LogicalOperator child, std::optional<std::string> traceName)
-    : ManagedByOperator(std::move(self)), child(std::move(child)), traceName(std::move(traceName))
+    WeakLogicalOperator self, LogicalOperator child, std::string traceName, std::string traceSize)
+    : ManagedByOperator(std::move(self)), child(std::move(child)), traceName(std::move(traceName)), traceSize(std::move(traceSize))
 {
     inferLocalSchema();
 }
 
-TypedLogicalOperator<UdbRecordingLogicalOperator> UdbRecordingLogicalOperator::create(std::optional<std::string> traceName)
+TypedLogicalOperator<UdbRecordingLogicalOperator> UdbRecordingLogicalOperator::create(std::string traceName, std::string traceSize)
 {
-    return TypedLogicalOperator<UdbRecordingLogicalOperator>{std::move(traceName)};
+    return TypedLogicalOperator<UdbRecordingLogicalOperator>{std::move(traceName), std::move(traceSize)};
 }
 
 TypedLogicalOperator<UdbRecordingLogicalOperator>
-UdbRecordingLogicalOperator::create(LogicalOperator child, std::optional<std::string> traceName)
+UdbRecordingLogicalOperator::create(LogicalOperator child, std::string traceName, std::string traceSize)
 {
-    return TypedLogicalOperator<UdbRecordingLogicalOperator>{std::move(child), std::move(traceName)};
+    return TypedLogicalOperator<UdbRecordingLogicalOperator>{std::move(child), std::move(traceName), std::move(traceSize)};
 }
 
 std::string_view UdbRecordingLogicalOperator::getName() const noexcept
@@ -72,7 +71,7 @@ std::string_view UdbRecordingLogicalOperator::getName() const noexcept
 
 bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& rhs) const
 {
-    return traceName == rhs.traceName && outputSchema == rhs.outputSchema && traitSet == rhs.traitSet;
+    return traceName == rhs.traceName && traceSize == rhs.traceSize && outputSchema == rhs.outputSchema && traitSet == rhs.traitSet;
 }
 
 std::string UdbRecordingLogicalOperator::explain(ExplainVerbosity verbosity, OperatorId opId) const
@@ -80,7 +79,7 @@ std::string UdbRecordingLogicalOperator::explain(ExplainVerbosity verbosity, Ope
     if (verbosity == ExplainVerbosity::Debug)
     {
         return fmt::format(
-            "UDB_RECORDING(opId: {}, traceName: {}, traitSet: {})", opId, traceName.value_or("<generated>"), traitSet.explain(verbosity));
+            "UDB_RECORDING(opId: {}, traceName: {}, traceSize: {}, traitSet: {})", opId, traceName, traceSize, traitSet.explain(verbosity));
     }
     return "UDB_RECORDING";
 }
@@ -151,7 +150,9 @@ LogicalOperator UdbRecordingLogicalOperator::getChild() const
 Reflected Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(
     const TypedLogicalOperator<UdbRecordingLogicalOperator>& op, const ReflectionContext& context) const
 {
-    return context.reflect(detail::ReflectedUdbRecordingLogicalOperator{.operatorId = op.getId(), .traceName = op->getTraceName()});
+    return context.reflect(
+        detail::ReflectedUdbRecordingLogicalOperator{
+            .operatorId = op.getId(), .traceName = op->getTraceName(), .traceSize = op->getTraceSize()});
 }
 
 Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::Unreflector(ContextType operatorMapping) : plan(std::move(operatorMapping))
@@ -161,17 +162,17 @@ Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::Unreflector(Cont
 TypedLogicalOperator<UdbRecordingLogicalOperator>
 Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const Reflected& rfl, const ReflectionContext& context) const
 {
-    auto [id, traceName] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(rfl);
+    auto [id, traceName, traceSize] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(rfl);
     auto children = plan->getChildrenFor(id, context);
     if (children.size() != 1)
     {
         throw CannotDeserialize("UdbRecordingLogicalOperator requires exactly one child, but got {}", children.size());
     }
-    return UdbRecordingLogicalOperator::create(children.at(0), std::move(traceName));
+    return UdbRecordingLogicalOperator::create(children.at(0), std::move(traceName), std::move(traceSize));
 }
 }
 
 uint64_t std::hash<NES::UdbRecordingLogicalOperator>::operator()(const NES::UdbRecordingLogicalOperator& op) const noexcept
 {
-    return std::hash<std::optional<std::string>>{}(op.getTraceName());
+    return std::hash<std::string>{}(op.getTraceName());
 }
