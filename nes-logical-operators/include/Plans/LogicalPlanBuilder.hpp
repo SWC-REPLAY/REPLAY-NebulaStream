@@ -66,6 +66,7 @@ public:
     /// @param LogicalPlan the queryPlan the selection node is added to
     /// @return the updated queryPlan
     static LogicalPlan addReplayStore(std::string storeName, const LogicalPlan& queryPlan);
+    static LogicalPlan addUdbRecording(std::optional<std::string> traceName, const LogicalPlan& queryPlan);
     static LogicalPlan addSelection(LogicalFunction selectionFunction, const LogicalPlan& queryPlan);
 
     static LogicalPlan addWindowAggregation(

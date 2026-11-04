@@ -14,12 +14,18 @@
 
 #include <UdbRecordingPhysicalOperator.hpp>
 
+#include <array>
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <utility>
 #include <fcntl.h>
 #include <unistd.h>
+#include <linux/prctl.h>
 #include <sys/prctl.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 
 #include <Interface/Record.hpp>
@@ -28,8 +34,6 @@
 #include <CompilationContext.hpp>
 #include <ExecutionContext.hpp>
 #include <PhysicalOperator.hpp>
-#include <PipelineExecutionContext.hpp>
-#include <function.hpp>
 
 namespace NES
 {
@@ -44,6 +48,7 @@ namespace
 ///        export UDB_BINARY_PATH=/path/to/udb
 void spawnUdbProxy(const std::optional<std::string>& traceName)
 {
+    /// NOLINTNEXTLINE(concurrency-mt-unsafe) - there is no thread-safe getenv; the value is copied below
     const char* udbBinEnv = std::getenv("UDB_BINARY_PATH");
     if (udbBinEnv == nullptr)
     {
@@ -67,13 +72,15 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
         NES_ERROR("Pipe2 failed");
         return;
     }
+    const int readEnd = std::get<0>(pipeFd);
+    const int writeEnd = std::get<1>(pipeFd);
 
     const pid_t child = ::fork();
     if (child == 0)
     {
         /// Child: write end is O_CLOEXEC — exec closes it. On failure write a byte so parent detects it.
-        // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
-        if (traceName != nullptr)
+        /// NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
+        if (traceName.has_value())
         {
             ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), "--recording-file", traceFile.c_str(), nullptr);
         }
@@ -81,22 +88,22 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
         {
             ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), nullptr);
         }
-        // NOLINTEND(cppcoreguidelines-pro-type-vararg)
+        /// NOLINTEND(cppcoreguidelines-pro-type-vararg)
 
         /// execlp only returns on failure — only async-signal-safe calls allowed here.
         const char errByte = 1;
-        static_cast<void>(::write(pipeFd[1], &errByte, 1));
+        static_cast<void>(::write(writeEnd, &errByte, 1));
         constexpr int exitExecFailed = 127;
         std::_Exit(exitExecFailed);
     }
 
     /// Parent: close write end, then check if child signalled failure.
-    ::close(pipeFd[1]);
+    ::close(writeEnd);
 
     if (child < 0)
     {
         NES_ERROR("Fork failed");
-        ::close(pipeFd[0]);
+        ::close(readEnd);
         return;
     }
 
@@ -107,14 +114,18 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
     }
 
     char result = 0;
-    ssize_t n;
-    do { n = ::read(pipeFd[0], &result, 1); } while (n < 0 && errno == EINTR); // retry on SIGCHLD or other interrupts
-    if (n == 1)
+    /// Retry when a signal such as SIGCHLD interrupts the read.
+    ssize_t bytesRead = ::read(readEnd, &result, 1);
+    while (bytesRead < 0 && errno == EINTR)
+    {
+        bytesRead = ::read(readEnd, &result, 1);
+    }
+    if (bytesRead == 1)
     {
         NES_ERROR("execlp failed for binary '{}'", udbBin);
         ::waitpid(child, nullptr, 0);
     }
-    ::close(pipeFd[0]);
+    ::close(readEnd);
 }
 
 }

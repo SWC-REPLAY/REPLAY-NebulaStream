@@ -15,13 +15,16 @@
 #pragma once
 
 #include <LoweringRules/AbstractLoweringRule.hpp>
-#include <Operators/LogicalOperator.hpp>
+#include <Operators/LogicalOperatorFwd.hpp>
+#include <QueryExecutionConfiguration.hpp>
 
 namespace NES
 {
 
 struct LowerToPhysicalUdbRecording : AbstractLoweringRule
 {
+    explicit LowerToPhysicalUdbRecording(QueryExecutionConfiguration) { }
+
     LoweringRuleResultSubgraph apply(LogicalOperator logicalOperator) override;
 };
 
