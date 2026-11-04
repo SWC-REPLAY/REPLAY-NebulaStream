@@ -15,13 +15,14 @@
 #include <LoweringRules/LowerToPhysical/LowerToPhysicalUdbRecording.hpp>
 
 #include <memory>
+#include <vector>
 
 #include <LoweringRules/AbstractLoweringRule.hpp>
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Traits/MemoryLayoutTypeTrait.hpp>
+#include <Util/SchemaFactory.hpp>
 #include <ErrorHandling.hpp>
-#include <LoweringRuleRegistry.hpp>
 #include <PhysicalOperator.hpp>
 #include <UdbRecordingPhysicalOperator.hpp>
 
@@ -30,32 +31,24 @@ namespace NES
 
 LoweringRuleResultSubgraph LowerToPhysicalUdbRecording::apply(LogicalOperator logicalOperator)
 {
-    PRECONDITION(logicalOperator.tryGetAs<UdbRecordingLogicalOperator>(), "Expected a UdbRecordingLogicalOperator");
     const auto udbOp = logicalOperator.getAs<UdbRecordingLogicalOperator>();
 
-    const auto inputSchema = logicalOperator.getInputSchemas()[0];
-    const auto outputSchema = logicalOperator.getOutputSchema();
-    const auto memoryLayoutTypeTrait = logicalOperator.getTraitSet().tryGet<MemoryLayoutTypeTrait>();
-    PRECONDITION(memoryLayoutTypeTrait.has_value(), "Expected a memory layout type trait");
-    const auto memoryLayoutType = memoryLayoutTypeTrait.value()->memoryLayout;
+    const auto traitSet = logicalOperator.getTraitSet();
+    const auto memoryLayoutType = traitSet.get<MemoryLayoutTypeTrait>()->memoryLayout;
+    const auto outputSchema = createPhysicalOutputSchema(traitSet);
+    const auto inputSchema = createPhysicalOutputSchema(udbOp->getChild()->getTraitSet());
 
-    auto physicalOperator = UdbRecordingPhysicalOperator(udbOp->getTraceName());
-    auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
-        physicalOperator,
+    const auto wrapper = std::make_shared<PhysicalOperatorWrapper>(
+        UdbRecordingPhysicalOperator(udbOp->getTraceName()),
         inputSchema,
         outputSchema,
         memoryLayoutType,
         memoryLayoutType,
         PhysicalOperatorWrapper::PipelineLocation::INTERMEDIATE);
 
-    const std::vector leafs{wrapper};
-    return {.root = wrapper, .leafs = leafs};
-}
-
-std::unique_ptr<AbstractLoweringRule>
-LoweringRuleGeneratedRegistrar::RegisterUdbRecordingLoweringRule(LoweringRuleRegistryArguments) /// NOLINT
-{
-    return std::make_unique<LowerToPhysicalUdbRecording>();
+    /// Creates a physical leaf for each logical leaf. Required, as this operator can have any number of sources.
+    std::vector leaves(logicalOperator.getChildren().size(), wrapper);
+    return {.root = wrapper, .leaves = {leaves}};
 }
 
 }

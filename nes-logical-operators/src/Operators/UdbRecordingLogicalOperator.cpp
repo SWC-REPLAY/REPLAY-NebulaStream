@@ -14,43 +14,88 @@
 
 #include <Operators/UdbRecordingLogicalOperator.hpp>
 
-#include <ranges>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
+#include <Operators/LogicalOperatorFwd.hpp>
+#include <Schema/Binder.hpp>
+#include <Schema/Field.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
+#include <Serialization/ReflectedOperator.hpp>
 #include <Traits/TraitSet.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Reflection.hpp>
 #include <fmt/format.h>
 #include <ErrorHandling.hpp>
-#include <LogicalOperatorRegistry.hpp>
 
 namespace NES
 {
 
-std::string UdbRecordingLogicalOperator::explain(ExplainVerbosity verbosity, OperatorId id) const
+UdbRecordingLogicalOperator::UdbRecordingLogicalOperator(WeakLogicalOperator self, std::optional<std::string> traceName)
+    : ManagedByOperator(std::move(self)), traceName(std::move(traceName))
 {
-    if (verbosity == ExplainVerbosity::Debug)
-    {
-        return fmt::format("UDB_RECORDING(opId: {}, traceName: {})", id, traceName.value_or("<auto>"));
-    }
-    return {"UDB_RECORDING"};
 }
 
-std::string_view UdbRecordingLogicalOperator::getName() noexcept
+UdbRecordingLogicalOperator::UdbRecordingLogicalOperator(
+    WeakLogicalOperator self, LogicalOperator child, std::optional<std::string> traceName)
+    : ManagedByOperator(std::move(self)), child(std::move(child)), traceName(std::move(traceName))
+{
+    inferLocalSchema();
+}
+
+TypedLogicalOperator<UdbRecordingLogicalOperator> UdbRecordingLogicalOperator::create(std::optional<std::string> traceName)
+{
+    return TypedLogicalOperator<UdbRecordingLogicalOperator>{std::move(traceName)};
+}
+
+TypedLogicalOperator<UdbRecordingLogicalOperator>
+UdbRecordingLogicalOperator::create(LogicalOperator child, std::optional<std::string> traceName)
+{
+    return TypedLogicalOperator<UdbRecordingLogicalOperator>{std::move(child), std::move(traceName)};
+}
+
+std::string_view UdbRecordingLogicalOperator::getName() const noexcept
 {
     return NAME;
 }
 
-UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withTraitSet(TraitSet ts) const
+bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& rhs) const
 {
+    return traceName == rhs.traceName && outputSchema == rhs.outputSchema && traitSet == rhs.traitSet;
+}
+
+std::string UdbRecordingLogicalOperator::explain(ExplainVerbosity verbosity, OperatorId opId) const
+{
+    if (verbosity == ExplainVerbosity::Debug)
+    {
+        return fmt::format(
+            "UDB_RECORDING(opId: {}, traceName: {}, traitSet: {})", opId, traceName.value_or("<generated>"), traitSet.explain(verbosity));
+    }
+    return "UDB_RECORDING";
+}
+
+void UdbRecordingLogicalOperator::inferLocalSchema()
+{
+    PRECONDITION(child.has_value(), "Child not set when calling schema inference");
+    outputSchema = unbind(child->getOutputSchema());
+}
+
+UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withInferredSchema() const
+{
+    PRECONDITION(child.has_value(), "Child not set when calling schema inference");
     auto copy = *this;
-    copy.traitSet = std::move(ts);
+    copy.child = copy.child->withInferredSchema();
+    copy.inferLocalSchema();
     return copy;
 }
 
@@ -59,69 +104,73 @@ TraitSet UdbRecordingLogicalOperator::getTraitSet() const
     return traitSet;
 }
 
-UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withChildren(std::vector<LogicalOperator> newChildren) const
+UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withTraitSet(TraitSet traitSet) const
 {
     auto copy = *this;
-    copy.children = std::move(newChildren);
+    copy.traitSet = std::move(traitSet);
     return copy;
+}
+
+UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withChildrenUnsafe(std::vector<LogicalOperator> children) const
+{
+    PRECONDITION(children.size() == 1, "Can only set exactly one child for UdbRecording, got {}", children.size());
+    auto copy = *this;
+    copy.child = std::move(children.at(0));
+    return copy;
+}
+
+UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withChildren(std::vector<LogicalOperator> children) const
+{
+    auto copy = withChildrenUnsafe(std::move(children));
+    copy.inferLocalSchema();
+    return copy;
+}
+
+Schema<Field, Unordered> UdbRecordingLogicalOperator::getOutputSchema() const
+{
+    INVARIANT(outputSchema.has_value(), "Accessed output schema before calling schema inference");
+    return NES::bindToOperator(self.lock(), outputSchema.value());
 }
 
 std::vector<LogicalOperator> UdbRecordingLogicalOperator::getChildren() const
 {
-    return children;
+    if (child.has_value())
+    {
+        return {*child};
+    }
+    return {};
 }
 
-std::vector<Schema> UdbRecordingLogicalOperator::getInputSchemas() const
+LogicalOperator UdbRecordingLogicalOperator::getChild() const
 {
-    INVARIANT(!children.empty(), "UdbRecording operator requires exactly one child");
-    return children | std::ranges::views::transform([](const LogicalOperator& child) { return child.getOutputSchema(); })
-        | std::ranges::to<std::vector>();
+    PRECONDITION(child.has_value(), "Child not set when trying to retrieve child");
+    return child.value();
 }
 
-Schema UdbRecordingLogicalOperator::getOutputSchema() const
+Reflected Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(
+    const TypedLogicalOperator<UdbRecordingLogicalOperator>& op, const ReflectionContext& context) const
 {
-    INVARIANT(!children.empty(), "UdbRecording operator requires exactly one child");
-    return children.front().getOutputSchema();
+    return context.reflect(detail::ReflectedUdbRecordingLogicalOperator{.operatorId = op.getId(), .traceName = op->getTraceName()});
 }
 
-UdbRecordingLogicalOperator UdbRecordingLogicalOperator::withInferredSchema(std::vector<Schema>) const
+Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::Unreflector(ContextType operatorMapping) : plan(std::move(operatorMapping))
 {
-    return *this;
-}
-
-bool UdbRecordingLogicalOperator::operator==(const UdbRecordingLogicalOperator& rhs) const
-{
-    return traitSet == rhs.traitSet && traceName == rhs.traceName;
-}
-
-}
-
-namespace NES
-{
-
-Reflected
-Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const TypedLogicalOperator<UdbRecordingLogicalOperator>& op) const
-{
-    return reflect(detail::ReflectedUdbRecordingLogicalOperator{.traceName = op->getTraceName()});
 }
 
 TypedLogicalOperator<UdbRecordingLogicalOperator>
-Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const Reflected& reflected, const ReflectionContext& context) const
+Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>::operator()(const Reflected& rfl, const ReflectionContext& context) const
 {
-    auto [traceName] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(reflected);
-    return TypedLogicalOperator<UdbRecordingLogicalOperator>{UdbRecordingLogicalOperator(std::move(traceName))};
-}
-
-/// NOLINTNEXTLINE(performance-unnecessary-value-param)
-LogicalOperatorRegistryReturnType
-LogicalOperatorGeneratedRegistrar::RegisterUdbRecordingLogicalOperator(LogicalOperatorRegistryArguments arguments)
-{
-    if (!arguments.reflected.isEmpty())
+    auto [id, traceName] = context.unreflect<detail::ReflectedUdbRecordingLogicalOperator>(rfl);
+    auto children = plan->getChildrenFor(id, context);
+    if (children.size() != 1)
     {
-        return ReflectionContext{}.unreflect<TypedLogicalOperator<UdbRecordingLogicalOperator>>(arguments.reflected);
+        throw CannotDeserialize("UdbRecordingLogicalOperator requires exactly one child, but got {}", children.size());
     }
-    PRECONDITION(false, "Operator is only built directly via parser or via reflection, not using the registry");
-    std::unreachable();
+    return UdbRecordingLogicalOperator::create(children.at(0), std::move(traceName));
+}
 }
 
+uint64_t std::hash<NES::UdbRecordingLogicalOperator>::operator()(const NES::UdbRecordingLogicalOperator& op) const noexcept
+{
+    return std::hash<std::optional<std::string>>{}(op.getTraceName());
 }

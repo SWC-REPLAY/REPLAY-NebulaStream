@@ -14,14 +14,22 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
-#include <DataTypes/Schema.hpp>
+#include <DataTypes/UnboundField.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Operators/LogicalOperator.hpp>
+#include <Operators/LogicalOperatorFwd.hpp>
+#include <Schema/Field.hpp>
+#include <Schema/Schema.hpp>
+#include <Schema/SchemaFwd.hpp>
+#include <Serialization/ReflectedOperator.hpp>
 #include <Traits/TraitSet.hpp>
 #include <Util/PlanRenderer.hpp>
 #include <Util/Reflection.hpp>
@@ -29,59 +37,76 @@
 namespace NES
 {
 
+/// Records the execution of its pipeline with udb and passes rows through unchanged.
+/// Without a trace name, udb generates one.
 class UdbRecordingLogicalOperator : public ManagedByOperator
 {
 public:
-    UdbRecordingLogicalOperator() : ManagedByOperator(WeakLogicalOperator{}) { }
+    UdbRecordingLogicalOperator(WeakLogicalOperator self, std::optional<std::string> traceName);
+    UdbRecordingLogicalOperator(WeakLogicalOperator self, LogicalOperator child, std::optional<std::string> traceName);
 
-    explicit UdbRecordingLogicalOperator(WeakLogicalOperator self, std::optional<std::string> traceName)
-        : ManagedByOperator(std::move(self)), traceName(std::move(traceName)) { }
-
-    explicit UdbRecordingLogicalOperator(std::optional<std::string> traceName)
-        : ManagedByOperator(WeakLogicalOperator{}), traceName(std::move(traceName)) { }
-
-    [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId id) const;
-    [[nodiscard]] static std::string_view getName() noexcept;
-
-    [[nodiscard]] std::vector<LogicalOperator> getChildren() const;
-    [[nodiscard]] UdbRecordingLogicalOperator withChildren(std::vector<LogicalOperator> children) const;
-    [[nodiscard]] UdbRecordingLogicalOperator withTraitSet(TraitSet ts) const;
-    [[nodiscard]] TraitSet getTraitSet() const;
-    [[nodiscard]] bool operator==(const UdbRecordingLogicalOperator& rhs) const;
-
-    [[nodiscard]] std::vector<Schema> getInputSchemas() const;
-    [[nodiscard]] Schema getOutputSchema() const;
-    [[nodiscard]] UdbRecordingLogicalOperator withInferredSchema(std::vector<Schema> inputSchemas) const;
+    static TypedLogicalOperator<UdbRecordingLogicalOperator> create(std::optional<std::string> traceName);
+    static TypedLogicalOperator<UdbRecordingLogicalOperator> create(LogicalOperator child, std::optional<std::string> traceName);
 
     [[nodiscard]] const std::optional<std::string>& getTraceName() const { return traceName; }
 
+    [[nodiscard]] bool operator==(const UdbRecordingLogicalOperator& rhs) const;
+
+    [[nodiscard]] UdbRecordingLogicalOperator withTraitSet(TraitSet traitSet) const;
+    [[nodiscard]] TraitSet getTraitSet() const;
+
+    [[nodiscard]] UdbRecordingLogicalOperator withChildrenUnsafe(std::vector<LogicalOperator> children) const;
+    [[nodiscard]] UdbRecordingLogicalOperator withChildren(std::vector<LogicalOperator> children) const;
+    [[nodiscard]] std::vector<LogicalOperator> getChildren() const;
+    [[nodiscard]] LogicalOperator getChild() const;
+    [[nodiscard]] Schema<Field, Unordered> getOutputSchema() const;
+
+    [[nodiscard]] std::string explain(ExplainVerbosity verbosity, OperatorId) const;
+    [[nodiscard]] std::string_view getName() const noexcept;
+
+    [[nodiscard]] UdbRecordingLogicalOperator withInferredSchema() const;
+
 private:
     static constexpr std::string_view NAME = "UdbRecording";
-    std::vector<LogicalOperator> children;
+    std::optional<LogicalOperator> child;
+    std::optional<std::string> traceName;
+
+    void inferLocalSchema();
+    /// Set during schema inference
+    std::optional<Schema<UnqualifiedUnboundField, Unordered>> outputSchema;
+
     TraitSet traitSet;
+};
+
+namespace detail
+{
+struct ReflectedUdbRecordingLogicalOperator
+{
+    OperatorId operatorId{OperatorId::INVALID};
     std::optional<std::string> traceName;
 };
+}
 
 template <>
 struct Reflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>
 {
-    Reflected operator()(const TypedLogicalOperator<UdbRecordingLogicalOperator>& op) const;
+    Reflected operator()(const TypedLogicalOperator<UdbRecordingLogicalOperator>& op, const ReflectionContext& context) const;
 };
 
 template <>
 struct Unreflector<TypedLogicalOperator<UdbRecordingLogicalOperator>>
 {
-    TypedLogicalOperator<UdbRecordingLogicalOperator> operator()(const Reflected& reflected, const ReflectionContext& context) const;
+    using ContextType = std::shared_ptr<ReflectedPlan>;
+    ContextType plan;
+    explicit Unreflector(ContextType operatorMapping);
+    TypedLogicalOperator<UdbRecordingLogicalOperator> operator()(const Reflected& rfl, const ReflectionContext& context) const;
 };
 
 static_assert(LogicalOperatorConcept<UdbRecordingLogicalOperator>);
-
 }
 
-namespace NES::detail
+template <>
+struct std::hash<NES::UdbRecordingLogicalOperator>
 {
-struct ReflectedUdbRecordingLogicalOperator
-{
-    std::optional<std::string> traceName;
+    uint64_t operator()(const NES::UdbRecordingLogicalOperator& op) const noexcept;
 };
-}

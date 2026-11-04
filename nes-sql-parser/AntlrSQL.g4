@@ -353,6 +353,8 @@ sinkClause: INTO sink (',' sink)*;
 
 timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
 
+udbClause: TIME_TRAVEL_UDB udbTraceName=identifier?;
+
 sink: identifier | anonymousSink;
 
 anonymousSink
@@ -531,6 +533,7 @@ WINDOW: 'WINDOW' | 'window';
 WITH: 'WITH';
 SET: 'SET';
 TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
+TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
 TUMBLING: 'TUMBLING' | 'tumbling';
 SLIDING: 'SLIDING' | 'sliding';
 THRESHOLD : 'THRESHOLD'|'threshold';

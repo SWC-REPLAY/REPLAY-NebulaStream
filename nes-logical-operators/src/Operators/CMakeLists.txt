@@ -21,6 +21,7 @@ add_source_files(nes-logical-operators
         InferModelLogicalOperator.cpp
         InferModelNameLogicalOperator.cpp
         ReplayStoreLogicalOperator.cpp
+        UdbRecordingLogicalOperator.cpp
 )
 
 add_subdirectory(Sinks)
@@ -36,3 +37,4 @@ add_unreflection_entry(LogicalOperator EventTimeWatermarkAssigner)
 add_unreflection_entry(LogicalOperator InferModel)
 add_unreflection_entry(LogicalOperator InferModelName)
 add_unreflection_entry(LogicalOperator ReplayStore)
+add_unreflection_entry(LogicalOperator UdbRecording)

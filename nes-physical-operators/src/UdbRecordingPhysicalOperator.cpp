@@ -73,7 +73,7 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
     {
         /// Child: write end is O_CLOEXEC — exec closes it. On failure write a byte so parent detects it.
         // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
-        if (traceName != nullptr)
+        if (traceName.has_value())
         {
             ::execl(udbBin.c_str(), udbBin.c_str(), "--pid", pidStr.c_str(), "--recording-file", traceFile.c_str(), nullptr);
         }
@@ -108,7 +108,10 @@ void spawnUdbProxy(const std::optional<std::string>& traceName)
 
     char result = 0;
     ssize_t n;
-    do { n = ::read(pipeFd[0], &result, 1); } while (n < 0 && errno == EINTR); // retry on SIGCHLD or other interrupts
+    do
+    {
+        n = ::read(pipeFd[0], &result, 1);
+    } while (n < 0 && errno == EINTR); // retry on SIGCHLD or other interrupts
     if (n == 1)
     {
         NES_ERROR("execlp failed for binary '{}'", udbBin);

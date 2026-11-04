@@ -99,6 +99,11 @@ LogicalPlan LogicalPlanBuilder::addReplayStore(std::string storeName, const Logi
     return promoteOperatorToRoot(queryPlan, ReplayStoreLogicalOperator::create(std::move(storeName)));
 }
 
+LogicalPlan LogicalPlanBuilder::addUdbRecording(std::optional<std::string> traceName, const LogicalPlan& queryPlan)
+{
+    return promoteOperatorToRoot(queryPlan, UdbRecordingLogicalOperator::create(std::move(traceName)));
+}
+
 LogicalPlan LogicalPlanBuilder::addSelection(LogicalFunction selectionFunction, const LogicalPlan& queryPlan)
 {
     NES_TRACE("LogicalPlanBuilder: add selection operator to query plan");
