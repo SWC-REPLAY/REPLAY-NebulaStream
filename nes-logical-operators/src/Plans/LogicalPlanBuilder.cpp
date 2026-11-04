@@ -99,9 +99,9 @@ LogicalPlan LogicalPlanBuilder::addReplayStore(std::string storeName, const Logi
     return promoteOperatorToRoot(queryPlan, ReplayStoreLogicalOperator::create(std::move(storeName)));
 }
 
-LogicalPlan LogicalPlanBuilder::addUdbRecording(std::optional<std::string> traceName, const LogicalPlan& queryPlan)
+LogicalPlan LogicalPlanBuilder::addUdbRecording(std::string traceName, std::string traceSize, const LogicalPlan& queryPlan)
 {
-    return promoteOperatorToRoot(queryPlan, UdbRecordingLogicalOperator::create(std::move(traceName)));
+    return promoteOperatorToRoot(queryPlan, UdbRecordingLogicalOperator::create(std::move(traceName), std::move(traceSize)));
 }
 
 LogicalPlan LogicalPlanBuilder::addSelection(LogicalFunction selectionFunction, const LogicalPlan& queryPlan)

@@ -899,11 +899,9 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
     {
         queryPlan = LogicalPlanBuilder::addReplayStore(*storeName, queryPlan);
     }
-    /// inject UDB recording operator into the plan if TIME_TRAVEL_UDB was provided
-    if (const auto& udbOptions = helpers.top().udbOptions)
+    if (const auto& trace = helpers.top().udbTrace)
     {
-        const auto cfg = UdbRecordingLogicalOperator::validateAndFormatConfig(*udbOptions);
-        queryPlan = LogicalPlanBuilder::addUdbRecording(cfg, queryPlan);
+        queryPlan = LogicalPlanBuilder::addUdbRecording(trace->name, trace->size, queryPlan);
     }
     helpers.pop();
     if (helpers.empty())
@@ -1565,20 +1563,8 @@ void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelC
 
 void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
 {
-    std::unordered_map<std::string, std::string> options;
-    options.emplace(UdbRecordingLogicalOperator::ConfigParameters::TRACE_NAME, context->udbTraceName->getText());
-    options.emplace(UdbRecordingLogicalOperator::ConfigParameters::TRACE_SIZE, toUpperCase(context->udbTraceSize->getText()));
-
-    /// if no trace name is provided UDB auto generates one
-    if (context->udbTraceName != nullptr)
-    {
-        helpers.top().udbOptions.traceName = context->udbTraceName->getText();
-    }
-    /// if no trace size is provided UDB falls back to a default size
-    if (context->udbTraceSize != nullptr)
-    {
-        helpers.top().udbOptions.traceSize = toUpperCase(context->udbTraceSize->getText());
-    }
+    helpers.top().udbTrace
+        = AntlrSQLHelper::UdbTrace{.name = context->udbTraceName->getText(), .size = toUpperCase(context->udbTraceSize->getText())};
     AntlrSQLBaseListener::enterUdbClause(context);
 }
 

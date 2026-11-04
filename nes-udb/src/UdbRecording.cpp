@@ -17,7 +17,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
-#include <csignal>
+#include <csignal> /// NOLINT(misc-include-cleaner) - provides ::kill and the signal numbers used below
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -79,6 +79,7 @@ pid_t currentTracerPid()
 ///     export UDB_BINARY_PATH=/path/to/live-record
 std::string udbBinaryPath()
 {
+    /// NOLINTNEXTLINE(concurrency-mt-unsafe) - there is no thread-safe getenv; the value is copied below
     const char* udbBinEnv = std::getenv("UDB_BINARY_PATH");
     if (udbBinEnv == nullptr)
     {
@@ -147,28 +148,31 @@ pid_t spawnLiveRecorder(const RecordingConfig& config)
     {
         throw UdbRecordingFailure("pipe2 failed: {}", getErrorMessageFromERRNO());
     }
+    const int readEnd = std::get<0>(pipeFd);
+    const int writeEnd = std::get<1>(pipeFd);
 
     const pid_t child = ::fork();
     if (child == 0)
     {
         /// POSIX guarantees execv does not modify argv, hence the cast away from const.
+        /// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         ::execv(udbBin.c_str(), const_cast<char* const*>(execArgs.data()));
 
         /// execv only returns on failure - only async-signal-safe calls allowed here.
         const char errByte = 1;
-        static_cast<void>(::write(pipeFd[1], &errByte, 1));
+        static_cast<void>(::write(writeEnd, &errByte, 1));
         constexpr int exitExecFailed = 127;
         std::_Exit(exitExecFailed);
     }
 
     /// Parent: close write end, then check whether the child signalled failure.
-    ::close(pipeFd[1]);
+    ::close(writeEnd);
 
     if (child < 0)
     {
         /// Capture before close(), which may overwrite errno.
         const std::string forkError = getErrorMessageFromERRNO();
-        ::close(pipeFd[0]);
+        ::close(readEnd);
         throw UdbRecordingFailure("fork failed: {}", forkError);
     }
 
@@ -183,13 +187,13 @@ pid_t spawnLiveRecorder(const RecordingConfig& config)
     ssize_t nread = 0;
     for (;;)
     {
-        nread = ::read(pipeFd[0], &result, 1);
+        nread = ::read(readEnd, &result, 1);
         if (nread >= 0 || errno != EINTR)
         {
             break;
         }
     } /// retry on SIGCHLD or other interrupts
-    ::close(pipeFd[0]);
+    ::close(readEnd);
 
     if (nread == 1)
     {
