@@ -895,6 +895,14 @@ void AntlrSQLQueryPlanCreator::exitPrimaryQuery(AntlrSQLParser::PrimaryQueryCont
             queryPlan = LogicalPlanBuilder::addSelection(*havingExpr, queryPlan);
         }
     }
+    if (const auto& storeName = helpers.top().replayStoreName)
+    {
+        queryPlan = LogicalPlanBuilder::addReplayStore(*storeName, queryPlan);
+    }
+    if (const auto& trace = helpers.top().udbTrace)
+    {
+        queryPlan = LogicalPlanBuilder::addUdbRecording(trace->name, trace->size, queryPlan);
+    }
     helpers.pop();
     if (helpers.empty())
     {
@@ -1545,6 +1553,19 @@ LogicalPlan buildModelInferencePlan(AntlrSQLParser::ModelInferenceSourceContext*
 
     return LogicalPlanBuilder::addInferModel(std::move(modelName), childPlan);
 }
+}
+
+void AntlrSQLQueryPlanCreator::enterTimeTravelClause(AntlrSQLParser::TimeTravelClauseContext* context)
+{
+    helpers.top().replayStoreName = bindIdentifier(context->storeName).asCanonicalString();
+    AntlrSQLBaseListener::enterTimeTravelClause(context);
+}
+
+void AntlrSQLQueryPlanCreator::enterUdbClause(AntlrSQLParser::UdbClauseContext* context)
+{
+    helpers.top().udbTrace
+        = AntlrSQLHelper::UdbTrace{.name = context->udbTraceName->getText(), .size = toUpperCase(context->udbTraceSize->getText())};
+    AntlrSQLBaseListener::enterUdbClause(context);
 }
 
 void AntlrSQLQueryPlanCreator::exitModelInferenceRelation(AntlrSQLParser::ModelInferenceRelationContext* context)

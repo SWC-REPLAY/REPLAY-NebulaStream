@@ -136,7 +136,7 @@ queryPrimary
     | '(' query ')'                                                         #subquery
     ;
 /// new layout to be closer to traditional SQL
-querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause?;
+querySpecification: selectClause fromClause whereClause? windowedAggregationClause? havingClause? sinkClause? timeTravelClause? udbClause?;
 
 
 fromClause: FROM relation (',' relation)*;
@@ -351,6 +351,12 @@ functionName:  IDENTIFIER | AVG | MAX | MIN | SUM | COUNT | MEDIAN;
 
 sinkClause: INTO sink (',' sink)*;
 
+timeTravelClause: TIME_TRAVEL_STORE storeName=identifier;
+
+udbClause: TIME_TRAVEL_UDB udbTraceName=identifier TRACE_SIZE udbTraceSize=traceSize;
+
+traceSize: INTEGER_VALUE (KILOBYTES | MEGABYTES | GIGABYTES)?;
+
 sink: identifier | anonymousSink;
 
 anonymousSink
@@ -528,6 +534,12 @@ WHERE: 'WHERE' | 'where';
 WINDOW: 'WINDOW' | 'window';
 WITH: 'WITH';
 SET: 'SET';
+TIME_TRAVEL_STORE : 'TIME_TRAVEL_STORE';
+TIME_TRAVEL_UDB : 'TIME_TRAVEL_UDB';
+TRACE_SIZE : 'TRACE_SIZE';
+KILOBYTES: 'KB' | 'kb';
+MEGABYTES: 'MB' | 'mb';
+GIGABYTES: 'GB' | 'gb';
 TUMBLING: 'TUMBLING' | 'tumbling';
 SLIDING: 'SLIDING' | 'sliding';
 THRESHOLD : 'THRESHOLD'|'threshold';

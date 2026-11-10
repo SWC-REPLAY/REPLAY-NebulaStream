@@ -35,11 +35,13 @@
 #include <Operators/LogicalOperator.hpp>
 #include <Operators/LogicalOperatorFwd.hpp>
 #include <Operators/ProjectionLogicalOperator.hpp>
+#include <Operators/ReplayStoreLogicalOperator.hpp>
 #include <Operators/SelectionLogicalOperator.hpp>
 #include <Operators/Sinks/AnonymousSinkLogicalOperator.hpp>
 #include <Operators/Sinks/SinkLogicalOperator.hpp>
 #include <Operators/Sources/AnonymousSourceLogicalOperator.hpp>
 #include <Operators/Sources/SourceNameLogicalOperator.hpp>
+#include <Operators/UdbRecordingLogicalOperator.hpp>
 #include <Operators/UnionLogicalOperator.hpp>
 #include <Operators/Windows/Aggregations/WindowAggregationLogicalFunction.hpp>
 #include <Operators/Windows/JoinLogicalOperator.hpp>
@@ -90,6 +92,16 @@ LogicalPlan LogicalPlanBuilder::addProjection(
     NES_TRACE("LogicalPlanBuilder: add projection operator to query plan");
     return promoteOperatorToRoot(
         queryPlan, ProjectionLogicalOperator::create(std::move(projections), ProjectionLogicalOperator::Asterisk(asterisk)));
+}
+
+LogicalPlan LogicalPlanBuilder::addReplayStore(std::string storeName, const LogicalPlan& queryPlan)
+{
+    return promoteOperatorToRoot(queryPlan, ReplayStoreLogicalOperator::create(std::move(storeName)));
+}
+
+LogicalPlan LogicalPlanBuilder::addUdbRecording(std::string traceName, std::string traceSize, const LogicalPlan& queryPlan)
+{
+    return promoteOperatorToRoot(queryPlan, UdbRecordingLogicalOperator::create(std::move(traceName), std::move(traceSize)));
 }
 
 LogicalPlan LogicalPlanBuilder::addSelection(LogicalFunction selectionFunction, const LogicalPlan& queryPlan)

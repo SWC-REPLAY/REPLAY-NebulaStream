@@ -48,6 +48,17 @@ jobs:
     uses: ./.github/workflows/pr_docs.yml
     secrets: inherit
 
+  # Top-level on purpose: nesting it under `code` would rename the check to
+  # "code / clang-tidy-diff-nix / ...", which main's branch protection does not require.
+  clang-tidy-diff-nix:
+    if: github.repository != 'nebulastream/nebulastream'
+    uses: ./.github/workflows/clang_tidy_diff.yml
+    with:
+      use_nix: true
+      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      base_sha: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+      number_of_commits: ${{ github.event.pull_request.commits || -1 }}
+
   # --- Required-check gates ---------------------------------------------------------------------
   # One required status check per pipeline. Each always runs (if: always()) so the context is always
   # created under a stable, top-level name — set "Code CI Done" / "Docs CI Done" as the required

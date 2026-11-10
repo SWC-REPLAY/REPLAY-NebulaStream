@@ -23,6 +23,7 @@ add_source_files(nes-sources
         SourceCatalog.cpp
         FileSource.cpp
         NetworkSource.cpp
+        ReplaySource.cpp
 )
 
 # Runtime registry entries (source factory, config schema, typed config)
@@ -33,3 +34,7 @@ add_registry_entry(SourceConfig File)
 add_registry_entry(Source Network HEADER Sources/NetworkSource.hpp)
 add_registry_entry(SourceConfigSchema Network HEADER Sources/NetworkSource.hpp)
 add_registry_entry(SourceConfig Network HEADER Sources/NetworkSource.hpp)
+
+add_registry_entry(Source Replay HEADER Sources/ReplaySource.hpp)
+add_registry_entry(SourceConfigSchema Replay HEADER Sources/ReplaySource.hpp)
+add_registry_entry(SourceConfig Replay HEADER Sources/ReplaySource.hpp)
